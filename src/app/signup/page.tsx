@@ -1,0 +1,352 @@
+"use client";
+
+import { useState } from "react";
+import { motion } from "framer-motion";
+import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ThemeToggle } from "@/components/theme-toggle";
+
+export default function SignupPage() {
+  const [showPassword, setShowPassword] = useState(false);
+  const [formData, setFormData] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const router = useRouter();
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    // Simulate API registration call
+    setTimeout(() => {
+      setIsSubmitting(false);
+      router.push("/dashboard");
+    }, 1200);
+  };
+
+  // Stagger container animation for left column content
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.15,
+        delayChildren: 0.2,
+      },
+    },
+  };
+
+  // Fade in and slide up animation for children
+  const itemVariants = {
+    hidden: { opacity: 0, y: 10 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.5, ease: "easeOut" as const },
+    },
+  };
+
+  return (
+    <main className="flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4">
+      {/* Left Column (Hero & Video Background) */}
+      <div className="w-[52%] hidden lg:flex relative flex-col items-center justify-end pb-32 px-12 rounded-3xl overflow-hidden shadow-2xl h-full border border-border/10 dark">
+        {/* Background Video */}
+        <video
+          autoPlay
+          muted
+          loop
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+        >
+          <source
+            src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260506_081238_406ed0e3-5d83-436e-a512-0bbff7ec5b95.mp4"
+            type="video/mp4"
+          />
+        </video>
+
+        {/* Staggered Animations Content Overlay */}
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          className="relative z-10 w-full max-w-xs space-y-8 text-left"
+        >
+          {/* Brand/Logo */}
+          <motion.div variants={itemVariants} className="flex items-center gap-2.5">
+            <Circle className="fill-white text-white w-6 h-6" />
+            <span className="text-xl font-semibold tracking-tight text-white">
+              ZeroOps
+            </span>
+          </motion.div>
+
+          {/* Heading Block */}
+          <motion.div variants={itemVariants} className="space-y-2">
+            <h1 className="text-4xl font-medium tracking-tight whitespace-nowrap text-white">
+              Join ZeroOps
+            </h1>
+            <p className="text-white/60 text-sm leading-relaxed px-4">
+              Follow these 3 quick phases to activate your space.
+            </p>
+          </motion.div>
+
+          {/* Steps list */}
+          <motion.div variants={itemVariants} className="space-y-4">
+            <StepItem number={1} text="Register your identity" active />
+            <StepItem number={2} text="Configure your studio" />
+            <StepItem number={3} text="Finalize your profile" />
+          </motion.div>
+        </motion.div>
+      </div>
+
+      {/* Right Column (Sign Up Form) */}
+      <div className="flex-1 flex flex-col items-center justify-center py-12 lg:py-6 px-4 sm:px-12 lg:px-16 xl:px-24 overflow-y-auto lg:overflow-hidden relative">
+        {/* Theme Toggle Button positioned in top right of form side */}
+        <div className="absolute top-6 right-6 z-20">
+          <ThemeToggle collapsed />
+        </div>
+
+        {/* Sign Up Form Content */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="w-full max-w-xl space-y-8 lg:space-y-6 sm:space-y-10"
+        >
+          {/* Header */}
+          <div className="space-y-2 text-left w-full">
+            <h2 className="text-3xl font-medium tracking-tight text-foreground">
+              Create New Profile
+            </h2>
+            <p className="text-foreground-muted text-sm">
+              Input your basic details to begin the journey.
+            </p>
+          </div>
+
+          {/* Social login buttons */}
+          <div className="grid grid-cols-2 gap-4 w-full">
+            <SocialButton icon={ChromeIcon} label="Google" />
+            <SocialButton icon={GithubIcon} label="GitHub" />
+          </div>
+
+          {/* Divider */}
+          <div className="relative w-full flex py-2 items-center justify-center">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-border/40"></div>
+            </div>
+            <span className="relative z-10 bg-background px-4 text-xs font-medium text-foreground-muted uppercase tracking-widest">
+              Or
+            </span>
+          </div>
+
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
+            <div className="grid grid-cols-2 gap-4">
+              <InputGroup
+                label="First Name"
+                placeholder="John"
+                type="text"
+                name="firstName"
+                value={formData.firstName}
+                onChange={handleInputChange}
+                required
+              />
+              <InputGroup
+                label="Last Name"
+                placeholder="Doe"
+                type="text"
+                name="lastName"
+                value={formData.lastName}
+                onChange={handleInputChange}
+                required
+              />
+            </div>
+
+            <InputGroup
+              label="Email"
+              placeholder="name@company.com"
+              type="email"
+              name="email"
+              value={formData.email}
+              onChange={handleInputChange}
+              required
+            />
+
+            <InputGroup
+              label="Password"
+              placeholder="••••••••"
+              type={showPassword ? "text" : "password"}
+              name="password"
+              value={formData.password}
+              onChange={handleInputChange}
+              required
+              helperText="Requires at least 8 symbols."
+              rightElement={
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-foreground-muted hover:text-foreground p-1 transition-colors focus:outline-none"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              }
+            />
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20"
+            >
+              {isSubmitting ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>Create Account</span>
+                  <ArrowRight size={16} />
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Footer Link */}
+          <p className="text-sm text-foreground-muted text-center w-full">
+            Member of the team?{" "}
+            <Link
+              href="/login"
+              className="text-foreground font-medium hover:underline hover:text-primary transition-all"
+            >
+              Log in
+            </Link>
+          </p>
+        </motion.div>
+      </div>
+    </main>
+  );
+}
+
+// 1. StepItem Component
+function StepItem({
+  number,
+  text,
+  active = false,
+}: {
+  number: number;
+  text: string;
+  active?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-4 px-4 py-3 rounded-2xl transition-all duration-300 w-full border ${
+        active
+          ? "bg-white text-black border-white shadow-lg"
+          : "bg-brand-gray text-white border-transparent"
+      }`}
+    >
+      <div
+        className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${
+          active ? "bg-black text-white" : "bg-white/10 text-white/40"
+        }`}
+      >
+        {number}
+      </div>
+      <span className="text-sm font-medium tracking-wide">{text}</span>
+    </div>
+  );
+}
+
+// 2. SocialButton Component
+function SocialButton({
+  icon: Icon,
+  label,
+}: {
+  icon: React.ComponentType<{ size?: number }>;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25"
+    >
+      <Icon size={18} />
+      <span className="text-sm">{label}</span>
+    </button>
+  );
+}
+
+// Custom SVGs for Chrome/Google and GitHub (since brand icons aren't in this lucide version)
+function ChromeIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="4" />
+      <line x1="21.17" y1="8" x2="12" y2="8" />
+      <line x1="3.95" y1="6.06" x2="8.54" y2="14" />
+      <line x1="10.88" y1="21.94" x2="15.46" y2="14" />
+    </svg>
+  );
+}
+
+function GithubIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+    >
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  );
+}
+
+// 3. InputGroup Component
+interface InputGroupProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  helperText?: string;
+  rightElement?: React.ReactNode;
+}
+
+function InputGroup({
+  label,
+  helperText,
+  rightElement,
+  ...props
+}: InputGroupProps) {
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <label className="text-sm font-medium text-foreground">{label}</label>
+      <div className="relative w-full">
+        <input
+          {...props}
+          className="w-full bg-brand-gray border border-border/40 rounded-xl h-11 px-4 text-foreground placeholder:text-foreground-muted/40 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all duration-200"
+        />
+        {rightElement && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
+            {rightElement}
+          </div>
+        )}
+      </div>
+      {helperText && (
+        <p className="text-[11px] text-foreground-muted">{helperText}</p>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,41 @@
+"use client";
+
+import { useState } from "react";
+import { Sidebar } from "@/components/dashboard/Sidebar";
+import { TopBar } from "@/components/dashboard/TopBar";
+import { SystemHealthRibbon } from "@/components/dashboard/SystemHealthRibbon";
+import { AIActionFeed } from "@/components/dashboard/AIActionFeed";
+import { motion, AnimatePresence } from "framer-motion";
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [feedOpen, setFeedOpen] = useState(false);
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden bg-background">
+      <SystemHealthRibbon />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TopBar feedOpen={feedOpen} onToggleFeed={() => setFeedOpen(!feedOpen)} />
+          <div className="flex flex-1 overflow-hidden">
+            <main className="flex-1 overflow-y-auto p-6">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={typeof window !== "undefined" ? window.location.pathname : "page"}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.3, ease: "easeOut" }}
+                >
+                  {children}
+                </motion.div>
+              </AnimatePresence>
+            </main>
+            <AIActionFeed isOpen={feedOpen} onClose={() => setFeedOpen(false)} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
