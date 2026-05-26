@@ -1,0 +1,10 @@
+fastapi
+gunicorn
+uvicorn[standard]
+websockets
+openai
+kubernetes
+requests
+python-dotenv
+azure-identity
+azure-keyvault-secrets
