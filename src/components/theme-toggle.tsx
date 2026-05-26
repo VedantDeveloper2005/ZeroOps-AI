@@ -3,10 +3,6 @@
 import * as React from "react";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-<<<<<<< HEAD
-=======
-import { motion } from "framer-motion";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { cn } from "@/lib/utils";
 
 export function ThemeToggle({ collapsed = false }: { collapsed?: boolean }) {

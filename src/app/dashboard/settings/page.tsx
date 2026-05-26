@@ -2,11 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState } from "react";
-<<<<<<< HEAD
 import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell } from "lucide-react";
-=======
-import { Settings, Lock, Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell, AlertTriangle } from "lucide-react";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { useNotifications } from "@/lib/NotificationContext";
 
 export default function SettingsPage() {

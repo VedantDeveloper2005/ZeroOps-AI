@@ -2,14 +2,10 @@ import os
 import subprocess
 import time
 from typing import Generator
-<<<<<<< HEAD
 try:
     from backend.config import DOCKER_AVAILABLE
 except ImportError:
     from config import DOCKER_AVAILABLE
-=======
-from backend.config import DOCKER_AVAILABLE
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 def build_and_tag_image(repo_path: str, image_name: str, tag: str) -> Generator[str, None, None]:
     """
@@ -19,14 +15,10 @@ def build_and_tag_image(repo_path: str, image_name: str, tag: str) -> Generator[
     # Write a default Dockerfile if one is not present in the workspace
     dockerfile_path = os.path.join(repo_path, "Dockerfile")
     if not os.path.exists(dockerfile_path):
-<<<<<<< HEAD
         try:
             from backend.services.ai import analyze_repo_local
         except ImportError:
             from services.ai import analyze_repo_local
-=======
-        from backend.services.ai import analyze_repo_local
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         metadata = analyze_repo_local(repo_path)
         with open(dockerfile_path, "w") as f:
             f.write(metadata["dockerfile"])

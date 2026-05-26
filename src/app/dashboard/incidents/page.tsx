@@ -2,11 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
-<<<<<<< HEAD
 import { AlertTriangle, CheckCircle, Clock, Brain, FileText, RefreshCw, X, Copy } from "lucide-react";
-=======
-import { AlertTriangle, CheckCircle, Clock, Brain, FileText, Search, Target, ArrowRight, RefreshCw, Shield, X, Copy, Download } from "lucide-react";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { incidents } from "@/lib/mock-data";
 import { AIThinkingIndicator } from "@/components/ui/AIThinkingIndicator";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -27,11 +23,7 @@ const recoverySteps = [
 const aiDiagnosisText = [
   "Analyzing incident: API Gateway High Latency",
   "Root cause: Connection pool exhaustion under traffic spike",
-<<<<<<< HEAD
   "Affected services: api-gateway (primary), web-app (secondary)",
-=======
-  "Affected services: api-gateway (primary), web-frontend (secondary)",
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   "Impact: P99 latency exceeded 500ms threshold at 08:42 AM",
   "AI Action: Increasing connection pool size from 50 to 100",
   "AI Action: Enabling connection recycling (max-age: 30s)",
@@ -60,11 +52,7 @@ Title: API Gateway High Latency
 Severity: Warning
 Status: Investigating
 Start Time: 25 min ago
-<<<<<<< HEAD
 Affected Services: api-gateway, web-app
-=======
-Affected Services: api-gateway, web-frontend
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 ROOT CAUSE ANALYSIS:
 Connection pool exhaustion under traffic spike. Diagnostic engines isolated the issue to connection pool starvation (50/50 connections allocated).
@@ -201,11 +189,7 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
                 <span className="text-primary font-bold"># ZEROOPS AI INCIDENT POST-MORTEM</span>
                 <p className="text-foreground-muted">Incident ID: INC-001</p>
                 <p className="text-foreground-muted">Incident Title: API Gateway High Latency</p>
-<<<<<<< HEAD
                 <p className="text-foreground-muted">Target Service: api-gateway, web-app</p>
-=======
-                <p className="text-foreground-muted">Target Service: api-gateway, web-frontend</p>
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
                 <p className="text-foreground-muted">Audited At: 2026-05-25 19:15 UTC</p>
               </div>
 

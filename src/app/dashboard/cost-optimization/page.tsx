@@ -1,11 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-<<<<<<< HEAD
 import { DollarSign, TrendingDown, AlertTriangle } from "lucide-react";
-=======
-import { DollarSign, TrendingDown, AlertTriangle, Zap, Check, Cpu, HardDrive, Server } from "lucide-react";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { costRecommendations, idleResources, overprovisionedPods, generateMetricData } from "@/lib/mock-data";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { AreaChart } from "@/components/ui/AreaChart";

@@ -1,11 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-<<<<<<< HEAD
 import { TrendingUp, TrendingDown, ArrowUpRight, Rocket, Shield, Terminal, GitBranch, Brain, Cpu, Zap, Loader2, Check } from "lucide-react";
-=======
-import { LayoutDashboard, TrendingUp, TrendingDown, ArrowUpRight, Rocket, Shield, Terminal, GitBranch, Brain, Cpu, Zap, Loader2, Check } from "lucide-react";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { dashboardStats as initialStats, deployments, trafficMetrics } from "@/lib/mock-data";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -30,11 +26,7 @@ export default function DashboardHome() {
   const { addToast, addNotification } = useNotifications();
   const [timeRange, setTimeRange] = useState("24h");
   const [stats, setStats] = useState(initialStats);
-<<<<<<< HEAD
   const [recs] = useState<RecommendationItem[]>([
-=======
-  const [recs, setRecs] = useState<RecommendationItem[]>([
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     { id: "rec-1", icon: TrendingUp, title: "Optimize api-gateway scaling", desc: "Reduce CPU allocation 500m→200m", color: "text-primary", savings: 18 },
     { id: "rec-2", icon: Shield, title: "Patch CVE-2026-1234", desc: "Critical vulnerability in base image", color: "text-danger", savings: 0 },
     { id: "rec-3", icon: Cpu, title: "Reduce staging costs", desc: "3 idle pods detected — save $22/mo", color: "text-warning", savings: 22 },

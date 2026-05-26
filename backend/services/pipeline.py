@@ -3,7 +3,6 @@ import json
 import time
 from typing import Dict, List
 from fastapi import WebSocket
-<<<<<<< HEAD
 try:
     from backend.services import git, ai, builder, k8s, vault
 except ImportError:
@@ -12,17 +11,10 @@ except ImportError:
 # Active websockets registry: deploy_id -> list of WebSockets
 connections: Dict[str, List[WebSocket]] = {}
 event_buffers: Dict[str, List[dict]] = {}
-=======
-from backend.services import git, ai, builder, k8s, vault
-
-# Active websockets registry: deploy_id -> list of WebSockets
-connections: Dict[str, List[WebSocket]] = {}
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 # Active deployments history
 deployments_history = []
 
-<<<<<<< HEAD
 def normalize_project_id(repo_name: str) -> str:
     raw = (repo_name.split("/")[-1] or "web-app").lower()
     cleaned = "".join(ch if ch.isalnum() else "-" for ch in raw).strip("-")
@@ -30,18 +22,13 @@ def normalize_project_id(repo_name: str) -> str:
         cleaned = cleaned.replace("--", "-")
     return cleaned or "web-app"
 
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 async def register_connection(deploy_id: str, websocket: WebSocket):
     """Register a new websocket connection for a deployment ID."""
     if deploy_id not in connections:
         connections[deploy_id] = []
     connections[deploy_id].append(websocket)
-<<<<<<< HEAD
     for message in event_buffers.get(deploy_id, []):
         await websocket.send_text(json.dumps(message))
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     print(f"WebSocket registered for deployment {deploy_id}. Total listeners: {len(connections[deploy_id])}")
 
 def unregister_connection(deploy_id: str, websocket: WebSocket):
@@ -55,11 +42,8 @@ def unregister_connection(deploy_id: str, websocket: WebSocket):
 
 async def broadcast_message(deploy_id: str, message: dict):
     """Broadcast a JSON message to all listeners for a deployment."""
-<<<<<<< HEAD
     event_buffers.setdefault(deploy_id, []).append(message)
     event_buffers[deploy_id] = event_buffers[deploy_id][-300:]
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     if deploy_id in connections:
         payload = json.dumps(message)
         # Gather all sends to run concurrently
@@ -70,34 +54,23 @@ async def broadcast_message(deploy_id: str, message: dict):
 async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
     """Runs the full deployment pipeline in an async background task."""
     print(f"Starting pipeline deployment {deploy_id} for {repo_name} (branch: {branch})")
-<<<<<<< HEAD
     project_id = normalize_project_id(repo_name)
     ns_name = f"zeroops-{project_id}"
     live_url = f"https://{project_id}.zeroops.dev"
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     
     # Store initial state in history
     deploy_info = {
         "id": deploy_id,
-<<<<<<< HEAD
         "app": project_id,
-=======
-        "app": repo_name.split("/")[-1],
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         "repo": repo_name,
         "environment": "production",
         "status": "building",
         "duration": "0s",
         "deployedBy": "AI Auto-Deploy",
         "time": "Just now",
-<<<<<<< HEAD
         "version": "v1.0.0",
         "namespace": ns_name,
         "liveUrl": live_url
-=======
-        "version": "v1.0.0"
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     }
     deployments_history.insert(0, deploy_info)
     
@@ -114,11 +87,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
         # Step 2: AI Analysis
         await broadcast_message(deploy_id, {"type": "stage", "id": 2, "status": "active", "duration": "..."})
         
-<<<<<<< HEAD
-=======
-        project_id = deploy_info['app'].lower().replace("_", "-").replace(" ", "-")
-        
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         # Enforce multi-tenant Kubernetes namespace isolation
         for log in k8s.setup_namespace(project_id):
             await broadcast_message(deploy_id, {"type": "log", "text": log.strip(), "lineType": "info" if "Preparing" in log else "success"})
@@ -189,11 +157,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
         await broadcast_message(deploy_id, {"type": "stage", "id": 6, "status": "active", "duration": "..."})
         await broadcast_message(deploy_id, {"type": "log", "text": "▸ Binding ingress paths. Registering app DNS routing tables...", "lineType": "info"})
         await asyncio.sleep(1.0)
-<<<<<<< HEAD
         await broadcast_message(deploy_id, {"type": "log", "text": f"  ✓ Port bindings exposed. Ingress rule: {project_id}.zeroops.dev -> {deploy_info['app']}-svc", "lineType": "success"})
-=======
-        await broadcast_message(deploy_id, {"type": "log", "text": f"  ✓ Port bindings exposed. Ingress rule: app.zeroops.dev → {deploy_info['app']}-svc", "lineType": "success"})
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         await broadcast_message(deploy_id, {"type": "stage", "id": 6, "status": "completed", "duration": "1.0s"})
         
         # Step 7: Autoscaling Setup
@@ -210,11 +174,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
         await broadcast_message(deploy_id, {"type": "log", "text": "  ✓ SSL certificate successfully verified and registered via Let's Encrypt CA.", "lineType": "success"})
         await broadcast_message(deploy_id, {"type": "log", "text": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "lineType": "info"})
         await broadcast_message(deploy_id, {"type": "log", "text": "✅ Deployment complete! Your service is active.", "lineType": "success"})
-<<<<<<< HEAD
         await broadcast_message(deploy_id, {"type": "log", "text": f"  URL:  {live_url}", "lineType": "info"})
-=======
-        await broadcast_message(deploy_id, {"type": "log", "text": f"  🌐 URL:  https://app.zeroops.dev", "lineType": "info"})
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         await broadcast_message(deploy_id, {"type": "stage", "id": 8, "status": "completed", "duration": "1.0s"})
         
         # Update pipeline state inside history

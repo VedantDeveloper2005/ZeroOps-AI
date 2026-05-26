@@ -2,7 +2,6 @@
   "name": "zeroops-ai",
   "version": "0.1.0",
   "private": true,
-<<<<<<< HEAD
   "engines": {
     "node": ">=20.11"
   },
@@ -11,12 +10,6 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 --keepAliveTimeout 70000",
     "start:azure": "next start -H 0.0.0.0 --keepAliveTimeout 70000",
-=======
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     "lint": "eslint"
   },
   "dependencies": {
@@ -30,12 +23,9 @@
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.6.0"
   },
-<<<<<<< HEAD
   "overrides": {
     "postcss": "8.5.15"
   },
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

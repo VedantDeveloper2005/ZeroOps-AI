@@ -2,14 +2,10 @@ import os
 import json
 
 # Local mock storage path for fallback (stored statefully in workspace directory)
-<<<<<<< HEAD
 try:
     from backend.config import WORKSPACE_DIR
 except ImportError:
     from config import WORKSPACE_DIR
-=======
-from backend.config import WORKSPACE_DIR
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 VAULT_MOCK_FILE = os.path.join(WORKSPACE_DIR, "vault_secrets.json")
 
 # Ensure initial file exists

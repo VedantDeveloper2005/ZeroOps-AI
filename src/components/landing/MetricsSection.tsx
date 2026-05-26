@@ -1,10 +1,6 @@
 "use client";
 
-<<<<<<< HEAD
 import { motion, useInView } from "framer-motion";
-=======
-import { motion, useInView, useSpring, useMotionValue } from "framer-motion";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { useRef, useEffect, useState } from "react";
 import { Rocket, Clock, Zap, Server, Activity, Cpu } from "lucide-react";
 

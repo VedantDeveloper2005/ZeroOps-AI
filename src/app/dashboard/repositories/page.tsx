@@ -3,16 +3,10 @@
 import { motion } from "framer-motion";
 import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2 } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-<<<<<<< HEAD
 import { useState } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useRouter } from "next/navigation";
 import { createFallbackAnalysis } from "@/lib/demo-runtime";
-=======
-import { useState, useEffect } from "react";
-import { useNotifications } from "@/lib/NotificationContext";
-import { useRouter } from "next/navigation";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 const frameworkColors: Record<string, string> = {
   "Next.js": "bg-white/10 text-white",
@@ -39,10 +33,7 @@ export default function RepositoriesPage() {
   const [repoName, setRepoName] = useState("");
   const [framework, setFramework] = useState("Next.js");
   const [isSubmitting, setIsSubmitting] = useState(false);
-<<<<<<< HEAD
   const [branchesByRepo, setBranchesByRepo] = useState<Record<string, string[]>>({});
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   const filtered = repositories.filter(r => r.name.toLowerCase().includes(search.toLowerCase()) || r.fullName.toLowerCase().includes(search.toLowerCase()));
 
@@ -79,7 +70,6 @@ export default function RepositoriesPage() {
     if (action === "Analyze") {
       addToast(`Initiating AI security and performance review for ${repo}...`, "info");
       try {
-<<<<<<< HEAD
         const metadataRes = await fetch(`/api/github/repo-metadata?repo=${encodeURIComponent(repo)}`);
         if (metadataRes.ok) {
           const metadata = await metadataRes.json();
@@ -88,8 +78,6 @@ export default function RepositoriesPage() {
           setBranchesByRepo((prev) => ({ ...prev, [repo]: ["main", "develop", "feature/auth"] }));
         }
 
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         const res = await fetch("/api/ai/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -106,7 +94,6 @@ export default function RepositoriesPage() {
         });
       } catch (err) {
         console.error("AI Analysis failed:", err);
-<<<<<<< HEAD
         const fallback = createFallbackAnalysis(repo);
         setBranchesByRepo((prev) => ({ ...prev, [repo]: ["main", "develop", "feature/auth"] }));
         addToast(`Local fallback analysis complete. Framework: ${fallback.framework}, Risk Score: ${fallback.risk_score}`, "warning");
@@ -115,9 +102,6 @@ export default function RepositoriesPage() {
           message: `Generated deployment recommendations for ${repo} using the local ZeroOps analyzer.`,
           type: "info",
         });
-=======
-        addToast("AI Analysis failed. Running local fallback check.", "error");
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       }
     } else if (action === "Deploy") {
       addToast(`Triggering deployment pipeline for ${repo}...`, "info");
@@ -131,21 +115,12 @@ export default function RepositoriesPage() {
         const data = await res.json();
         if (data.status === "success") {
           addToast("Pipeline successfully initialized.", "success");
-<<<<<<< HEAD
           router.push(`/dashboard/deployments?id=${data.deployment_id}&repo=${encodeURIComponent(repo)}`);
         }
       } catch (err) {
         console.error("Deployment trigger failed:", err);
         addToast("Deployment backend unavailable. Starting guided pipeline simulation.", "warning");
         router.push(`/dashboard/deployments?id=demo-${repo.split("/").pop()}&repo=${encodeURIComponent(repo)}&mode=fallback`);
-=======
-          router.push(`/dashboard/deployments?id=${data.deployment_id}`);
-        }
-      } catch (err) {
-        console.error("Deployment trigger failed:", err);
-        addToast("Deployment trigger failed. Redirecting to pipeline.", "warning");
-        router.push("/dashboard/deployments");
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       }
     } else if (action === "Logs") {
       router.push("/dashboard/logs");
@@ -200,12 +175,9 @@ export default function RepositoriesPage() {
                 <div>
                   <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors">{repo.fullName}</h3>
                   <p className="text-xs text-foreground-muted">{repo.lastCommitMessage}</p>
-<<<<<<< HEAD
                   <p className="text-[10px] text-foreground-muted mt-0.5">
                     Branches: {(branchesByRepo[repo.fullName] || ["main"]).join(", ")}
                   </p>
-=======
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
                 </div>
               </div>
               <StatusBadge status={repo.deploymentStatus} />
@@ -254,11 +226,7 @@ export default function RepositoriesPage() {
             
             <h3 className="text-lg font-bold mb-2">Connect Repository</h3>
             <p className="text-xs text-foreground-muted mb-6">
-<<<<<<< HEAD
               Connect a GitHub repository or PAT-backed repo path to let ZeroOps configure and deploy it.
-=======
-              Connect a GitHub repository to let ZeroOps configure and deploy it.
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
             </p>
 
             <form onSubmit={handleConnect} className="space-y-4">

@@ -10,11 +10,7 @@ const aiActions = [
   { action: "Firewall rules configured for production", status: "completed" as const, time: "1.2s" },
   { action: "Security vulnerability CVE-2026-1234 patched", status: "completed" as const, time: "2.1s" },
   { action: "Traffic spike predicted for 09:00 AM", status: "active" as const, time: "Now" },
-<<<<<<< HEAD
   { action: "Pre-scale web-app to 6 replicas", status: "predicted" as const, time: "Predicted" },
-=======
-  { action: "Pre-scale web-frontend to 6 replicas", status: "predicted" as const, time: "Predicted" },
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 ];
 
 const aiOutput = [

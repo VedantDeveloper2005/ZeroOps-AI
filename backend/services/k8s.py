@@ -3,7 +3,6 @@ import subprocess
 import time
 import tempfile
 from typing import Generator
-<<<<<<< HEAD
 try:
     from backend.config import K8S_AVAILABLE
 except ImportError:
@@ -12,12 +11,6 @@ except ImportError:
 def apply_manifests(manifests_yaml: str) -> Generator[str, None, None]:
     """Applies Kubernetes manifests. Yields output logs."""
     project_id = extract_project_id(manifests_yaml)
-=======
-from backend.config import K8S_AVAILABLE
-
-def apply_manifests(manifests_yaml: str) -> Generator[str, None, None]:
-    """Applies Kubernetes manifests. Yields output logs."""
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     if K8S_AVAILABLE:
         yield "▸ Deploying manifests to active Kubernetes cluster context...\n"
         # Write manifests to a temp file
@@ -45,19 +38,11 @@ def apply_manifests(manifests_yaml: str) -> Generator[str, None, None]:
             else:
                 yield f"❌ kubectl apply failed with return code {process.returncode}\n"
                 yield "▸ Fallback: Transitioning to Kubernetes Simulator...\n"
-<<<<<<< HEAD
                 for sim in run_simulated_kubectl(project_id):
                     yield sim
         except Exception as e:
             yield f"⚠️ Kubernetes execution error: {e}. Transitioning to simulator...\n"
             for sim in run_simulated_kubectl(project_id):
-=======
-                for sim in run_simulated_kubectl():
-                    yield sim
-        except Exception as e:
-            yield f"⚠️ Kubernetes execution error: {e}. Transitioning to simulator...\n"
-            for sim in run_simulated_kubectl():
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
                 yield sim
         finally:
             try:
@@ -65,7 +50,6 @@ def apply_manifests(manifests_yaml: str) -> Generator[str, None, None]:
             except Exception:
                 pass
     else:
-<<<<<<< HEAD
         for sim in run_simulated_kubectl(project_id):
             yield sim
 
@@ -92,25 +76,6 @@ def run_simulated_kubectl(project_id: str = "web-app") -> Generator[str, None, N
         f"> Provisioning HTTPS certificate for {host}...",
         "SSL certificate provisioned via Let's Encrypt",
         f"Service exposed: https://{host}"
-=======
-        for sim in run_simulated_kubectl():
-            yield sim
-
-def run_simulated_kubectl() -> Generator[str, None, None]:
-    steps = [
-        "▸ Applying manifests to virtual AKS cluster namespace...",
-        "namespace/zeroops-production configured",
-        "deployment.apps/web-frontend created",
-        "service/web-frontend-svc created",
-        "horizontalpodautoscaler.autoscaling/web-frontend-hpa created",
-        "ingress.networking.k8s.io/web-frontend-ingress created",
-        "✓ Kubernetes deployment executed successfully.",
-        "▸ Setting up autoscaling policies...",
-        "HPA configured: CPU target 70%, Memory target 80%",
-        "▸ Provisioning HTTPS certificate for app.zeroops.dev...",
-        "SSL certificate provisioned via Let's Encrypt",
-        "✅ Service exposed: https://app.zeroops.dev"
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     ]
     for step in steps:
         yield f"  {step}\n"
@@ -441,7 +406,3 @@ def get_cluster_resource_metrics(project_id: str = None) -> dict:
         "traffic": random.randint(800, 1200),
         "errorRate": round(0.1 + random.random() * 0.4, 2)
     }
-<<<<<<< HEAD
-=======
-
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2

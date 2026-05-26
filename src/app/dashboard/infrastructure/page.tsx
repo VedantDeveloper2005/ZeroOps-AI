@@ -2,28 +2,13 @@
 
 import { motion } from "framer-motion";
 import { useState } from "react";
-<<<<<<< HEAD
 import { Server, Box, Hexagon, Activity } from "lucide-react";
-=======
-import { Network, Server, Box, Hexagon, Activity } from "lucide-react";
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { infraNodes } from "@/lib/mock-data";
 
 const statusColor = (status: string) => {
   switch (status) { case "healthy": return { fill: "#22c55e", stroke: "#22c55e40", glow: "0 0 12px #22c55e40" }; case "warning": return { fill: "#f59e0b", stroke: "#f59e0b40", glow: "0 0 12px #f59e0b40" }; default: return { fill: "#ef4444", stroke: "#ef444440", glow: "0 0 12px #ef444440" }; }
 };
 
-<<<<<<< HEAD
-=======
-const typeConfig: Record<string, { size: number; shape: "rect" | "circle" | "diamond" }> = {
-  cluster: { size: 50, shape: "rect" },
-  node: { size: 30, shape: "circle" },
-  pod: { size: 14, shape: "circle" },
-  service: { size: 20, shape: "diamond" },
-  deployment: { size: 20, shape: "rect" },
-};
-
->>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 export default function InfrastructurePage() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
