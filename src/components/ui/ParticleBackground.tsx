@@ -1,6 +1,10 @@
 "use client";
 
+<<<<<<< HEAD
 import { useEffect, useRef, useCallback } from "react";
+=======
+import { useEffect, useRef, useState, useCallback } from "react";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { cn } from "@/lib/utils";
 
 interface ParticleBackgroundProps {

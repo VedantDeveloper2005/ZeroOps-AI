@@ -99,7 +99,11 @@ export interface MetricPoint {
 // ============================================
 
 export const deployments: Deployment[] = [
+<<<<<<< HEAD
   { id: "dep-001", app: "web-app", repo: "acme/web-app", environment: "production", status: "running", duration: "2m 34s", deployedBy: "AI Auto-Deploy", time: "2 min ago", commit: "a3f8c21", image: "acr.azurecr.io/web:v2.4.1", version: "v2.4.1" },
+=======
+  { id: "dep-001", app: "web-frontend", repo: "acme/web-app", environment: "production", status: "running", duration: "2m 34s", deployedBy: "AI Auto-Deploy", time: "2 min ago", commit: "a3f8c21", image: "acr.azurecr.io/web:v2.4.1", version: "v2.4.1" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "dep-002", app: "api-gateway", repo: "acme/api-gateway", environment: "production", status: "running", duration: "1m 48s", deployedBy: "Vedant S.", time: "15 min ago", commit: "b7d2e09", image: "acr.azurecr.io/api:v3.1.0", version: "v3.1.0" },
   { id: "dep-003", app: "payments-service", repo: "acme/payments", environment: "staging", status: "building", duration: "0m 52s", deployedBy: "AI Auto-Deploy", time: "Just now", commit: "e1c4f87", image: "acr.azurecr.io/pay:v1.8.3", version: "v1.8.3" },
   { id: "dep-004", app: "auth-service", repo: "acme/auth", environment: "production", status: "running", duration: "3m 12s", deployedBy: "Sarah K.", time: "1 hour ago", commit: "d9a3b52", image: "acr.azurecr.io/auth:v2.0.0", version: "v2.0.0" },
@@ -168,10 +172,17 @@ export const aiActions: AIAction[] = [
   { id: "ai-003", type: "deployment", message: "Rollback triggered for payments-service v2.3.1", timestamp: "1m ago", severity: "warning", icon: "RotateCcw" },
   { id: "ai-004", type: "security", message: "Suspicious traffic blocked from 103.42.89.x", timestamp: "2m ago", severity: "critical", icon: "AlertTriangle" },
   { id: "ai-005", type: "healing", message: "Pod api-gateway-7d4f restarted (OOMKilled)", timestamp: "3m ago", severity: "warning", icon: "RefreshCw" },
+<<<<<<< HEAD
   { id: "ai-006", type: "healing", message: "Deployment healed: web-app scaled back to healthy", timestamp: "5m ago", severity: "success", icon: "Heart" },
   { id: "ai-007", type: "optimization", message: "Cost optimization: idle pod detected in staging", timestamp: "8m ago", severity: "info", icon: "DollarSign" },
   { id: "ai-008", type: "security", message: "SSL certificate renewed for web-app.zeroops.dev", timestamp: "12m ago", severity: "success", icon: "Lock" },
   { id: "ai-009", type: "scaling", message: "Traffic spike predicted — pre-scaling web-app", timestamp: "15m ago", severity: "info", icon: "Activity" },
+=======
+  { id: "ai-006", type: "healing", message: "Deployment healed: web-frontend scaled back to healthy", timestamp: "5m ago", severity: "success", icon: "Heart" },
+  { id: "ai-007", type: "optimization", message: "Cost optimization: idle pod detected in staging", timestamp: "8m ago", severity: "info", icon: "DollarSign" },
+  { id: "ai-008", type: "security", message: "SSL certificate renewed for app.zeroops.dev", timestamp: "12m ago", severity: "success", icon: "Lock" },
+  { id: "ai-009", type: "scaling", message: "Traffic spike predicted — pre-scaling web-frontend", timestamp: "15m ago", severity: "info", icon: "Activity" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "ai-010", type: "deployment", message: "Auto-deployed web-app v2.4.1 to production", timestamp: "18m ago", severity: "success", icon: "Rocket" },
   { id: "ai-011", type: "monitoring", message: "Latency anomaly detected in auth-service P99", timestamp: "22m ago", severity: "warning", icon: "BarChart3" },
   { id: "ai-012", type: "optimization", message: "Right-sized ml-pipeline: CPU 500m→200m (save $18/mo)", timestamp: "30m ago", severity: "success", icon: "Cpu" },
@@ -185,10 +196,17 @@ export const aiActions: AIAction[] = [
 // ============================================
 
 export const incidents: Incident[] = [
+<<<<<<< HEAD
   { id: "inc-001", title: "API Gateway High Latency", severity: "warning", affectedServices: ["api-gateway", "web-app"], startTime: "25 min ago", duration: "25m", status: "investigating", description: "P99 latency exceeded 500ms threshold on api-gateway" },
   { id: "inc-002", title: "Payment Service OOMKill", severity: "resolved", affectedServices: ["payments-service"], startTime: "2 hours ago", duration: "12m", status: "resolved", description: "payments-service pod killed due to memory limit exceeded. AI auto-scaled memory limits." },
   { id: "inc-003", title: "Database Connection Pool Exhaustion", severity: "resolved", affectedServices: ["auth-service", "api-gateway"], startTime: "1 day ago", duration: "8m", status: "resolved", description: "Connection pool maxed out during traffic spike. AI increased pool size and added connection recycling." },
   { id: "inc-004", title: "SSL Certificate Expiry Warning", severity: "resolved", affectedServices: ["web-app"], startTime: "3 days ago", duration: "1m", status: "resolved", description: "SSL certificate approaching expiry. AI auto-renewed via Azure Key Vault." },
+=======
+  { id: "inc-001", title: "API Gateway High Latency", severity: "warning", affectedServices: ["api-gateway", "web-frontend"], startTime: "25 min ago", duration: "25m", status: "investigating", description: "P99 latency exceeded 500ms threshold on api-gateway" },
+  { id: "inc-002", title: "Payment Service OOMKill", severity: "resolved", affectedServices: ["payments-service"], startTime: "2 hours ago", duration: "12m", status: "resolved", description: "payments-service pod killed due to memory limit exceeded. AI auto-scaled memory limits." },
+  { id: "inc-003", title: "Database Connection Pool Exhaustion", severity: "resolved", affectedServices: ["auth-service", "api-gateway"], startTime: "1 day ago", duration: "8m", status: "resolved", description: "Connection pool maxed out during traffic spike. AI increased pool size and added connection recycling." },
+  { id: "inc-004", title: "SSL Certificate Expiry Warning", severity: "resolved", affectedServices: ["web-frontend"], startTime: "3 days ago", duration: "1m", status: "resolved", description: "SSL certificate approaching expiry. AI auto-renewed via Azure Key Vault." },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 ];
 
 // ============================================
@@ -227,8 +245,13 @@ export const infraNodes: InfraNode[] = [
   { id: "node-2", name: "aks-nodepool1-vm1", type: "node", status: "healthy", cpu: 54, memory: 71, connections: ["pod-5", "pod-6", "pod-7"], x: 400, y: 220 },
   { id: "node-3", name: "aks-nodepool1-vm2", type: "node", status: "warning", cpu: 91, memory: 88, connections: ["pod-8", "pod-9", "pod-10"], x: 600, y: 220 },
   // Pods
+<<<<<<< HEAD
   { id: "pod-1", name: "web-app-7d4f", type: "pod", status: "healthy", cpu: 34, memory: 45, connections: ["svc-web"], x: 100, y: 380 },
   { id: "pod-2", name: "web-app-8e5g", type: "pod", status: "healthy", cpu: 28, memory: 41, connections: ["svc-web"], x: 180, y: 380 },
+=======
+  { id: "pod-1", name: "web-frontend-7d4f", type: "pod", status: "healthy", cpu: 34, memory: 45, connections: ["svc-web"], x: 100, y: 380 },
+  { id: "pod-2", name: "web-frontend-8e5g", type: "pod", status: "healthy", cpu: 28, memory: 41, connections: ["svc-web"], x: 180, y: 380 },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "pod-3", name: "api-gateway-a1b2", type: "pod", status: "healthy", cpu: 67, memory: 58, connections: ["svc-api"], x: 260, y: 380 },
   { id: "pod-4", name: "api-gateway-c3d4", type: "pod", status: "healthy", cpu: 72, memory: 62, connections: ["svc-api"], x: 340, y: 380 },
   { id: "pod-5", name: "auth-service-e5f6", type: "pod", status: "healthy", cpu: 45, memory: 52, connections: ["svc-auth"], x: 420, y: 380 },
@@ -238,7 +261,11 @@ export const infraNodes: InfraNode[] = [
   { id: "pod-9", name: "notif-svc-m3n4", type: "pod", status: "critical", cpu: 12, memory: 95, connections: ["svc-notif"], x: 740, y: 380 },
   { id: "pod-10", name: "cache-redis-o5p6", type: "pod", status: "healthy", cpu: 22, memory: 38, connections: [], x: 820, y: 380 },
   // Services
+<<<<<<< HEAD
   { id: "svc-web", name: "web-app-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: ["svc-api"], x: 140, y: 500 },
+=======
+  { id: "svc-web", name: "web-frontend-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: ["svc-api"], x: 140, y: 500 },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "svc-api", name: "api-gateway-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: ["svc-auth", "svc-pay", "svc-ml", "svc-notif"], x: 300, y: 500 },
   { id: "svc-auth", name: "auth-service-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: [], x: 460, y: 500 },
   { id: "svc-pay", name: "payments-svc", type: "service", status: "warning", cpu: 0, memory: 0, connections: [], x: 540, y: 500 },
@@ -252,20 +279,32 @@ export const infraNodes: InfraNode[] = [
 
 export const logEntries: LogEntry[] = [
   { id: "log-001", timestamp: "09:06:55.234", level: "INFO", pod: "api-gateway-a1b2", message: "GET /api/v1/deployments 200 23ms" },
+<<<<<<< HEAD
   { id: "log-002", timestamp: "09:06:54.891", level: "INFO", pod: "web-app-7d4f", message: "Compiled successfully in 1.2s" },
+=======
+  { id: "log-002", timestamp: "09:06:54.891", level: "INFO", pod: "web-frontend-7d4f", message: "Compiled successfully in 1.2s" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "log-003", timestamp: "09:06:54.123", level: "WARN", pod: "payments-g7h8", message: "Connection pool reaching 80% capacity (40/50)" },
   { id: "log-004", timestamp: "09:06:53.456", level: "ERROR", pod: "notif-svc-m3n4", message: "Failed to send notification: SMTP connection timeout after 30s" },
   { id: "log-005", timestamp: "09:06:52.789", level: "INFO", pod: "auth-service-e5f6", message: "JWT token validated for user_id=usr_2847" },
   { id: "log-006", timestamp: "09:06:51.012", level: "DEBUG", pod: "ml-pipeline-k1l2", message: "Feature extraction completed: 1247 features, batch_size=64" },
   { id: "log-007", timestamp: "09:06:50.345", level: "INFO", pod: "api-gateway-c3d4", message: "POST /api/v1/deploy 201 156ms" },
   { id: "log-008", timestamp: "09:06:49.678", level: "WARN", pod: "cache-redis-o5p6", message: "Memory usage at 78% — consider scaling" },
+<<<<<<< HEAD
   { id: "log-009", timestamp: "09:06:48.901", level: "INFO", pod: "web-app-8e5g", message: "Static assets served: 24 files, 1.8MB total" },
+=======
+  { id: "log-009", timestamp: "09:06:48.901", level: "INFO", pod: "web-frontend-8e5g", message: "Static assets served: 24 files, 1.8MB total" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { id: "log-010", timestamp: "09:06:47.234", level: "ERROR", pod: "payments-i9j0", message: "Stripe webhook signature verification failed" },
   { id: "log-011", timestamp: "09:06:46.567", level: "INFO", pod: "api-gateway-a1b2", message: "Rate limiter: 847/1000 requests in current window" },
   { id: "log-012", timestamp: "09:06:45.890", level: "DEBUG", pod: "auth-service-e5f6", message: "RBAC check passed for role=admin on resource=deployments" },
   { id: "log-013", timestamp: "09:06:44.123", level: "INFO", pod: "ml-pipeline-k1l2", message: "Model inference completed: prediction_score=0.94, latency=12ms" },
   { id: "log-014", timestamp: "09:06:43.456", level: "WARN", pod: "notif-svc-m3n4", message: "Retry attempt 2/3 for notification nid_8823" },
+<<<<<<< HEAD
   { id: "log-015", timestamp: "09:06:42.789", level: "INFO", pod: "web-app-7d4f", message: "Server-side render completed: /dashboard 89ms" },
+=======
+  { id: "log-015", timestamp: "09:06:42.789", level: "INFO", pod: "web-frontend-7d4f", message: "Server-side render completed: /dashboard 89ms" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 ];
 
 // ============================================
@@ -330,6 +369,7 @@ export const dashboardStats = [
 // ============================================
 
 export const scalingHistory = [
+<<<<<<< HEAD
   { time: "09:00", event: "Scale Up", service: "web-app", from: 2, to: 4, trigger: "CPU > 75%" },
   { time: "08:30", event: "Scale Up", service: "api-gateway", from: 3, to: 5, trigger: "AI Prediction" },
   { time: "07:45", event: "Scale Down", service: "ml-pipeline", from: 4, to: 2, trigger: "Low Traffic" },
@@ -339,6 +379,17 @@ export const scalingHistory = [
 
 export const hpaStatus = {
   service: "web-app",
+=======
+  { time: "09:00", event: "Scale Up", service: "web-frontend", from: 2, to: 4, trigger: "CPU > 75%" },
+  { time: "08:30", event: "Scale Up", service: "api-gateway", from: 3, to: 5, trigger: "AI Prediction" },
+  { time: "07:45", event: "Scale Down", service: "ml-pipeline", from: 4, to: 2, trigger: "Low Traffic" },
+  { time: "06:00", event: "Scale Up", service: "payments-service", from: 2, to: 3, trigger: "Queue Length" },
+  { time: "03:00", event: "Scale Down", service: "web-frontend", from: 4, to: 2, trigger: "Off-Peak" },
+];
+
+export const hpaStatus = {
+  service: "web-frontend",
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   minReplicas: 2,
   maxReplicas: 10,
   currentReplicas: 4,
@@ -409,7 +460,11 @@ export const terminalLines = [
   { text: "  ✓ Repository cloned (1.2s)", type: "success" as const },
   { text: "", type: "blank" as const },
   { text: "▸ AI analyzing repository structure...", type: "info" as const },
+<<<<<<< HEAD
   { text: "  ◆ Framework detected: Next.js 16.2.6", type: "info" as const },
+=======
+  { text: "  ◆ Framework detected: Next.js 15.1.0", type: "info" as const },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { text: "  ◆ Language: TypeScript (98.2%)", type: "info" as const },
   { text: "  ◆ Dependencies: 47 packages (3 vulnerabilities patched)", type: "warning" as const },
   { text: "  ◆ Estimated resources: 200m CPU, 256Mi Memory", type: "info" as const },
@@ -433,12 +488,21 @@ export const terminalLines = [
   { text: "  ✓ HPA manifest generated (min: 2, max: 10)", type: "success" as const },
   { text: "", type: "blank" as const },
   { text: "▸ Deploying to AKS cluster aks-prod-eastus...", type: "info" as const },
+<<<<<<< HEAD
   { text: "  ✓ Namespace zeroops-web-app created", type: "success" as const },
   { text: "  ✓ Deployment web-app applied (3 replicas)", type: "success" as const },
   { text: "  ✓ Service web-app-svc created", type: "success" as const },
   { text: "", type: "blank" as const },
   { text: "▸ Configuring ingress & firewall...", type: "info" as const },
   { text: "  ✓ Ingress rule created: web-app.zeroops.dev → web-app-svc:3000", type: "success" as const },
+=======
+  { text: "  ✓ Namespace zeroops-production created", type: "success" as const },
+  { text: "  ✓ Deployment web-frontend applied (3 replicas)", type: "success" as const },
+  { text: "  ✓ Service web-frontend-svc created", type: "success" as const },
+  { text: "", type: "blank" as const },
+  { text: "▸ Configuring ingress & firewall...", type: "info" as const },
+  { text: "  ✓ Ingress rule created: app.zeroops.dev → web-frontend-svc:3000", type: "success" as const },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { text: "  ✓ Azure Firewall rules applied (12 rules)", type: "success" as const },
   { text: "  ✓ DDoS protection enabled", type: "success" as const },
   { text: "", type: "blank" as const },
@@ -453,7 +517,11 @@ export const terminalLines = [
   { text: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", type: "info" as const },
   { text: "✅ Deployment complete!", type: "success" as const },
   { text: "", type: "blank" as const },
+<<<<<<< HEAD
   { text: "  🌐 URL:     https://web-app.zeroops.dev", type: "info" as const },
+=======
+  { text: "  🌐 URL:     https://app.zeroops.dev", type: "info" as const },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   { text: "  📦 Image:   acr.azurecr.io/web:v2.4.1", type: "info" as const },
   { text: "  ⏱  Time:    2m 34s", type: "info" as const },
   { text: "  🔒 SSL:     Enabled", type: "info" as const },

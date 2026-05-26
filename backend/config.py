@@ -8,6 +8,7 @@ load_dotenv()
 # App settings
 PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
+<<<<<<< HEAD
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
 ZEROOPS_BACKEND_URL = os.getenv("ZEROOPS_BACKEND_URL", "")
@@ -18,6 +19,8 @@ def parse_csv_env(name: str, default: str = "") -> list[str]:
 
 CORS_ORIGINS = parse_csv_env("CORS_ORIGINS", FRONTEND_ORIGIN or "*")
 ALLOW_CREDENTIALS = "*" not in CORS_ORIGINS
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 # OpenAI API config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -54,6 +57,9 @@ print(f"ZeroOps Backend Config:")
 print(f"  Docker Host Responsive: {DOCKER_AVAILABLE}")
 print(f"  Kubernetes Context Active: {K8S_AVAILABLE}")
 print(f"  OpenAI API Key Configured: {bool(OPENAI_API_KEY)}")
+<<<<<<< HEAD
 print(f"  Environment: {APP_ENV}")
 print(f"  CORS Origins: {', '.join(CORS_ORIGINS)}")
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 print(f"  Workspace Directory: {WORKSPACE_DIR}")

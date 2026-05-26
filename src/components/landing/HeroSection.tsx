@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, useInView } from "framer-motion";
+<<<<<<< HEAD
 import { Cloud, Zap, Rocket, Clock, Cpu } from "lucide-react";
+=======
+import { Rocket, Cloud, Zap, Clock, Cpu } from "lucide-react";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { terminalLines } from "@/lib/mock-data";
 import Link from "next/link";
 
@@ -42,6 +46,15 @@ export function HeroSection() {
 
   const stagger = { hidden: { opacity: 0, y: 30 }, visible: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.12, duration: 0.6, ease: "easeOut" as const } }) };
 
+<<<<<<< HEAD
+=======
+  const floatingCards = [
+    { icon: Rocket, label: "12K+", sub: "Deployments", delay: 0 },
+    { icon: Clock, label: "99.99%", sub: "Uptime", delay: 0.8 },
+    { icon: Cpu, label: "47ms", sub: "Avg Response", delay: 1.6 },
+  ];
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   return (
     <section ref={ref} className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden px-4 pt-28 pb-16">
       {/* Animated gradient orbs */}

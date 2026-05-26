@@ -1,12 +1,20 @@
 "use client";
 
 import { motion } from "framer-motion";
+<<<<<<< HEAD
 import { ArrowUp, ArrowDown, Cpu, HardDrive, Brain, Sliders } from "lucide-react";
 import { scalingHistory, trafficMetrics } from "@/lib/mock-data";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { useCallback, useEffect, useState } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
+=======
+import { TrendingUp, TrendingDown, ArrowUp, ArrowDown, Cpu, HardDrive, Brain, Sliders } from "lucide-react";
+import { scalingHistory, trafficMetrics } from "@/lib/mock-data";
+import { AreaChart } from "@/components/ui/AreaChart";
+import { useState, useEffect } from "react";
+import { useNotifications } from "@/lib/NotificationContext";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 export default function AutoscalingPage() {
   const { addToast, addNotification } = useNotifications();
@@ -22,8 +30,13 @@ export default function AutoscalingPage() {
   const [replicas, setReplicas] = useState(hpa.currentReplicas);
   const [isScaling, setIsScaling] = useState(false);
 
+<<<<<<< HEAD
   const fetchHPAStatus = useCallback(() => {
     fetch(`/api/autoscaling/${DEFAULT_PROJECT_ID}`)
+=======
+  const fetchHPAStatus = () => {
+    fetch("/api/autoscaling/web-frontend")
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load HPA");
         return res.json();
@@ -34,13 +47,21 @@ export default function AutoscalingPage() {
         setReplicas((prev) => (isScaling ? prev : data.currentReplicas));
       })
       .catch((err) => console.error("Failed to load HPA status:", err));
+<<<<<<< HEAD
   }, [isScaling]);
+=======
+  };
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   useEffect(() => {
     fetchHPAStatus();
     const interval = setInterval(fetchHPAStatus, 5000);
     return () => clearInterval(interval);
+<<<<<<< HEAD
   }, [fetchHPAStatus]);
+=======
+  }, []);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   const handleApplyManualScale = async () => {
     setIsScaling(true);
@@ -49,14 +70,22 @@ export default function AutoscalingPage() {
       const res = await fetch("/api/deployments/scale", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+<<<<<<< HEAD
         body: JSON.stringify({ name: DEFAULT_PROJECT_ID, replicas }),
+=======
+        body: JSON.stringify({ name: "web-frontend", replicas }),
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       });
       if (!res.ok) throw new Error("Failed to scale deployment");
 
       addToast(`Successfully adjusted replica target: ${replicas} pods.`, "success");
       addNotification({
         title: "Manual Scaling Complete",
+<<<<<<< HEAD
         message: `Scaled web-app replicas: ${hpa.currentReplicas} → ${replicas}.`,
+=======
+        message: `Scaled web-frontend replicas: ${hpa.currentReplicas} → ${replicas}.`,
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         type: "success",
       });
       fetchHPAStatus();
@@ -74,7 +103,11 @@ export default function AutoscalingPage() {
       const res = await fetch("/api/autoscaling/configure", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+<<<<<<< HEAD
         body: JSON.stringify({ projectId: DEFAULT_PROJECT_ID, minReplicas: min, maxReplicas: max, cpuTarget: cpu }),
+=======
+        body: JSON.stringify({ projectId: "web-frontend", minReplicas: min, maxReplicas: max, cpuTarget: cpu }),
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       });
       if (!res.ok) throw new Error("Failed");
 
@@ -223,7 +256,11 @@ export default function AutoscalingPage() {
                 </button>
               </div>
               <div className="p-3 rounded-lg bg-card/50">
+<<<<<<< HEAD
                 <p className="text-sm text-foreground">Optimize predictive scaling for web-app (target 60% CPU)</p>
+=======
+                <p className="text-sm text-foreground">Optimize predictive scaling for web-frontend (target 60% CPU)</p>
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
                 <button
                   onClick={() => handleApplyRecommendation("Optimize predictive scaling to 60% CPU target", hpa.minReplicas, hpa.maxReplicas, 60)}
                   className="text-xs text-primary mt-2 font-medium cursor-pointer"
@@ -238,3 +275,7 @@ export default function AutoscalingPage() {
     </div>
   );
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2

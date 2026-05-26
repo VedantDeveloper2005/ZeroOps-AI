@@ -2,7 +2,11 @@
 
 import { motion } from "framer-motion";
 import { Activity, Clock, AlertTriangle, Wifi, Cpu, HardDrive } from "lucide-react";
+<<<<<<< HEAD
 import { cpuMetrics, memoryMetrics, tracingSpans, logEntries, infraNodes } from "@/lib/mock-data";
+=======
+import { cpuMetrics, memoryMetrics, latencyMetrics, tracingSpans, logEntries, infraNodes } from "@/lib/mock-data";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { AreaChart } from "@/components/ui/AreaChart";
 import { useState } from "react";
 

@@ -17,6 +17,15 @@ interface TimelineEntryProps {
 }
 
 export function TimelineEntry({ icon, title, description, timestamp, status, isLast = false, index = 0 }: TimelineEntryProps) {
+<<<<<<< HEAD
+=======
+  const dotColors = {
+    completed: "bg-success",
+    active: "bg-primary status-dot-blue",
+    pending: "bg-foreground-muted/30",
+  };
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   return (
     <motion.div
       initial={{ opacity: 0, x: -20 }}

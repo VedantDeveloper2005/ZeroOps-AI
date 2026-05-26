@@ -1,7 +1,11 @@
 "use client";
 
 import { motion } from "framer-motion";
+<<<<<<< HEAD
 import { CreditCard, Check, Download, TrendingUp } from "lucide-react";
+=======
+import { CreditCard, Shield, Check, Download, Zap, TrendingUp, DollarSign } from "lucide-react";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 const billingHistory = [
   { id: "inv-001", date: "May 15, 2026", amount: "$99.00", status: "paid", plan: "Pro Plan (Monthly)" },

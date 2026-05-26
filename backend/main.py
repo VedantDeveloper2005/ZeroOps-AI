@@ -1,26 +1,39 @@
 import asyncio
 import uuid
 import requests
+<<<<<<< HEAD
 import threading
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+<<<<<<< HEAD
 try:
     from backend import config
     from backend.services import git, ai, k8s, pipeline, vault
 except ImportError:
     import config
     from services import git, ai, k8s, pipeline, vault
+=======
+from backend import config
+from backend.services import git, ai, k8s, pipeline, vault
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 app = FastAPI(title="ZeroOps AI MVP Backend")
 
 # Enable CORS for Next.js frontend proxy
 app.add_middleware(
     CORSMiddleware,
+<<<<<<< HEAD
     allow_origins=config.CORS_ORIGINS,
     allow_credentials=config.ALLOW_CREDENTIALS,
+=======
+    allow_origins=["*"],
+    allow_credentials=True,
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,7 +82,11 @@ async def connect_github(req: ConnectRequest):
         
     # Validate token against GitHub API
     headers = {"Authorization": f"Bearer {token}"}
+<<<<<<< HEAD
     res = requests.get("https://api.github.com/user", headers=headers, timeout=10)
+=======
+    res = requests.get("https://api.github.com/user", headers=headers)
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     if res.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid GitHub Token")
         
@@ -98,7 +115,11 @@ async def get_github_repos():
         return connected_repos
 
     headers = {"Authorization": f"Bearer {token}"}
+<<<<<<< HEAD
     res = requests.get("https://api.github.com/user/repos?per_page=100&sort=updated", headers=headers, timeout=10)
+=======
+    res = requests.get("https://api.github.com/user/repos?per_page=100&sort=updated", headers=headers)
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     if res.status_code != 200:
         return connected_repos
         
@@ -156,11 +177,16 @@ async def analyze_repo(req: DeployRequest):
         # Clone repo
         repo_path = git.clone_repo(req.repo, token)
         # Perform AI scan
+<<<<<<< HEAD
         analysis = ai.analyze_repository(repo_path, pipeline.normalize_project_id(req.repo))
+=======
+        analysis = ai.analyze_repository(repo_path)
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         return analysis
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+<<<<<<< HEAD
 @app.get("/api/health")
 async def api_health():
     return {
@@ -176,13 +202,19 @@ async def api_health():
 async def healthz():
     return {"status": "ok"}
 
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 @app.get("/api/deployments")
 async def get_deployments():
     """Retrieve deployments pipeline history."""
     if not pipeline.deployments_history:
         # Return default mocks initially
         return [
+<<<<<<< HEAD
             { "id": "dep-001", "app": "web-app", "repo": "acme/web-app", "environment": "production", "status": "running", "duration": "2m 34s", "deployedBy": "AI Auto-Deploy", "time": "2 min ago", "version": "v2.4.1" },
+=======
+            { "id": "dep-001", "app": "web-frontend", "repo": "acme/web-app", "environment": "production", "status": "running", "duration": "2m 34s", "deployedBy": "AI Auto-Deploy", "time": "2 min ago", "version": "v2.4.1" },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
             { "id": "dep-002", "app": "api-gateway", "repo": "acme/api-gateway", "environment": "production", "status": "running", "duration": "1m 48s", "deployedBy": "Vedant S.", "time": "15 min ago", "version": "v3.1.0" },
             { "id": "dep-005", "app": "notification-svc", "repo": "acme/notifications", "environment": "development", "status": "failed", "duration": "4m 01s", "deployedBy": "Vedant S.", "time": "3 hours ago", "version": "v0.9.2" }
         ]
@@ -220,7 +252,11 @@ async def add_secret(req: SecretCreateRequest):
 async def list_secrets(project_id: str):
     """Retrieve secret keys (hiding values) for a project."""
     secrets = vault.get_project_secrets(project_id)
+<<<<<<< HEAD
     return [{"key": k, "value": "********"} for k in secrets.keys()]
+=======
+    return [{"key": k, "value": "••••••••"} for k in secrets.keys()]
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 @app.delete("/api/secrets/{project_id}/{key}")
 async def delete_secret(project_id: str, key: str):
@@ -234,7 +270,11 @@ async def delete_secret(project_id: str, key: str):
 async def configure_autoscaling(req: HPAConfigureRequest):
     """Updates HPA parameters inside the namespace."""
     ns_name = f"zeroops-{req.projectId}"
+<<<<<<< HEAD
     name = req.projectId
+=======
+    name = "web-frontend"
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     hpa_manifest = f"""apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -319,6 +359,7 @@ async def logs_websocket(websocket: WebSocket, pod_name: str):
     """Websocket streaming real-time kubectl logs from a container pod."""
     await websocket.accept()
     
+<<<<<<< HEAD
     stop_stream = threading.Event()
     try:
         loop = asyncio.get_event_loop()
@@ -333,10 +374,25 @@ async def logs_websocket(websocket: WebSocket, pod_name: str):
                 except Exception:
                     break
 
+=======
+    # Run async log stream
+    try:
+        loop = asyncio.get_event_loop()
+        # Stream logs in a separate thread so it doesn't block the async loop
+        def stream():
+            for log_line in k8s.get_pod_logs(pod_name):
+                # Send synchronously via run_coroutine_threadsafe
+                asyncio.run_coroutine_threadsafe(websocket.send_text(log_line), loop)
+                
+        # Start thread
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         await loop.run_in_executor(None, stream)
     except WebSocketDisconnect:
         print(f"Logs connection closed for {pod_name}")
     except Exception as e:
         print(f"Logs WS error in {pod_name}: {e}")
+<<<<<<< HEAD
     finally:
         stop_stream.set()
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2

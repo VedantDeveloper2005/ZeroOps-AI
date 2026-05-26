@@ -2,7 +2,10 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { Repository } from "./mock-data";
+<<<<<<< HEAD
 import { fallbackRepositories } from "./demo-runtime";
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 export interface Notification {
   id: string;
@@ -77,7 +80,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   ]);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+<<<<<<< HEAD
   const [repositories, setRepositories] = useState<Repository[]>(fallbackRepositories());
+=======
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   // Fetch repositories from FastAPI backend on mount
   useEffect(() => {
@@ -87,10 +94,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         return res.json();
       })
       .then((data) => setRepositories(data))
+<<<<<<< HEAD
       .catch((err) => {
         console.error("Failed to load connected repositories; using demo repositories:", err);
         setRepositories(fallbackRepositories());
       });
+=======
+      .catch((err) => console.error("Failed to load connected repositories:", err));
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   }, []);
 
   // Directly derive the unread count instead of using an effect
@@ -151,9 +162,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       const fallbackRepo: Repository = {
         ...repo,
         id: generateId("repo"),
+<<<<<<< HEAD
         deploymentStatus: "stopped",
         stars: 0,
         totalDeployments: 0,
+=======
+        deploymentStatus: "running",
+        stars: 0,
+        totalDeployments: 1,
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         lastCommit: "Just now",
         lastCommitMessage: "Initial commit managed by ZeroOps",
         lastCommitAuthor: "Vedant S.",
@@ -190,3 +207,7 @@ export function useNotifications() {
   }
   return context;
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2

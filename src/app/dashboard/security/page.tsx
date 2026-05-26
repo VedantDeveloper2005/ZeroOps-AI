@@ -6,7 +6,10 @@ import { Shield, Lock, Eye, ShieldCheck, AlertTriangle, Search } from "lucide-re
 import { securityThreats, blockedIPs, complianceItems } from "@/lib/mock-data";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { useNotifications } from "@/lib/NotificationContext";
+<<<<<<< HEAD
 import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 const severityColor: Record<string, string> = { critical: "bg-danger/10 text-danger border-l-danger", high: "bg-warning/10 text-warning border-l-warning", medium: "bg-info/10 text-info border-l-info", low: "bg-foreground-muted/10 text-foreground-muted border-l-foreground-muted" };
 
@@ -26,7 +29,11 @@ export default function SecurityPage() {
   const [isScanning, setIsScanning] = useState(false);
 
   useEffect(() => {
+<<<<<<< HEAD
     fetch(`/api/security/status/${DEFAULT_PROJECT_ID}`)
+=======
+    fetch("/api/security/status/web-frontend")
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       .then(res => {
         if (!res.ok) throw new Error("Failed to load status");
         return res.json();
@@ -50,7 +57,11 @@ export default function SecurityPage() {
       });
       
       // Refresh state
+<<<<<<< HEAD
       fetch(`/api/security/status/${DEFAULT_PROJECT_ID}`)
+=======
+      fetch("/api/security/status/web-frontend")
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         .then(res => res.json())
         .then(data => setSecurityData(data));
     }, 1500);

@@ -2,17 +2,27 @@ import os
 import json
 import re
 from openai import OpenAI
+<<<<<<< HEAD
 try:
     from backend.config import OPENAI_API_KEY
 except ImportError:
     from config import OPENAI_API_KEY
+=======
+from backend.config import OPENAI_API_KEY
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
     """Fallback local scanner when OpenAI is not available."""
     framework = "Next.js"
+<<<<<<< HEAD
     version = "16.2.6"
     language = "TypeScript"
     dependencies = ["next@16.2.6", "react@19.2.4", "framer-motion@12.40.0", "tailwindcss@4.0", "typescript@5.7"]
+=======
+    version = "15.1.0"
+    language = "TypeScript"
+    dependencies = ["next@15.1.0", "react@19.0.0", "framer-motion@12.0", "tailwindcss@4.0", "typescript@5.7"]
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     vulnerabilities = ["Medium: Outdated dependency package 'minimist'", "Low: Development secret keys exposed in mock config"]
     risk_score = 15
     cpu = "200m"
@@ -171,7 +181,11 @@ CMD ["npm", "start"]"""
 
 def generate_default_k8s_manifest(framework: str, cpu: str, memory: str, project_id: str = "default") -> str:
     port = 8080 if framework in ["FastAPI", "Flask"] else 3000
+<<<<<<< HEAD
     name = "fastapi-service" if framework in ["FastAPI", "Flask"] else "web-app"
+=======
+    name = "fastapi-service" if framework in ["FastAPI", "Flask"] else "web-frontend"
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     ns_name = f"zeroops-{project_id}"
     return f"""apiVersion: apps/v1
 kind: Deployment

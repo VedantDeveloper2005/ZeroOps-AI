@@ -1,12 +1,17 @@
 "use client";
 
 import { motion } from "framer-motion";
+<<<<<<< HEAD
 import { useCallback, useState, useEffect, useRef, Suspense } from "react";
+=======
+import { useState, useEffect, useRef, Suspense } from "react";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock, Loader2 } from "lucide-react";
 import { deploymentSteps, deployments, terminalLines, Deployment } from "@/lib/mock-data";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useSearchParams, useRouter } from "next/navigation";
+<<<<<<< HEAD
 import {
   createDeploymentRecord,
   createSimulatedDeploymentLines,
@@ -15,6 +20,8 @@ import {
   normalizeProjectId,
 } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 const stepIcons = [Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock];
 
@@ -22,8 +29,11 @@ function DeploymentsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const deployId = searchParams.get("id");
+<<<<<<< HEAD
   const repoParam = searchParams.get("repo") || "acme/web-app";
   const projectId = normalizeProjectId(repoParam);
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   const { addToast, addNotification } = useNotifications();
   const [steps, setSteps] = useState(deploymentSteps);
@@ -36,13 +46,18 @@ function DeploymentsPageContent() {
   const termRef = useRef<HTMLDivElement>(null);
 
   // Fetch deployment history
+<<<<<<< HEAD
   const fetchHistory = useCallback(() => {
+=======
+  const fetchHistory = () => {
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     fetch("/api/deployments")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch deployments");
         return res.json();
       })
       .then((data) => setHistory(data))
+<<<<<<< HEAD
       .catch((err) => {
         console.error("Failed to load deployment history; using local demo history:", err);
         const localRecord = createDeploymentRecord(repoParam, deployId || undefined);
@@ -92,6 +107,14 @@ function DeploymentsPageContent() {
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
+=======
+      .catch((err) => console.error("Failed to load deployment history:", err));
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   // Handle live WebSocket deployment stream or mock typewriter animation
   useEffect(() => {
@@ -105,6 +128,7 @@ function DeploymentsPageContent() {
       return () => clearTimeout(timer);
     }
 
+<<<<<<< HEAD
     if (searchParams.get("mode") === "fallback") {
       const timer = window.setTimeout(() => {
         runFallbackDeployment("Backend unavailable. Running guided ZeroOps deployment simulation.");
@@ -112,6 +136,8 @@ function DeploymentsPageContent() {
       return () => window.clearTimeout(timer);
     }
 
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     // Live Mode: Reset steps to pending, connect to websocket
     const timer = setTimeout(() => {
       setSteps(
@@ -128,7 +154,13 @@ function DeploymentsPageContent() {
       setIsAnimating(true);
     }, 0);
 
+<<<<<<< HEAD
     const socket = new WebSocket(getWebSocketUrl(`/ws/deployments/${deployId}`));
+=======
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsHost = window.location.hostname === "localhost" ? "localhost:8000" : window.location.host;
+    const socket = new WebSocket(`${wsProtocol}//${wsHost}/ws/deployments/${deployId}`);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
     socket.onopen = () => {
       console.log(`Connected to deployments websocket for: ${deployId}`);
@@ -182,8 +214,20 @@ function DeploymentsPageContent() {
 
     socket.onerror = (err) => {
       console.error("WS connection error:", err);
+<<<<<<< HEAD
       socket.close();
       runFallbackDeployment("WebSocket unavailable. Replaying a deterministic deployment stream.");
+=======
+      setActiveLines((prev) => {
+        const updated = [
+          ...prev,
+          { text: "⚠️ WebSocket connection error. Reverting to local display.", type: "error" as const },
+        ];
+        setVisibleLines(updated.length);
+        return updated;
+      });
+      setIsAnimating(false);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     };
 
     socket.onclose = () => {
@@ -195,7 +239,11 @@ function DeploymentsPageContent() {
       clearTimeout(timer);
       socket.close();
     };
+<<<<<<< HEAD
   }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory]);
+=======
+  }, [deployId, addNotification, addToast]);
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   // Typewriter effect for mock mode
   useEffect(() => {
@@ -222,7 +270,11 @@ function DeploymentsPageContent() {
 
   const handleRedeploy = async () => {
     if (isAnimating) return;
+<<<<<<< HEAD
     addToast(`Initializing redeployment for ${projectId}...`, "info");
+=======
+    addToast("Initializing redeployment for web-frontend...", "info");
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     try {
       const res = await fetch("/api/deployments/deploy", {
         method: "POST",
@@ -233,12 +285,20 @@ function DeploymentsPageContent() {
       const data = await res.json();
       if (data.status === "success") {
         addToast("Redeployment initialized. Redirecting to live pipeline...", "success");
+<<<<<<< HEAD
         router.push(`/dashboard/deployments?id=${data.deployment_id}&repo=${encodeURIComponent(repoParam)}`);
       }
     } catch (err) {
       console.error(err);
       addToast("Backend unavailable. Starting guided redeployment simulation.", "warning");
       router.push(`/dashboard/deployments?id=demo-${projectId}&repo=${encodeURIComponent(repoParam)}&mode=fallback`);
+=======
+        router.push(`/dashboard/deployments?id=${data.deployment_id}`);
+      }
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to initialize redeployment.", "error");
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     }
   };
 
@@ -258,7 +318,11 @@ function DeploymentsPageContent() {
       { text: "", type: "blank" as const },
       { text: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", type: "info" as const },
       { text: "✅ Rollback completed successfully in 8.4s!", type: "success" as const },
+<<<<<<< HEAD
       { text: "  🌐 URL:     https://web-app.zeroops.dev", type: "info" as const },
+=======
+      { text: "  🌐 URL:     https://app.zeroops.dev", type: "info" as const },
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       { text: "  📦 Image:   acr.azurecr.io/web:v2.4.0", type: "info" as const },
     ];
     setActiveLines(rollbackLogs);
@@ -267,7 +331,11 @@ function DeploymentsPageContent() {
       addToast("Rollback completed successfully!", "success");
       addNotification({
         title: "Rollback Executed",
+<<<<<<< HEAD
         message: `Successfully rolled back ${projectId} to version v2.4.0.`,
+=======
+        message: "Successfully rolled back web-frontend to version v2.4.0.",
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         type: "warning",
       });
     }, 1500);
@@ -275,19 +343,31 @@ function DeploymentsPageContent() {
 
   const executeScale = async () => {
     setIsScaleModalOpen(false);
+<<<<<<< HEAD
     addToast(`Scaling ${projectId} to ${scaleCount} replicas...`, "info");
+=======
+    addToast(`Scaling web-frontend to ${scaleCount} replicas...`, "info");
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
     try {
       const res = await fetch("/api/deployments/scale", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+<<<<<<< HEAD
         body: JSON.stringify({ name: "web-app", replicas: scaleCount }),
+=======
+        body: JSON.stringify({ name: "web-frontend", replicas: scaleCount }),
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       });
       if (!res.ok) throw new Error("Failed to scale deployment");
 
       addToast(`Scaled to ${scaleCount} replicas successfully!`, "success");
       addNotification({
         title: "Scaling Event Complete",
+<<<<<<< HEAD
         message: `Successfully scaled ${projectId} replicas: 4 -> ${scaleCount}.`,
+=======
+        message: `Successfully scaled web-frontend replicas: 4 → ${scaleCount}.`,
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
         type: "info",
       });
 
@@ -482,7 +562,11 @@ function DeploymentsPageContent() {
           >
             <h3 className="text-lg font-bold mb-2">Scale Deployment</h3>
             <p className="text-xs text-foreground-muted mb-6">
+<<<<<<< HEAD
               Adjust the replica count for {projectId}. ZeroOps will autonomously partition and register pods.
+=======
+              Adjust the replica count for web-frontend. ZeroOps will autonomously partition and register pods.
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
             </p>
 
             <div className="flex items-center justify-between bg-card/40 border border-border rounded-lg p-4 mb-6">
@@ -536,3 +620,7 @@ export default function DeploymentsPage() {
     </Suspense>
   );
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2

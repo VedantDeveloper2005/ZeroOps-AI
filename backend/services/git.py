@@ -1,10 +1,14 @@
 import os
 import shutil
 import subprocess
+<<<<<<< HEAD
 try:
     from backend.config import WORKSPACE_DIR
 except ImportError:
     from config import WORKSPACE_DIR
+=======
+from backend.config import WORKSPACE_DIR
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 def get_repo_path(full_name: str) -> str:
     """Get the local workspace path for a repository full name (e.g. owner/repo)"""
@@ -49,6 +53,7 @@ def clone_repo(full_name: str, token: str = None) -> str:
     
     # Create package.json to mimic a Next.js app for default detections
     package_json_content = """{
+<<<<<<< HEAD
     "name": "zeroops-demo-app",
   "version": "0.1.0",
   "private": true,
@@ -61,6 +66,17 @@ def clone_repo(full_name: str, token: str = None) -> str:
   },
   "devDependencies": {
     "typescript": "^5.7.0"
+=======
+  "name": "nextjs-demo",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "framer-motion": "^11.0.0",
+    "tailwindcss": "^4.0.0"
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   }
 }"""
     with open(os.path.join(repo_path, "package.json"), "w") as f:

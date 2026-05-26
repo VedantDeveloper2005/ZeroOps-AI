@@ -1,11 +1,17 @@
 "use client";
 
 import { motion } from "framer-motion";
+<<<<<<< HEAD
 import { useState, useEffect, useRef } from "react";
 import { Search } from "lucide-react";
 import { logEntries } from "@/lib/mock-data";
 import { DEFAULT_PROJECT_ID, createLiveLogLine } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
+=======
+import { useState, useEffect } from "react";
+import { Search } from "lucide-react";
+import { logEntries } from "@/lib/mock-data";
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
 const levels = ["INFO", "WARN", "ERROR", "DEBUG"] as const;
 const levelColor: Record<string, string> = { 
@@ -52,7 +58,10 @@ export default function LogsPage() {
   const [activeLevels, setActiveLevels] = useState<Set<string>>(new Set(levels));
   const [selectedPod, setSelectedPod] = useState("all");
   const [logs, setLogs] = useState<typeof logEntries>(logEntries);
+<<<<<<< HEAD
   const scrollRef = useRef<HTMLDivElement>(null);
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
 
   const toggleLevel = (level: string) => {
     const next = new Set(activeLevels);
@@ -66,6 +75,7 @@ export default function LogsPage() {
 
   // Connect to backend WebSocket log stream
   useEffect(() => {
+<<<<<<< HEAD
     let fallbackTimer: ReturnType<typeof setInterval> | null = null;
     let connected = false;
 
@@ -88,6 +98,16 @@ export default function LogsPage() {
 
     socket.onopen = () => {
       connected = true;
+=======
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsHost = window.location.hostname === "localhost" ? "localhost:8000" : window.location.host;
+    
+    // Connect to specific pod or 'all-pods' fallback
+    const podParam = selectedPod === "all" ? "all-pods" : selectedPod;
+    const socket = new WebSocket(`${wsProtocol}//${wsHost}/ws/logs/${podParam}`);
+
+    socket.onopen = () => {
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       console.log(`Logs WebSocket connected for pod: ${podParam}`);
     };
 
@@ -107,6 +127,7 @@ export default function LogsPage() {
 
     socket.onerror = (err) => {
       console.error("Logs WebSocket error:", err);
+<<<<<<< HEAD
       startFallbackStream();
     };
 
@@ -116,16 +137,24 @@ export default function LogsPage() {
 
     return () => {
       if (fallbackTimer) clearInterval(fallbackTimer);
+=======
+    };
+
+    return () => {
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
       socket.close();
     };
   }, [selectedPod]);
 
+<<<<<<< HEAD
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [logs.length]);
 
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
   // Derive unique list of pods from historical plus newly seen logs
   const uniquePods = Array.from(new Set([...logEntries.map((l) => l.pod), ...logs.map((l) => l.pod)]));
 
@@ -193,7 +222,10 @@ export default function LogsPage() {
           <span className="text-xs font-mono text-foreground-muted">Live stream — {filtered.length} entries</span>
         </div>
         <div
+<<<<<<< HEAD
           ref={scrollRef}
+=======
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
           className="p-4 font-mono text-xs leading-7 overflow-y-auto no-scrollbar bg-black/20"
           style={{ maxHeight: "calc(100vh - 320px)" }}
         >
@@ -224,3 +256,7 @@ export default function LogsPage() {
     </div>
   );
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 7a8a49ab91a776be547d07446a274f5d8f0822b2
