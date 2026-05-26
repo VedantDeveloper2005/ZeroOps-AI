@@ -1,5 +1,3 @@
-import type { NextConfig } from "next";
-
 const backendUrl =
   process.env.ZEROOPS_BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -7,7 +5,9 @@ const backendUrl =
 
 const normalizedBackendUrl = backendUrl.replace(/\/$/, "");
 
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: 'standalone',
   deploymentId: process.env.DEPLOYMENT_VERSION || process.env.WEBSITE_SITE_NAME,
   async rewrites() {
     return [
@@ -23,4 +23,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+module.exports = nextConfig;
