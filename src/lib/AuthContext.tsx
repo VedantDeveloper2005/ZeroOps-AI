@@ -86,7 +86,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       addToast("Please sign in to access the dashboard", "warning");
       router.push("/login");
     } else if (user && isAuthRoute) {
-      router.push("/dashboard");
+      // Route based on onboarding state: new users go to onboarding wizard
+      const deployed = typeof window !== "undefined" && localStorage.getItem("zo_has_deployed") === "true";
+      if (deployed) {
+        router.push("/dashboard");
+      } else {
+        router.push("/dashboard/repositories");
+      }
     }
   }, [user, loading, pathname, router]);
 
