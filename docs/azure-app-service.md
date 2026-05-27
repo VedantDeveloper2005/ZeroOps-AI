@@ -34,8 +34,8 @@ DEPLOYMENT_VERSION=<release-id>
 Runtime:
 
 - Python 3.11+.
-- Startup command: `bash startup.sh`
-- Working directory: `backend`
+- Startup command: `gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app`
+- Working directory: `/home/site/wwwroot`
 
 Required app settings:
 
@@ -69,10 +69,11 @@ Missing optional settings keep fallback demo mode active. The backend will still
 
 Backend health endpoints:
 
-- `GET /healthz`
-- `GET /api/health`
+- `GET /health` (Returns `{"status": "ok"}` to verify backend is alive)
+- `GET /healthz` (Returns `{"status": "ok"}`)
+- `GET /api/health` (Detailed status including integration availability flags for Docker, Kubernetes, and OpenAI)
 
-Use `/healthz` for App Service health checks. `/api/health` includes integration availability flags for Docker, Kubernetes, and OpenAI.
+Use `/health` or `/healthz` for App Service health checks. `/api/health` includes integration availability flags for Docker, Kubernetes, and OpenAI.
 
 ## Verification Commands
 

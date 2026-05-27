@@ -33,13 +33,14 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Clean build virtual environment
+        run: rm -rf backend/antenv
+
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-backend-app
-          path: |
-            backend
-            !backend/antenv/
+          path: backend/
 
   deploy:
     runs-on: ubuntu-latest
@@ -70,3 +71,4 @@ jobs:
           app-name: 'zeroops-backend'
           slot-name: 'Production'
           package: .
+          startup-command: 'gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app'

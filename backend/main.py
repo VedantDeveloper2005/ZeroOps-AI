@@ -413,6 +413,10 @@ async def api_health():
         "openAIConfigured": bool(config.OPENAI_API_KEY),
     }
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
