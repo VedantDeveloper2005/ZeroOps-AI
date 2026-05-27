@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Request, HTTPException, Depends, status
@@ -15,14 +16,24 @@ except ImportError:
     from database import get_db
     from models import User
 
+# Setup logger
+logger = logging.getLogger("zeroops.auth")
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Compare plain password against hashed password."""
+    """Compare plain password against hashed password with detailed logging."""
+    if not hashed_password:
+        logger.warning("Password verification failed: No stored password hash found.")
+        return False
     try:
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8"),
-            hashed_password.encode("utf-8")
-        )
-    except Exception:
+        plain_bytes = plain_password.encode("utf-8")
+        hash_bytes = hashed_password.encode("utf-8")
+        
+        logger.info(f"Verifying password. Stored Hash Length: {len(hashed_password)}. Prefix: {hashed_password[:10]}...")
+        result = bcrypt.checkpw(plain_bytes, hash_bytes)
+        logger.info(f"Password verification status: {'SUCCESS' if result else 'FAILED'}")
+        return result
+    except Exception as e:
+        logger.error(f"Password verification encountered exception: {e}")
         return False
 
 def get_password_hash(password: str) -> str:
@@ -32,15 +43,20 @@ def get_password_hash(password: str) -> str:
     return hashed.decode("utf-8")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Generate signed JWT access token."""
+    """Generate signed JWT access token with detailed logging."""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
-    return encoded_jwt
+    try:
+        encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
+        logger.info(f"JWT generation status: SUCCESS. Sub: {to_encode.get('sub')}")
+        return encoded_jwt
+    except Exception as e:
+        logger.error(f"JWT generation failed: {e}")
+        raise
 
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
     """

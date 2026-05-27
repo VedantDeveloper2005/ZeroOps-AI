@@ -2,12 +2,15 @@ import asyncio
 import uuid
 import requests
 import threading
+import logging
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
+logger = logging.getLogger("zeroops.main")
 
 try:
     from backend import config
@@ -56,30 +59,38 @@ def map_user_response(user: models.User) -> schemas.UserResponse:
 
 @app.post("/api/auth/signup", response_model=schemas.UserResponse)
 async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
-    """User signup endpoint."""
+    """User signup endpoint with detailed logging."""
+    email = req.email.strip().lower()
     first_name = req.first_name or req.firstName
     last_name = req.last_name or req.lastName
     
+    logger.info(f"Signup attempt started for email: {email}")
+    
     # Check if user already exists
     try:
-        result = await db.execute(select(models.User).filter(models.User.email == req.email))
+        result = await db.execute(select(models.User).filter(models.User.email == email))
         existing_user = result.scalars().first()
     except Exception as e:
-        print(f"Database error during signup search: {e}")
+        logger.error(f"Signup database check error for {email}: {e}")
         raise HTTPException(status_code=503, detail="Database is currently unavailable.")
         
     if existing_user:
+        logger.warning(f"Signup failure: User with email '{email}' already exists in database.")
         raise HTTPException(status_code=400, detail="A user with this email address already exists.")
         
     # Hash password
-    password_hash = auth.get_password_hash(req.password)
+    try:
+        password_hash = auth.get_password_hash(req.password)
+    except Exception as e:
+        logger.error(f"Signup password hashing error for {email}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to secure credentials.")
     
     # Create new user
     new_user = models.User(
         id=uuid.uuid4(),
         first_name=first_name,
         last_name=last_name,
-        email=req.email,
+        email=email,
         password_hash=password_hash,
         provider="local",
         plan="starter"
@@ -91,11 +102,15 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         await db.refresh(new_user)
     except Exception as e:
         await db.rollback()
-        print(f"Database error during user insertion: {e}")
+        logger.error(f"Signup database insert error for {email}: {e}")
         raise HTTPException(status_code=500, detail="Failed to register user in database.")
         
     # Generate token
-    token = auth.create_access_token(data={"sub": str(new_user.id)})
+    try:
+        token = auth.create_access_token(data={"sub": str(new_user.id)})
+    except Exception as e:
+        logger.error(f"Signup JWT creation error for {email}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to establish session.")
     
     # Set HTTP-only secure cookie
     is_prod = config.APP_ENV == "production"
@@ -108,27 +123,43 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         secure=is_prod
     )
     
+    logger.info(f"Signup success: Registered and authenticated user '{email}' (ID: {new_user.id})")
     return map_user_response(new_user)
 
 @app.post("/api/auth/login", response_model=schemas.UserResponse)
 async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
-    """User login endpoint."""
+    """User login endpoint with detailed logging."""
+    email = req.email.strip().lower()
+    logger.info(f"Login attempt started for email: {email}")
+    
     try:
-        result = await db.execute(select(models.User).filter(models.User.email == req.email))
+        result = await db.execute(select(models.User).filter(models.User.email == email))
         user = result.scalars().first()
     except Exception as e:
-        print(f"Database error during login search: {e}")
+        logger.error(f"Login database lookup error for {email}: {e}")
         raise HTTPException(status_code=503, detail="Database is currently unavailable.")
         
-    if not user or not user.password_hash:
+    if not user:
+        logger.warning(f"Login failure: No user profile found for email '{email}'.")
+        raise HTTPException(status_code=400, detail="Invalid email or password.")
+        
+    if not user.password_hash:
+        logger.warning(f"Login failure: User '{email}' does not have a local password (registered via provider: '{user.provider}').")
         raise HTTPException(status_code=400, detail="Invalid email or password.")
         
     # Verify password
-    if not auth.verify_password(req.password, user.password_hash):
+    logger.info(f"Comparing password hash for user '{email}'...")
+    is_password_valid = auth.verify_password(req.password, user.password_hash)
+    if not is_password_valid:
+        logger.warning(f"Login failure: Incorrect password provided for email '{email}'.")
         raise HTTPException(status_code=400, detail="Invalid email or password.")
         
     # Generate token
-    token = auth.create_access_token(data={"sub": str(user.id)})
+    try:
+        token = auth.create_access_token(data={"sub": str(user.id)})
+    except Exception as e:
+        logger.error(f"Login JWT creation error for {email}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to establish session.")
     
     # Set HTTP-only secure cookie
     is_prod = config.APP_ENV == "production"
@@ -141,16 +172,19 @@ async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = D
         secure=is_prod
     )
     
+    logger.info(f"Login success: Authenticated user '{email}' (ID: {user.id})")
     return map_user_response(user)
 
 @app.get("/api/auth/me", response_model=schemas.UserResponse)
 async def get_me(current_user: models.User = Depends(auth.get_current_user)):
     """Get currently logged in user profile details."""
+    logger.info(f"Profile retrieval requested for user '{current_user.email}' (ID: {current_user.id})")
     return map_user_response(current_user)
 
 @app.post("/api/auth/logout")
 async def logout(response: Response):
     """Logs the user out by deleting their session cookie."""
+    logger.info("Logging out active session...")
     is_prod = config.APP_ENV == "production"
     response.delete_cookie(
         key="session_token",
@@ -158,6 +192,7 @@ async def logout(response: Response):
         secure=is_prod,
         httponly=True
     )
+    logger.info("Logout success: Cookie session cleared.")
     return {"status": "success", "message": "Logged out successfully."}
 
 class OAuthRequest(BaseModel):
