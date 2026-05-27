@@ -31,6 +31,17 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/, "");
 
+// Global fetch interceptor to automatically route client-side relative API requests to backend
+if (typeof window !== "undefined") {
+  const originalFetch = window.fetch;
+  window.fetch = async function (input, init) {
+    if (API_BASE_URL && typeof input === "string" && input.startsWith("/api/")) {
+      input = `${API_BASE_URL}${input}`;
+    }
+    return originalFetch(input, init);
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
