@@ -8,3 +8,10 @@ requests
 python-dotenv
 azure-identity
 azure-keyvault-secrets
+sqlalchemy
+asyncpg
+psycopg2-binary
+passlib[bcrypt]
+python-jose[cryptography]
+authlib
+email-validator

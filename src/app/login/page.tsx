@@ -6,14 +6,17 @@ import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function LoginPage() {
+  const { login } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     email: "",
     password: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -21,14 +24,17 @@ export default function LoginPage() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    // Simulate API login call
-    setTimeout(() => {
+    setError(null);
+    try {
+      await login(formData.email, formData.password);
+      // Success redirection is handled automatically by AuthContext
+    } catch (err: any) {
+      setError(err.message || "Invalid email or password");
       setIsSubmitting(false);
-      router.push("/dashboard");
-    }, 1200);
+    }
   };
 
   // Stagger container animation for left column content
@@ -147,6 +153,11 @@ export default function LoginPage() {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
+            {error && (
+              <div className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
+                {error}
+              </div>
+            )}
             <InputGroup
               label="Email"
               placeholder="name@company.com"

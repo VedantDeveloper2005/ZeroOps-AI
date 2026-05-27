@@ -7,9 +7,11 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, GitBranch, Rocket, Brain, DollarSign,
   Shield, Activity, TrendingUp, Network, Terminal,
-  AlertTriangle, CreditCard, Settings, ChevronLeft, ChevronRight,
+  AlertTriangle, CreditCard, Settings, ChevronLeft, ChevronRight, LogOut,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useAuth } from "@/lib/AuthContext";
+
 
 const navSections = [
   {
@@ -54,6 +56,26 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
+
+  const firstName = user?.firstName || user?.first_name || "";
+  const lastName = user?.lastName || user?.last_name || "";
+
+  const initials = firstName && lastName
+    ? `${firstName[0].toUpperCase()}${lastName[0].toUpperCase()}`
+    : firstName
+    ? firstName[0].toUpperCase()
+    : user?.email
+    ? user.email[0].toUpperCase()
+    : "VS";
+
+  const fullName = firstName && lastName
+    ? `${firstName} ${lastName}`
+    : firstName
+    ? firstName
+    : user?.email
+    ? user.email.split("@")[0]
+    : "Vedant S.";
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -149,6 +171,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="border-t border-border p-3 flex flex-col gap-2">
         <ThemeToggle collapsed={collapsed} />
         <button
+          onClick={logout}
+          title="Sign Out"
+          className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-card transition-colors text-danger hover:text-danger-hover"
+        >
+          <LogOut size={18} className="flex-shrink-0" />
+          {!collapsed && <span className="text-xs font-semibold ml-2">Sign Out</span>}
+        </button>
+        <button
           onClick={onToggle}
           className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-card transition-colors text-foreground-muted hover:text-foreground"
         >
@@ -160,7 +190,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className="border-t border-border p-3">
         <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-sm font-bold text-foreground flex-shrink-0 relative">
-            VS
+            {initials}
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-success border-2 border-background-secondary" />
           </div>
           <AnimatePresence>
@@ -171,8 +201,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 exit={{ opacity: 0 }}
                 className="overflow-hidden"
               >
-                <p className="text-sm font-medium text-foreground truncate">Vedant S.</p>
-                <p className="text-[10px] text-foreground-muted">Admin</p>
+                <p className="text-sm font-medium text-foreground truncate">{fullName}</p>
+                <p className="text-[10px] text-foreground-muted">{user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : "Admin"}</p>
               </motion.div>
             )}
           </AnimatePresence>

@@ -4,6 +4,8 @@ import { usePathname } from "next/navigation";
 import { Brain, Bell, Search, Info, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Check } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useAuth } from "@/lib/AuthContext";
+
 
 interface TopBarProps {
   onToggleFeed: () => void;
@@ -33,9 +35,21 @@ const typeTextColors = {
 
 export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
   const pathname = usePathname();
+  const { user } = useAuth();
   const segments = pathname.split("/").filter(Boolean);
   const currentPage = segments[segments.length - 1] || "dashboard";
   const pageName = currentPage.split("-").map(w => w === "ai" ? "AI" : w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+  const firstName = user?.firstName || user?.first_name || "";
+  const lastName = user?.lastName || user?.last_name || "";
+
+  const initials = firstName && lastName
+    ? `${firstName[0].toUpperCase()}${lastName[0].toUpperCase()}`
+    : firstName
+    ? firstName[0].toUpperCase()
+    : user?.email
+    ? user.email[0].toUpperCase()
+    : "VS";
 
   const { notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -165,7 +179,7 @@ export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
         </div>
 
         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-xs font-bold text-foreground cursor-pointer">
-          VS
+          {initials}
         </div>
       </div>
     </div>

@@ -3,16 +3,22 @@ import uuid
 import requests
 import threading
 from typing import Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 try:
     from backend import config
     from backend.services import git, ai, k8s, pipeline, vault
+    from backend.database import get_db, init_db, database_available
+    from backend import models, schemas, auth
 except ImportError:
     import config
     from services import git, ai, k8s, pipeline, vault
+    from database import get_db, init_db, database_available
+    import models, schemas, auth
 
 app = FastAPI(title="ZeroOps AI MVP Backend")
 
@@ -24,6 +30,205 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Startup database initialization
+@app.on_event("startup")
+async def startup_db():
+    await init_db()
+
+# Helper to format user response consistently
+def map_user_response(user: models.User) -> schemas.UserResponse:
+    return schemas.UserResponse(
+        id=user.id,
+        email=user.email,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        firstName=user.first_name,
+        lastName=user.last_name,
+        provider=user.provider,
+        provider_id=user.provider_id,
+        avatar_url=user.avatar_url,
+        plan=user.plan,
+        created_at=user.created_at.isoformat() if user.created_at else None
+    )
+
+# AUTHENTICATION ROUTERS
+
+@app.post("/api/auth/signup", response_model=schemas.UserResponse)
+async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
+    """User signup endpoint."""
+    first_name = req.first_name or req.firstName
+    last_name = req.last_name or req.lastName
+    
+    # Check if user already exists
+    try:
+        result = await db.execute(select(models.User).filter(models.User.email == req.email))
+        existing_user = result.scalars().first()
+    except Exception as e:
+        print(f"Database error during signup search: {e}")
+        raise HTTPException(status_code=503, detail="Database is currently unavailable.")
+        
+    if existing_user:
+        raise HTTPException(status_code=400, detail="A user with this email address already exists.")
+        
+    # Hash password
+    password_hash = auth.get_password_hash(req.password)
+    
+    # Create new user
+    new_user = models.User(
+        id=uuid.uuid4(),
+        first_name=first_name,
+        last_name=last_name,
+        email=req.email,
+        password_hash=password_hash,
+        provider="local",
+        plan="starter"
+    )
+    
+    try:
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
+    except Exception as e:
+        await db.rollback()
+        print(f"Database error during user insertion: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user in database.")
+        
+    # Generate token
+    token = auth.create_access_token(data={"sub": str(new_user.id)})
+    
+    # Set HTTP-only secure cookie
+    is_prod = config.APP_ENV == "production"
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        secure=is_prod
+    )
+    
+    return map_user_response(new_user)
+
+@app.post("/api/auth/login", response_model=schemas.UserResponse)
+async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
+    """User login endpoint."""
+    try:
+        result = await db.execute(select(models.User).filter(models.User.email == req.email))
+        user = result.scalars().first()
+    except Exception as e:
+        print(f"Database error during login search: {e}")
+        raise HTTPException(status_code=503, detail="Database is currently unavailable.")
+        
+    if not user or not user.password_hash:
+        raise HTTPException(status_code=400, detail="Invalid email or password.")
+        
+    # Verify password
+    if not auth.verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Invalid email or password.")
+        
+    # Generate token
+    token = auth.create_access_token(data={"sub": str(user.id)})
+    
+    # Set HTTP-only secure cookie
+    is_prod = config.APP_ENV == "production"
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        secure=is_prod
+    )
+    
+    return map_user_response(user)
+
+@app.get("/api/auth/me", response_model=schemas.UserResponse)
+async def get_me(current_user: models.User = Depends(auth.get_current_user)):
+    """Get currently logged in user profile details."""
+    return map_user_response(current_user)
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    """Logs the user out by deleting their session cookie."""
+    is_prod = config.APP_ENV == "production"
+    response.delete_cookie(
+        key="session_token",
+        samesite="lax",
+        secure=is_prod,
+        httponly=True
+    )
+    return {"status": "success", "message": "Logged out successfully."}
+
+class OAuthRequest(BaseModel):
+    provider: str
+    provider_id: str
+    email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+@app.post("/api/auth/oauth", response_model=schemas.UserResponse)
+async def oauth_authenticate(req: OAuthRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    """Future-ready OAuth login/registration interface."""
+    try:
+        # Check by provider + provider_id first
+        result = await db.execute(
+            select(models.User).filter(
+                (models.User.provider == req.provider) & (models.User.provider_id == req.provider_id)
+            )
+        )
+        user = result.scalars().first()
+        
+        if not user:
+            # Check if email is already taken by a local user
+            result_email = await db.execute(select(models.User).filter(models.User.email == req.email))
+            existing_email = result_email.scalars().first()
+            
+            if existing_email:
+                # Link local account to OAuth
+                user = existing_email
+                user.provider = req.provider
+                user.provider_id = req.provider_id
+                if req.avatar_url:
+                    user.avatar_url = req.avatar_url
+                await db.commit()
+                await db.refresh(user)
+            else:
+                # Create new OAuth profile
+                user = models.User(
+                    id=uuid.uuid4(),
+                    first_name=req.first_name,
+                    last_name=req.last_name,
+                    email=req.email,
+                    password_hash=None, # No password required for OAuth
+                    provider=req.provider,
+                    provider_id=req.provider_id,
+                    avatar_url=req.avatar_url,
+                    plan="starter"
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+    except Exception as e:
+        print(f"Database error during OAuth: {e}")
+        raise HTTPException(status_code=500, detail="Database failure during authentication.")
+        
+    # Generate token
+    token = auth.create_access_token(data={"sub": str(user.id)})
+    
+    # Set cookie
+    is_prod = config.APP_ENV == "production"
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        secure=is_prod
+    )
+    
+    return map_user_response(user)
 
 # In-memory settings state
 settings_store = {
@@ -59,6 +264,7 @@ class HPAConfigureRequest(BaseModel):
     minReplicas: int
     maxReplicas: int
     cpuTarget: int
+
 
 @app.post("/api/github/connect")
 async def connect_github(req: ConnectRequest):

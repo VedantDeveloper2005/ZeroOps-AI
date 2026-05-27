@@ -6,8 +6,10 @@ import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function SignupPage() {
+  const { signup } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     firstName: "",
@@ -16,6 +18,7 @@ export default function SignupPage() {
     password: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -23,14 +26,22 @@ export default function SignupPage() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    // Simulate API registration call
-    setTimeout(() => {
+    setError(null);
+    try {
+      await signup(
+        formData.firstName,
+        formData.lastName,
+        formData.email,
+        formData.password
+      );
+      // Success redirection is handled automatically by AuthContext
+    } catch (err: any) {
+      setError(err.message || "Failed to create account");
       setIsSubmitting(false);
-      router.push("/dashboard");
-    }, 1200);
+    }
   };
 
   // Stagger container animation for left column content
@@ -149,6 +160,11 @@ export default function SignupPage() {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
+            {error && (
+              <div className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
+                {error}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <InputGroup
                 label="First Name"
