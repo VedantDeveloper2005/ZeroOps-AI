@@ -6,6 +6,7 @@ import { AlertTriangle, CheckCircle, Clock, Brain, FileText, RefreshCw, X, Copy 
 import { incidents } from "@/lib/mock-data";
 import { AIThinkingIndicator } from "@/components/ui/AIThinkingIndicator";
 import { useNotifications } from "@/lib/NotificationContext";
+import { LockedView } from "@/components/dashboard/LockedView";
 
 const severityConfig: Record<string, { color: string; bg: string; border: string }> = {
   critical: { color: "text-danger", bg: "bg-danger/10", border: "border-l-danger" },
@@ -32,7 +33,20 @@ const aiDiagnosisText = [
 ];
 
 export default function IncidentsPage() {
-  const { addToast } = useNotifications();
+  const { addToast, hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Incident Management</h1>
+          <p className="text-foreground-muted text-sm mt-1">AI-powered incident detection, diagnosis, and recovery</p>
+        </div>
+        <LockedView featureName="Incident Management" />
+      </div>
+    );
+  }
+
   const activeIncidents = incidents.filter(i => i.status !== "resolved");
   const [diagnosisLines, setDiagnosisLines] = useState(0);
   const [isReportOpen, setIsReportOpen] = useState(false);

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { TrendingUp, TrendingDown, ArrowUpRight, Rocket, Shield, Terminal, GitBranch, Brain, Cpu, Zap, Loader2, Check } from "lucide-react";
+import { TrendingUp, TrendingDown, ArrowUpRight, Rocket, Shield, Terminal, GitBranch, Brain, Cpu, Zap, Loader2, Check, Lock, Play, ArrowRight } from "lucide-react";
 import { dashboardStats as initialStats, deployments, trafficMetrics } from "@/lib/mock-data";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -23,7 +23,7 @@ interface RecommendationItem {
 
 export default function DashboardHome() {
   const router = useRouter();
-  const { addToast, addNotification } = useNotifications();
+  const { addToast, addNotification, hasDeployed } = useNotifications();
   const [timeRange, setTimeRange] = useState("24h");
   const [stats, setStats] = useState(initialStats);
   const [recs] = useState<RecommendationItem[]>([
@@ -31,6 +31,176 @@ export default function DashboardHome() {
     { id: "rec-2", icon: Shield, title: "Patch CVE-2026-1234", desc: "Critical vulnerability in base image", color: "text-danger", savings: 0 },
     { id: "rec-3", icon: Cpu, title: "Reduce staging costs", desc: "3 idle pods detected — save $22/mo", color: "text-warning", savings: 22 },
   ]);
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-8">
+        {/* Onboarding Hero Banner */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="relative rounded-2xl overflow-hidden glass border border-primary/20 p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-8 shadow-2xl"
+        >
+          {/* Subtle decorative glow */}
+          <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl opacity-60 pointer-events-none" />
+          <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl opacity-60 pointer-events-none" />
+
+          <div className="relative z-10 space-y-4 max-w-2xl text-center md:text-left">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 text-xs font-semibold">
+              <Zap size={12} className="animate-pulse" />
+              SaaS Deployment Sandbox Active
+            </div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-foreground-muted bg-clip-text text-transparent">
+              Deploy Your First Application
+            </h1>
+            <p className="text-foreground-muted text-sm md:text-base leading-relaxed">
+              ZeroOps AI connects directly to your code repo, auto-detects frameworks (Next.js, FastAPI, NestJS), runs cognitive dependency analysis, compiles isolated Docker environments, and provisions Kubernetes clusters instantly.
+            </p>
+            <div className="pt-2 flex flex-col sm:flex-row justify-center md:justify-start gap-4">
+              <button
+                onClick={() => router.push("/dashboard/repositories")}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover transition-all glow-blue cursor-pointer group"
+              >
+                <Rocket size={16} />
+                Get Started
+                <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+              </button>
+            </div>
+          </div>
+
+          <div className="relative z-10 flex-shrink-0 w-48 h-48 md:w-64 md:h-64 flex items-center justify-center bg-card/40 rounded-2xl border border-border/60 shadow-inner overflow-hidden select-none">
+            {/* Mock abstract server/deployment visualizer */}
+            <div className="absolute inset-0 bg-[radial-gradient(#ffffff0a_1px,transparent_1px)] [background-size:16px_16px] opacity-60" />
+            <div className="w-24 h-24 rounded-full border-2 border-dashed border-primary/30 flex items-center justify-center relative animate-[spin_30s_linear_infinite]">
+              <div className="w-16 h-16 rounded-full border border-dashed border-accent/40 flex items-center justify-center">
+                <GitBranch size={20} className="text-foreground-muted" />
+              </div>
+            </div>
+            <div className="absolute bottom-4 left-4 right-4 text-center">
+              <span className="text-[10px] font-mono text-foreground-muted">Awaiting connection...</span>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* AI Assistant Intro + Operations Checklist */}
+        <div className="grid md:grid-cols-3 gap-6">
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="md:col-span-2 glass rounded-2xl p-6 border border-border/40 flex flex-col justify-between"
+          >
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                  <Brain size={20} className="text-accent" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-foreground">Cognitive Orchestrator</h3>
+                  <p className="text-xs text-foreground-muted">ZeroOps Autonomous AI Agent</p>
+                </div>
+              </div>
+              <p className="text-sm text-foreground-muted leading-relaxed">
+                ZeroOps AI continuously inspects cluster states, scales pods based on traffic forecasts, blocks DDoS attempts, and patches Docker runtime vulnerabilities. Once your first container goes live, our Cognitive Orchestrator will activate and populate this dashboard with recommendations.
+              </p>
+            </div>
+            
+            <div className="mt-6 p-4 rounded-xl bg-black/10 border border-border/20 flex items-center justify-between">
+              <div className="flex items-center gap-3 text-xs text-foreground-muted">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
+                </span>
+                Cognitive agent standby: awaiting active deployment manifest
+              </div>
+              <span className="text-[10px] font-mono text-foreground-muted/60">v1.2.0-core</span>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="glass rounded-2xl p-6 border border-border/40"
+          >
+            <h3 className="font-bold text-foreground mb-4">Onboarding Progress</h3>
+            <div className="space-y-4">
+              {[
+                { label: "Connect Git Repository", desc: "Link GitHub branch", done: false, active: true },
+                { label: "Cognitive Code Analysis", desc: "Auto-detect runtimes & ports", done: false, active: false },
+                { label: "Configure Infrastructure", desc: "Define env vars & region limits", done: false, active: false },
+                { label: "Verify Pipeline Health", desc: "AKS liveness/readiness probes", done: false, active: false },
+                { label: "Production Monitoring", desc: "Unlock live logs & analytics", done: false, active: false },
+              ].map((step, i) => (
+                <div key={i} className="flex gap-3 items-start">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border mt-0.5 ${
+                    step.done 
+                      ? "bg-success/20 border-success text-success" 
+                      : step.active 
+                      ? "bg-primary/20 border-primary text-primary animate-pulse" 
+                      : "bg-card border-border text-foreground-muted"
+                  }`}>
+                    {i + 1}
+                  </div>
+                  <div>
+                    <p className={`text-xs font-semibold ${step.active ? "text-foreground" : "text-foreground-muted"}`}>
+                      {step.label}
+                    </p>
+                    <p className="text-[10px] text-foreground-muted">{step.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+
+        {/* Blurred Topology and Placeholder Metrics */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-foreground">Infrastructure Overview</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              { label: "Cluster CPU Load", val: "-- %", desc: "Awaiting pods deployment" },
+              { label: "Active Memory Util", val: "-- MiB", desc: "No containers provisioned" },
+              { label: "Live Traffic Rate", val: "-- req/s", desc: "No ingress mapping" }
+            ].map((p, i) => (
+              <div key={i} className="glass rounded-xl p-5 relative overflow-hidden group">
+                <div className="absolute inset-0 bg-background/40 backdrop-blur-[2px] z-10 flex flex-col items-center justify-center text-center p-4">
+                  <Lock size={16} className="text-foreground-muted/60 mb-1.5" />
+                  <span className="text-[10px] font-mono tracking-widest text-foreground-muted/50 uppercase">Locked</span>
+                </div>
+                <div className="opacity-20 space-y-2 select-none">
+                  <p className="text-xs text-foreground-muted">{p.label}</p>
+                  <p className="text-2xl font-bold text-foreground">{p.val}</p>
+                  <p className="text-[10px] text-foreground-muted">{p.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="glass rounded-2xl p-6 border border-border/40 relative overflow-hidden min-h-[220px] flex items-center justify-center">
+            <div className="absolute inset-0 bg-background/40 backdrop-blur-[3px] z-10 flex flex-col items-center justify-center text-center p-6">
+              <div className="w-12 h-12 rounded-xl bg-card border border-border/60 flex items-center justify-center mb-3">
+                <Lock size={20} className="text-foreground-muted/80" />
+              </div>
+              <h4 className="text-sm font-bold text-foreground">Interactive Topology Map Locked</h4>
+              <p className="text-xs text-foreground-muted max-w-md mt-1">
+                ZeroOps generates active topological node views of your Kubernetes namespaces dynamically. Complete your first deployment to visualize ingress flows and node distributions.
+              </p>
+            </div>
+            
+            {/* Mock abstract canvas bg */}
+            <div className="w-full opacity-10 flex justify-around items-center select-none py-10 font-mono text-[9px] text-foreground-muted">
+              <div>[Node: aks-agentpool-3490-vmss]</div>
+              <div className="h-10 w-px bg-foreground-muted" />
+              <div>[Pod: api-gateway-0a1b-74df]</div>
+              <div className="h-10 w-px bg-foreground-muted" />
+              <div>[Service: web-app-svc]</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [completedIds, setCompletedIds] = useState<string[]>([]);

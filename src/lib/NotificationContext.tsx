@@ -31,6 +31,9 @@ interface NotificationContextProps {
   removeToast: (id: string) => void;
   repositories: Repository[];
   addRepository: (repo: Omit<Repository, "id" | "deploymentStatus" | "stars" | "totalDeployments" | "lastCommit" | "lastCommitMessage" | "lastCommitAuthor">) => void;
+  hasDeployed: boolean;
+  setHasDeployed: (val: boolean) => void;
+  resetOnboarding: () => void;
 }
 
 const NotificationContext = createContext<NotificationContextProps | undefined>(undefined);
@@ -77,10 +80,46 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   ]);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [repositories, setRepositories] = useState<Repository[]>(fallbackRepositories());
+
+  const [hasDeployed, setHasDeployedState] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("zo_has_deployed") === "true";
+    }
+    return false;
+  });
+
+  const [repositories, setRepositories] = useState<Repository[]>(() => {
+    if (typeof window !== "undefined") {
+      const active = localStorage.getItem("zo_has_deployed") === "true";
+      if (!active) return [];
+    }
+    return fallbackRepositories();
+  });
+
+  const setHasDeployed = (val: boolean) => {
+    setHasDeployedState(val);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("zo_has_deployed", val ? "true" : "false");
+      if (val && repositories.length === 0) {
+        setRepositories(fallbackRepositories());
+      }
+    }
+  };
+
+  const resetOnboarding = () => {
+    setHasDeployedState(false);
+    setRepositories([]);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("zo_has_deployed");
+    }
+  };
 
   // Fetch repositories from FastAPI backend on mount
   useEffect(() => {
+    if (!hasDeployed) {
+      setRepositories([]);
+      return;
+    }
     fetch("/api/github/repos")
       .then((res) => {
         if (!res.ok) throw new Error("API response error");
@@ -91,7 +130,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         console.error("Failed to load connected repositories; using demo repositories:", err);
         setRepositories(fallbackRepositories());
       });
-  }, []);
+  }, [hasDeployed]);
 
   // Directly derive the unread count instead of using an effect
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -176,6 +215,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         removeToast,
         repositories,
         addRepository,
+        hasDeployed,
+        setHasDeployed,
+        resetOnboarding,
       }}
     >
       {children}

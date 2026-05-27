@@ -108,14 +108,16 @@ export const deployments: Deployment[] = [
 ];
 
 export const deploymentSteps = [
-  { id: 1, label: "Cloning Repository", status: "completed" as const, duration: "4s" },
-  { id: 2, label: "AI Analysis", status: "completed" as const, duration: "8s" },
-  { id: 3, label: "Docker Image Build", status: "completed" as const, duration: "45s" },
-  { id: 4, label: "K8s Manifest Generation", status: "completed" as const, duration: "3s" },
-  { id: 5, label: "AKS Deployment", status: "active" as const, duration: "..." },
-  { id: 6, label: "Ingress & Firewall", status: "pending" as const, duration: "" },
-  { id: 7, label: "Autoscaling Setup", status: "pending" as const, duration: "" },
-  { id: 8, label: "HTTPS & SSL", status: "pending" as const, duration: "" },
+  { id: 1, label: "Connecting Repository", status: "completed" as const, duration: "2s" },
+  { id: 2, label: "Cloning Source Code", status: "completed" as const, duration: "4s" },
+  { id: 3, label: "AI Code Analysis", status: "completed" as const, duration: "8s" },
+  { id: 4, label: "Installing Dependencies", status: "completed" as const, duration: "18s" },
+  { id: 5, label: "Building Application", status: "completed" as const, duration: "42s" },
+  { id: 6, label: "Generating Infrastructure", status: "completed" as const, duration: "3s" },
+  { id: 7, label: "Provisioning Cloud Resources", status: "completed" as const, duration: "24s" },
+  { id: 8, label: "Deploying Containers", status: "active" as const, duration: "..." },
+  { id: 9, label: "Health Check Verification", status: "pending" as const, duration: "" },
+  { id: 10, label: "Deployment Successful", status: "pending" as const, duration: "" },
 ];
 
 // ============================================

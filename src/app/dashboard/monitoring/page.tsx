@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, Clock, AlertTriangle, Wifi, Cpu, HardDrive } from "lucide-react";
 import { cpuMetrics, memoryMetrics, tracingSpans, logEntries, infraNodes } from "@/lib/mock-data";
 import { AreaChart } from "@/components/ui/AreaChart";
-import { useState } from "react";
+import { useNotifications } from "@/lib/NotificationContext";
+import { LockedView } from "@/components/dashboard/LockedView";
 
 const timeRanges = ["1h", "6h", "24h", "7d", "30d"];
 const topMetrics = [
@@ -17,8 +19,21 @@ const topMetrics = [
 const pods = infraNodes.filter(n => n.type === "pod");
 
 export default function MonitoringPage() {
+  const { hasDeployed } = useNotifications();
   const [timeRange, setTimeRange] = useState("24h");
   const levelColor: Record<string, string> = { INFO: "bg-primary/10 text-primary", WARN: "bg-warning/10 text-warning", ERROR: "bg-danger/10 text-danger", DEBUG: "bg-foreground-muted/10 text-foreground-muted" };
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Monitoring</h1>
+          <p className="text-foreground-muted text-sm mt-1">Real-time observability, tracing, and service health</p>
+        </div>
+        <LockedView featureName="Monitoring & Observability" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

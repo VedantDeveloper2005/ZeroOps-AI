@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useState, useEffect, useRef, Suspense } from "react";
-import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock, Loader2 } from "lucide-react";
+import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock, Loader2, GitBranch, Server, Network, Activity, Cpu } from "lucide-react";
 import { deploymentSteps, deployments, terminalLines, Deployment } from "@/lib/mock-data";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -16,7 +16,7 @@ import {
 } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 
-const stepIcons = [Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock];
+const stepIcons = [GitBranch, Cloud, Brain, Box, Cpu, Network, Server, Box, Activity, Check];
 
 function DeploymentsPageContent() {
   const router = useRouter();
@@ -25,7 +25,7 @@ function DeploymentsPageContent() {
   const repoParam = searchParams.get("repo") || "acme/web-app";
   const projectId = normalizeProjectId(repoParam);
 
-  const { addToast, addNotification } = useNotifications();
+  const { addToast, addNotification, setHasDeployed } = useNotifications();
   const [steps, setSteps] = useState(deploymentSteps);
   const [activeLines, setActiveLines] = useState<Array<{ text: string; type: "command" | "blank" | "info" | "success" | "warning" | "error" }>>([]);
   const [visibleLines, setVisibleLines] = useState(0);
@@ -61,7 +61,17 @@ function DeploymentsPageContent() {
       window.setTimeout(() => {
         setActiveLines((prev) => [...prev, line]);
         setVisibleLines((prev) => prev + 1);
-        const stepIndex = Math.min(Math.floor(index / 4), deploymentSteps.length - 1);
+        
+        let stepIndex = 0;
+        for (let i = index; i >= 0; i--) {
+          const text = fallbackLines[i]?.text || "";
+          const stageMatch = text.match(/\[Stage (\d+)\]/);
+          if (stageMatch) {
+            stepIndex = parseInt(stageMatch[1]) - 1;
+            break;
+          }
+        }
+        
         setSteps((prevSteps) =>
           prevSteps.map((step, i) => {
             if (i < stepIndex) return { ...step, status: "completed", duration: step.duration || "done" };
@@ -75,6 +85,7 @@ function DeploymentsPageContent() {
     window.setTimeout(() => {
       setSteps(deploymentSteps.map((step) => ({ ...step, status: "completed" as const, duration: step.duration || "done" })));
       setIsAnimating(false);
+      setHasDeployed(true);
       const localRecord = createDeploymentRecord(repoParam, deployId || undefined);
       setHistory((prev) => [
         { ...localRecord, status: "running", duration: "1m 15s" } as Deployment,
@@ -87,7 +98,7 @@ function DeploymentsPageContent() {
         type: "success",
       });
     }, 180 * (fallbackLines.length + 2));
-  }, [addNotification, addToast, deployId, projectId, repoParam]);
+  }, [addNotification, addToast, deployId, projectId, repoParam, setHasDeployed]);
 
   useEffect(() => {
     fetchHistory();
@@ -160,6 +171,7 @@ function DeploymentsPageContent() {
           setIsAnimating(false);
           if (data.status === "running") {
             addToast("Deployment successful: your app is live!", "success");
+            setHasDeployed(true);
             addNotification({
               title: "Deployment Successful",
               message: `Successfully deployed application for run ${deployId} to AKS.`,

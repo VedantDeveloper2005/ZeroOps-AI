@@ -5,11 +5,28 @@ import { useState } from "react";
 import { Server, Box, Hexagon, Activity } from "lucide-react";
 import { infraNodes } from "@/lib/mock-data";
 
+import { useNotifications } from "@/lib/NotificationContext";
+import { LockedView } from "@/components/dashboard/LockedView";
+
 const statusColor = (status: string) => {
   switch (status) { case "healthy": return { fill: "#22c55e", stroke: "#22c55e40", glow: "0 0 12px #22c55e40" }; case "warning": return { fill: "#f59e0b", stroke: "#f59e0b40", glow: "0 0 12px #f59e0b40" }; default: return { fill: "#ef4444", stroke: "#ef444440", glow: "0 0 12px #ef444440" }; }
 };
 
 export default function InfrastructurePage() {
+  const { hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Infrastructure Topology</h1>
+          <p className="text-foreground-muted text-sm mt-1">Live Kubernetes cluster visualization</p>
+        </div>
+        <LockedView featureName="Infrastructure Topology" />
+      </div>
+    );
+  }
+
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const hovered = infraNodes.find(n => n.id === hoveredId);

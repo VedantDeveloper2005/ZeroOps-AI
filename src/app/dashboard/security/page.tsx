@@ -7,11 +7,25 @@ import { securityThreats, blockedIPs, complianceItems } from "@/lib/mock-data";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { useNotifications } from "@/lib/NotificationContext";
 import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
+import { LockedView } from "@/components/dashboard/LockedView";
 
 const severityColor: Record<string, string> = { critical: "bg-danger/10 text-danger border-l-danger", high: "bg-warning/10 text-warning border-l-warning", medium: "bg-info/10 text-info border-l-info", low: "bg-foreground-muted/10 text-foreground-muted border-l-foreground-muted" };
 
 export default function SecurityPage() {
-  const { addToast, addNotification } = useNotifications();
+  const { addToast, addNotification, hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Security Command Center</h1>
+          <p className="text-foreground-muted text-sm mt-1">Real-time threat detection and automated security management</p>
+        </div>
+        <LockedView featureName="Security Command Center" />
+      </div>
+    );
+  }
+  
   const [securityData, setSecurityData] = useState({
     securityScore: 94,
     firewallStatus: "Active",

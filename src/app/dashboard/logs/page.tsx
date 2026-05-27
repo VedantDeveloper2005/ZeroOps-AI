@@ -7,6 +7,9 @@ import { logEntries } from "@/lib/mock-data";
 import { DEFAULT_PROJECT_ID, createLiveLogLine } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 
+import { useNotifications } from "@/lib/NotificationContext";
+import { LockedView } from "@/components/dashboard/LockedView";
+
 const levels = ["INFO", "WARN", "ERROR", "DEBUG"] as const;
 const levelColor: Record<string, string> = { 
   INFO: "bg-primary/10 text-primary", 
@@ -48,6 +51,20 @@ const parseLogLine = (line: string, fallbackPod: string) => {
 };
 
 export default function LogsPage() {
+  const { hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Logs</h1>
+          <p className="text-foreground-muted text-sm mt-1">Real-time log stream from all pods</p>
+        </div>
+        <LockedView featureName="Real-Time Logs" />
+      </div>
+    );
+  }
+
   const [search, setSearch] = useState("");
   const [activeLevels, setActiveLevels] = useState<Set<string>>(new Set(levels));
   const [selectedPod, setSelectedPod] = useState("all");

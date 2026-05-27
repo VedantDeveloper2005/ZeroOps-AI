@@ -7,9 +7,23 @@ import { AreaChart } from "@/components/ui/AreaChart";
 import { useCallback, useEffect, useState } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
+import { LockedView } from "@/components/dashboard/LockedView";
 
 export default function AutoscalingPage() {
-  const { addToast, addNotification } = useNotifications();
+  const { addToast, addNotification, hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Autoscaling</h1>
+          <p className="text-foreground-muted text-sm mt-1">AI-powered horizontal pod autoscaling</p>
+        </div>
+        <LockedView featureName="Autoscaling & Replicas" />
+      </div>
+    );
+  }
+
   const [hpa, setHpa] = useState({
     minReplicas: 2,
     maxReplicas: 10,

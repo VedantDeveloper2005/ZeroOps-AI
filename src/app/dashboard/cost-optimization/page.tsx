@@ -5,6 +5,8 @@ import { DollarSign, TrendingDown, AlertTriangle } from "lucide-react";
 import { costRecommendations, idleResources, overprovisionedPods, generateMetricData } from "@/lib/mock-data";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { AreaChart } from "@/components/ui/AreaChart";
+import { useNotifications } from "@/lib/NotificationContext";
+import { LockedView } from "@/components/dashboard/LockedView";
 
 const costTrend = generateMetricData(30, 8, 16, "down");
 const costBreakdown = [
@@ -16,6 +18,20 @@ const costBreakdown = [
 const impactColor: Record<string, string> = { high: "bg-danger/10 text-danger", medium: "bg-warning/10 text-warning", low: "bg-info/10 text-info" };
 
 export default function CostOptimizationPage() {
+  const { hasDeployed } = useNotifications();
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Cost Optimization</h1>
+          <p className="text-foreground-muted text-sm mt-1">AI-powered FinOps and resource efficiency analysis</p>
+        </div>
+        <LockedView featureName="Cost Optimization & FinOps" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div><h1 className="text-2xl font-bold">Cost Optimization</h1><p className="text-foreground-muted text-sm mt-1">AI-powered FinOps and resource efficiency analysis</p></div>

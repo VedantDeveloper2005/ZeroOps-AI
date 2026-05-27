@@ -8,9 +8,21 @@ import {
   LayoutDashboard, GitBranch, Rocket, Brain, DollarSign,
   Shield, Activity, TrendingUp, Network, Terminal,
   AlertTriangle, CreditCard, Settings, ChevronLeft, ChevronRight, LogOut,
+  Lock,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
+import { useNotifications } from "@/lib/NotificationContext";
+
+const lockedRoutes = new Set([
+  "/dashboard/cost-optimization",
+  "/dashboard/security",
+  "/dashboard/monitoring",
+  "/dashboard/autoscaling",
+  "/dashboard/infrastructure",
+  "/dashboard/logs",
+  "/dashboard/incidents"
+]);
 
 
 const navSections = [
@@ -57,6 +69,7 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const { hasDeployed } = useNotifications();
 
   const firstName = user?.firstName || user?.first_name || "";
   const lastName = user?.lastName || user?.last_name || "";
@@ -129,6 +142,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {section.items.map((item) => {
               const active = isActive(item.href);
               const Icon = item.icon;
+              const isLocked = !hasDeployed && lockedRoutes.has(item.href);
               return (
                 <Link
                   key={item.href}
@@ -137,7 +151,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     "flex items-center gap-3 px-3 py-2.5 rounded-lg mb-0.5 transition-all duration-200 group relative",
                     active
                       ? "bg-primary-subtle text-primary"
-                      : "text-foreground-muted hover:text-foreground hover:bg-card"
+                      : "text-foreground-muted hover:text-foreground hover:bg-card",
+                    isLocked && "opacity-60 hover:opacity-85"
                   )}
                 >
                   {active && (
@@ -147,7 +162,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
                     />
                   )}
-                  <Icon size={20} className="flex-shrink-0" />
+                  <Icon size={20} className={cn("flex-shrink-0", isLocked && "text-foreground-muted/70")} />
                   <AnimatePresence>
                     {!collapsed && (
                       <motion.span
@@ -160,6 +175,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       </motion.span>
                     )}
                   </AnimatePresence>
+                  {isLocked && !collapsed && (
+                    <Lock size={12} className="ml-auto text-foreground-muted/40 group-hover:text-foreground-muted/60" />
+                  )}
                 </Link>
               );
             })}

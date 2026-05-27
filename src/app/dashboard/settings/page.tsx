@@ -6,7 +6,7 @@ import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 
 export default function SettingsPage() {
-  const { addToast, addNotification } = useNotifications();
+  const { addToast, addNotification, resetOnboarding } = useNotifications();
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey, setApiKey] = useState("zo_live_84b72fd91c28c83e1a0b5a37f59b6c2d1e");
@@ -166,6 +166,35 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
+          </motion.div>
+
+          {/* Developer Sandbox / Onboarding Reset */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="glass rounded-xl p-6 border border-warning/20"
+          >
+            <h3 className="font-semibold text-lg mb-2 flex items-center gap-2 text-warning">
+              <RefreshCw size={20} className="text-warning animate-[spin_10s_linear_infinite]" />
+              Developer Sandbox Tools
+            </h3>
+            <p className="text-xs text-foreground-muted mb-6">
+              Reset the local state of ZeroOps AI to re-test the initial onboarding wizard, connected repository steps, and the 10-stage deployment pipeline.
+            </p>
+
+            <button
+              onClick={() => {
+                resetOnboarding();
+                addToast("Onboarding state reset successfully! Redirecting...", "success");
+                setTimeout(() => {
+                  window.location.href = "/dashboard";
+                }, 1000);
+              }}
+              className="px-4 py-2.5 bg-warning hover:bg-warning/80 text-black rounded-lg text-xs font-semibold transition cursor-pointer"
+            >
+              Reset Onboarding State
+            </button>
           </motion.div>
         </div>
 
