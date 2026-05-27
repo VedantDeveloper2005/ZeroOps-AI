@@ -24,6 +24,9 @@ jobs:
           node-version: '22.x'
 
       - name: npm install, build, and test
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://zeroops-backend-brdeabbybncchtg5.eastus-01.azurewebsites.net
+          NEXT_PUBLIC_WS_BASE_URL: wss://zeroops-backend-brdeabbybncchtg5.eastus-01.azurewebsites.net
         run: |
           npm install
           npm run build --if-present
