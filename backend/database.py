@@ -8,8 +8,10 @@ from sqlalchemy.pool import QueuePool
 
 try:
     from backend import config
+    from backend.models import Base
 except ImportError:
     import config
+    from models import Base
 
 # Setup logging
 logger = logging.getLogger("zeroops.database")
@@ -21,6 +23,8 @@ database_available = False
 # Ensure connection string uses postgresql+asyncpg for async execution
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 
 # Configure SSL connection arguments for Azure or production PostgreSQL
 connect_args = {}
@@ -88,7 +92,6 @@ async def init_db():
             
         # Run table creation in a transaction (so it commits)
         async with async_engine.begin() as conn:
-            from backend.models import Base
             await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables initialized successfully.")
             database_available = True
@@ -114,7 +117,6 @@ async def init_db():
                 
                 # Retry setup with zeroops engine inside a transaction
                 async with async_engine.begin() as conn:
-                    from backend.models import Base
                     await conn.run_sync(Base.metadata.create_all)
                     logger.info("Database tables initialized successfully after database creation.")
                     database_available = True
