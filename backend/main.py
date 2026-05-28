@@ -5,7 +5,7 @@ import threading
 import logging
 from datetime import datetime
 from typing import Optional, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -945,14 +945,36 @@ async def github_oauth_redirect():
 
 @app.get("/api/auth/github/callback")
 async def github_oauth_callback(
+    request: Request,
     code: str = Query(None),
     state: str = Query(None),
     error: str = Query(None),
     response: Response = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Handle GitHub OAuth callback: exchange code, create/login user, redirect to frontend."""
     frontend_url = config.FRONTEND_URL.rstrip("/")
+
+    # Telemetry debug logging
+    import os
+    request_host = request.url.hostname if request else None
+    logger.info(f"[OAuth Callback Telemetry] Raw config.FRONTEND_URL: {config.FRONTEND_URL}")
+    logger.info(f"[OAuth Callback Telemetry] Request host: {request_host}, scheme: {request.url.scheme if request else None}")
+    logger.info(f"[OAuth Callback Telemetry] APP_ENV: {config.APP_ENV}, WEBSITE_SITE_NAME: {os.getenv('WEBSITE_SITE_NAME')}, WEBSITE_HOSTNAME: {os.getenv('WEBSITE_HOSTNAME')}")
+
+    is_request_local = request_host in ("localhost", "127.0.0.1", "::1") if request_host else False
+
+    # Production Safeguard: Force override of localhost redirects in Azure/production environments
+    if "localhost" in frontend_url or "127.0.0.1" in frontend_url:
+        if (
+            os.getenv("WEBSITE_SITE_NAME") or 
+            os.getenv("WEBSITE_HOSTNAME") or 
+            config.APP_ENV == "production" or
+            not is_request_local
+        ):
+            frontend_url = "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"
+            logger.info(f"[OAuth Callback Telemetry] Safeguard triggered. Forcing frontend_url to production: {frontend_url}")
+        else:
+            logger.info("[OAuth Callback Telemetry] Safeguard bypassed (local environment).")
 
     # Handle errors from GitHub
     if error:
@@ -1074,7 +1096,7 @@ async def github_oauth_callback(
     redirect_url = f"{frontend_url}/auth/github/callback?token={token}"
     redirect_response = RedirectResponse(url=redirect_url, status_code=302)
 
-    is_prod = config.APP_ENV == "production"
+    is_prod = config.APP_ENV == "production" or (request and request.url.scheme == "https")
     redirect_response.set_cookie(
         key="session_token",
         value=token,

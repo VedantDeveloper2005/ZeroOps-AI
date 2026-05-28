@@ -230,7 +230,7 @@ function GitHubCallbackContent() {
                 </button>
                 <button
                   onClick={() => {
-                    window.location.href = "/api/auth/github";
+                    window.location.href = `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/auth/github`;
                   }}
                   className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition cursor-pointer shadow-sm flex items-center gap-1.5"
                 >
