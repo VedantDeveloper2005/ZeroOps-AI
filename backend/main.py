@@ -957,26 +957,26 @@ async def github_oauth_callback(
     # Handle errors from GitHub
     if error:
         logger.warning(f"GitHub OAuth error: {error}")
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error={error}")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error={error}")
 
     # Validate required parameters
     if not code or not state:
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=missing_params")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=missing_params")
 
     # Validate CSRF state
     if not github_oauth.validate_oauth_state(state):
         logger.warning("GitHub OAuth state validation failed (possible CSRF)")
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=invalid_state")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=invalid_state")
 
     # Exchange code for access token
     access_token = await github_oauth.exchange_code_for_token(code)
     if not access_token:
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=token_exchange_failed")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=token_exchange_failed")
 
     # Fetch GitHub user profile
     gh_user = await github_oauth.get_github_user(access_token)
     if not gh_user:
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=github_user_fetch_failed")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=github_user_fetch_failed")
 
     github_id = str(gh_user.get("id", ""))
     github_username = gh_user.get("login", "")
@@ -988,7 +988,7 @@ async def github_oauth_callback(
     if not email:
         email = await github_oauth.get_github_user_email(access_token)
     if not email:
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=no_email")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=no_email")
 
     email = email.strip().lower()
 
@@ -1065,13 +1065,13 @@ async def github_oauth_callback(
     except Exception as e:
         await db.rollback()
         logger.error(f"GitHub OAuth database error: {e}")
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?error=server_error")
+        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=server_error")
 
     # Generate JWT session token
     token = auth.create_access_token(data={"sub": str(user.id)})
 
     # Create redirect response with session cookie
-    redirect_url = f"{frontend_url}/auth/callback?token={token}"
+    redirect_url = f"{frontend_url}/auth/github/callback?token={token}"
     redirect_response = RedirectResponse(url=redirect_url, status_code=302)
 
     is_prod = config.APP_ENV == "production"

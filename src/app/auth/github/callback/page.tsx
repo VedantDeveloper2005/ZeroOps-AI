@@ -4,7 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { Circle, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { Circle, CheckCircle, XCircle, Loader2, RefreshCw } from "lucide-react";
+import { api } from "@/lib/api";
 
 export default function GitHubCallbackPage() {
   return (
@@ -13,7 +14,7 @@ export default function GitHubCallbackPage() {
         <main className="min-h-screen bg-background flex items-center justify-center p-4">
           <div className="text-center space-y-4">
             <Loader2 size={32} className="animate-spin text-primary mx-auto" />
-            <p className="text-sm text-foreground-muted">Connecting to GitHub...</p>
+            <p className="text-sm text-foreground-muted">Initializing callback handler...</p>
           </div>
         </main>
       }
@@ -26,11 +27,13 @@ export default function GitHubCallbackPage() {
 function GitHubCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { refreshUser, user } = useAuth();
+  const { refreshUser } = useAuth();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState("");
+  const [step, setStep] = useState(1);
 
   useEffect(() => {
+    const token = searchParams.get("token");
     const success = searchParams.get("success");
     const error = searchParams.get("error");
 
@@ -42,122 +45,160 @@ function GitHubCallbackContent() {
         token_exchange_failed: "Failed to authenticate with GitHub. Please try again.",
         github_user_fetch_failed: "Could not retrieve your GitHub profile.",
         no_email: "No verified email found on your GitHub account. Please add a verified email to GitHub and try again.",
-        server_error: "An internal error occurred. Please try again.",
+        server_error: "An internal database error occurred. Please try again.",
       };
       setErrorMessage(messages[error] || `GitHub authentication failed: ${error}`);
       return;
     }
 
-    if (success === "true") {
-      setStatus("success");
-      // Refresh user session then navigate
-      refreshUser().then(() => {
-        // Small delay for the success animation
+    const processSession = async (sessionToken: string | null) => {
+      try {
+        if (sessionToken) {
+          // 1. Store JWT securely
+          localStorage.setItem("session_token", sessionToken);
+          
+          // Write client-side session cookie to propagate automatically in requests
+          const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+          document.cookie = `session_token=${sessionToken}; path=/; max-age=2592000; SameSite=Lax${isLocal ? "" : "; Secure"}`;
+        }
+
+        // 2. Connecting GitHub Account - Fetch user profile
+        await refreshUser();
+        setStep(2); // Move to loading repositories
+
+        // 3. Load repositories automatically
+        try {
+          await api.getGitHubRepos({ page: 1, per_page: 10 });
+        } catch (err) {
+          console.error("Repository pre-load failed or fetch error:", err);
+          // Proceed anyway to repository page if authentication is valid
+        }
+
+        setStep(3); // Successfully loaded
+        setStatus("success");
+        
         setTimeout(() => {
-          // Check if user has deployed
-          fetch("/api/dashboard/stats", { credentials: "include" })
-            .then((res) => (res.ok ? res.json() : { has_deployed: false }))
-            .then((stats) => {
-              if (stats.has_deployed) {
-                router.push("/dashboard");
-              } else {
-                router.push("/dashboard/repositories");
-              }
-            })
-            .catch(() => router.push("/dashboard/repositories"));
-        }, 1500);
-      });
+          router.push("/dashboard/repositories");
+        }, 1200);
+
+      } catch (e: any) {
+        setStatus("error");
+        setErrorMessage(e.message || "An error occurred while setting up your session.");
+      }
+    };
+
+    if (token) {
+      processSession(token);
+    } else if (success === "true") {
+      // Fallback: cookie was set directly by backend RedirectResponse redirect cookies
+      processSession(null);
     } else {
-      // No success and no error — shouldn't happen normally
       setStatus("error");
-      setErrorMessage("Invalid callback. Please try logging in again.");
+      setErrorMessage("Invalid callback parameters received from server.");
     }
-  }, [searchParams]);
+  }, [searchParams, router, refreshUser]);
 
   return (
     <main className="min-h-screen bg-background flex items-center justify-center p-4">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5, ease: "easeOut" }}
-        className="w-full max-w-md text-center space-y-8"
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="w-full max-w-sm text-center space-y-8"
       >
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-2.5">
-          <Circle className="fill-primary text-primary w-7 h-7" />
-          <span className="text-xl font-semibold tracking-tight text-foreground">
-            ZeroOps
+        {/* Brand Logo */}
+        <div className="flex items-center justify-center gap-2">
+          <Circle className="fill-primary text-primary w-6 h-6" />
+          <span className="text-lg font-bold tracking-tight text-foreground">
+            ZeroOps AI
           </span>
         </div>
 
         {/* Status Card */}
-        <div className="glass rounded-2xl border border-border/40 p-8 shadow-2xl space-y-6">
+        <div className="bg-card border border-border rounded-xl p-8 shadow-sm space-y-6">
           {status === "loading" && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="space-y-4"
+              className="space-y-6"
             >
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center glow-blue">
-                <Loader2 size={28} className="text-white animate-spin" />
+              <div className="w-12 h-12 mx-auto rounded-lg bg-primary/10 flex items-center justify-center">
+                <Loader2 size={24} className="text-primary animate-spin" />
               </div>
-              <h2 className="text-xl font-bold text-foreground">
-                Connecting GitHub
-              </h2>
-              <p className="text-sm text-foreground-muted">
-                Securing your session and syncing repositories...
-              </p>
+              <div>
+                <h2 className="text-sm font-bold text-foreground">
+                  {step === 1 ? "Connecting GitHub Account" : "Loading GitHub Repositories"}
+                </h2>
+                <p className="text-xs text-foreground-muted mt-1">
+                  {step === 1 
+                    ? "Securing your authentication session..." 
+                    : "Fetching and syncing your repository catalog..."}
+                </p>
+              </div>
 
-              {/* Animated progress dots */}
-              <div className="flex items-center justify-center gap-1.5 pt-2">
-                {[0, 1, 2].map((i) => (
-                  <motion.div
-                    key={i}
-                    className="w-2 h-2 rounded-full bg-primary"
-                    animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }}
-                    transition={{
-                      duration: 1.2,
-                      repeat: Infinity,
-                      delay: i * 0.2,
-                    }}
-                  />
-                ))}
+              {/* Progress Steps (macOS style checklist) */}
+              <div className="text-left space-y-3 pt-2 border-t border-border/60">
+                <div className="flex items-center gap-3 text-xs">
+                  {step > 1 ? (
+                    <CheckCircle size={14} className="text-success" />
+                  ) : (
+                    <Loader2 size={14} className="text-primary animate-spin" />
+                  )}
+                  <span className={`font-semibold ${step >= 1 ? "text-foreground" : "text-foreground-muted"}`}>
+                    Connecting GitHub Account
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  {step > 2 ? (
+                    <CheckCircle size={14} className="text-success" />
+                  ) : step === 2 ? (
+                    <Loader2 size={14} className="text-primary animate-spin" />
+                  ) : (
+                    <Circle size={14} className="text-border" />
+                  )}
+                  <span className={`font-semibold ${step >= 2 ? "text-foreground" : "text-foreground-muted"}`}>
+                    Loading repositories
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  {step > 3 ? (
+                    <CheckCircle size={14} className="text-success" />
+                  ) : (
+                    <Circle size={14} className="text-border" />
+                  )}
+                  <span className={`font-semibold ${step >= 3 ? "text-foreground" : "text-foreground-muted"}`}>
+                    Entering workspace
+                  </span>
+                </div>
               </div>
             </motion.div>
           )}
 
           {status === "success" && (
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
               className="space-y-4"
             >
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.1 }}
-                className="w-16 h-16 mx-auto rounded-2xl bg-success/10 border border-success/30 flex items-center justify-center"
-              >
-                <CheckCircle size={32} className="text-success" />
-              </motion.div>
-              <h2 className="text-xl font-bold text-foreground">
-                GitHub Connected
-              </h2>
-              <p className="text-sm text-foreground-muted">
-                {user?.github_username
-                  ? `Authenticated as @${user.github_username}`
-                  : "Authentication successful"}
-                . Redirecting to your workspace...
-              </p>
+              <div className="w-12 h-12 mx-auto rounded-lg bg-success/10 border border-success/30 flex items-center justify-center">
+                <CheckCircle size={24} className="text-success" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-foreground">
+                  Session Established
+                </h2>
+                <p className="text-xs text-foreground-muted mt-1">
+                  GitHub connected successfully. Redirecting you...
+                </p>
+              </div>
 
-              {/* Redirect progress bar */}
-              <div className="w-full h-1 bg-border/40 rounded-full overflow-hidden">
+              {/* Progress Indicator */}
+              <div className="w-full h-1 bg-background-secondary border border-border/40 rounded-full overflow-hidden mt-4">
                 <motion.div
                   className="h-full bg-success rounded-full"
                   initial={{ width: "0%" }}
                   animate={{ width: "100%" }}
-                  transition={{ duration: 1.5, ease: "easeInOut" }}
+                  transition={{ duration: 1.2, ease: "easeInOut" }}
                 />
               </div>
             </motion.div>
@@ -165,24 +206,25 @@ function GitHubCallbackContent() {
 
           {status === "error" && (
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
               className="space-y-4"
             >
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-danger/10 border border-danger/30 flex items-center justify-center">
-                <XCircle size={32} className="text-danger" />
+              <div className="w-12 h-12 mx-auto rounded-lg bg-danger/10 border border-danger/30 flex items-center justify-center">
+                <XCircle size={24} className="text-danger" />
               </div>
-              <h2 className="text-xl font-bold text-foreground">
-                Authentication Failed
-              </h2>
-              <p className="text-sm text-foreground-muted">
-                {errorMessage}
-              </p>
-              <div className="flex gap-3 justify-center pt-2">
+              <div>
+                <h2 className="text-sm font-bold text-foreground">
+                  Authentication Failed
+                </h2>
+                <p className="text-xs text-foreground-muted mt-1.5 leading-relaxed font-semibold">
+                  {errorMessage}
+                </p>
+              </div>
+              <div className="flex gap-3 justify-center pt-3">
                 <button
                   onClick={() => router.push("/login")}
-                  className="px-5 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-card-hover transition cursor-pointer"
+                  className="px-4 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-background-secondary transition cursor-pointer"
                 >
                   Back to Login
                 </button>
@@ -190,8 +232,9 @@ function GitHubCallbackContent() {
                   onClick={() => {
                     window.location.href = "/api/auth/github";
                   }}
-                  className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold transition glow-blue cursor-pointer"
+                  className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition cursor-pointer shadow-sm flex items-center gap-1.5"
                 >
+                  <RefreshCw size={12} />
                   Try Again
                 </button>
               </div>
@@ -199,9 +242,9 @@ function GitHubCallbackContent() {
           )}
         </div>
 
-        {/* Security note */}
-        <p className="text-xs text-foreground-muted/50 max-w-xs mx-auto">
-          Your GitHub credentials are encrypted and stored securely. ZeroOps never exposes your access token.
+        {/* Security Info Footer */}
+        <p className="text-[10px] text-foreground-muted/60 max-w-xs mx-auto font-semibold">
+          Your credentials are encrypted and stored securely. ZeroOps never exposes raw GitHub tokens.
         </p>
       </motion.div>
     </main>
