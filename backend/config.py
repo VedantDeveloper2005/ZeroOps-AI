@@ -32,7 +32,7 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_OAUTH_SCOPES = os.getenv("GITHUB_OAUTH_SCOPES", "repo,read:user,user:email")
 
 # Frontend URL for OAuth redirect (after callback, redirect user here)
-FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "http://localhost:3000"))
+FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"))
 
 # Workspace folder for temporary checkouts
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
