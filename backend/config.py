@@ -10,14 +10,37 @@ PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"))
 ZEROOPS_BACKEND_URL = os.getenv("ZEROOPS_BACKEND_URL", "")
 
-def parse_csv_env(name: str, default: str = "") -> list[str]:
-    raw = os.getenv(name, default)
-    return [item.strip() for item in raw.split(",") if item.strip()]
+DEFAULT_ALLOWED_ORIGINS = [
+    "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
 
-CORS_ORIGINS = parse_csv_env("CORS_ORIGINS", FRONTEND_ORIGIN or "*")
-ALLOW_CREDENTIALS = "*" not in CORS_ORIGINS
+def parse_csv_env(name: str, default_origins: list[str]) -> list[str]:
+    raw = os.getenv(name, "")
+    if not raw:
+        return default_origins.copy()
+    parsed = [item.strip() for item in raw.split(",") if item.strip()]
+    if "*" in parsed:
+        parsed = [p for p in parsed if p != "*"]
+        for origin in default_origins:
+            if origin not in parsed:
+                parsed.append(origin)
+    return parsed
+
+CORS_ORIGINS = parse_csv_env("CORS_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
+
+# Inject FRONTEND_ORIGIN and FRONTEND_URL if they are not already in CORS_ORIGINS
+for url in [FRONTEND_ORIGIN, FRONTEND_URL]:
+    if url:
+        clean_url = url.rstrip("/")
+        if clean_url not in CORS_ORIGINS:
+            CORS_ORIGINS.append(clean_url)
+
+ALLOW_CREDENTIALS = True
 
 # OpenAI API config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -30,9 +53,6 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_OAUTH_SCOPES = os.getenv("GITHUB_OAUTH_SCOPES", "repo,read:user,user:email")
-
-# Frontend URL for OAuth redirect (after callback, redirect user here)
-FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"))
 
 # Workspace folder for temporary checkouts
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
