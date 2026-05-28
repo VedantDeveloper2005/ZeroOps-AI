@@ -1,9 +1,10 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
+import { api } from "@/lib/api";
 
 export default function SettingsPage() {
   const { addToast, addNotification, resetOnboarding } = useNotifications();
@@ -20,28 +21,68 @@ export default function SettingsPage() {
     emailAlerts: true,
   });
 
-  const handleToggle = (key: keyof typeof settings) => {
-    setSettings(prev => {
-      const nextValue = !prev[key];
-      const names: Record<string, string> = {
-        predictiveScaling: "Predictive Autoscaling",
-        autoRollback: "Instant Deployment Rollback",
-        aiThreatMitigation: "Automatic Threat Block",
-        autoOOMRestart: "Self-Healing Pod Restarts",
-        slackNotifications: "Slack Alerts Integration",
-        emailAlerts: "Critical Incident Emails",
-      };
-      const title = names[key] || key;
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const data = await api.getSettings();
+        setSettings({
+          predictiveScaling: data.predictive_scaling,
+          autoRollback: data.auto_rollback,
+          aiThreatMitigation: data.ai_threat_mitigation,
+          autoOOMRestart: data.auto_oom_restart,
+          slackNotifications: data.slack_notifications,
+          emailAlerts: data.email_alerts,
+        });
+      } catch (err) {
+        console.error("Failed to load settings", err);
+      }
+    }
+    loadSettings();
+  }, []);
+
+  const handleToggle = async (key: keyof typeof settings) => {
+    const nextValue = !settings[key];
+    const names: Record<string, string> = {
+      predictiveScaling: "Predictive Autoscaling",
+      autoRollback: "Instant Deployment Rollback",
+      aiThreatMitigation: "Automatic Threat Block",
+      autoOOMRestart: "Self-Healing Pod Restarts",
+      slackNotifications: "Slack Alerts Integration",
+      emailAlerts: "Critical Incident Emails",
+    };
+    const title = names[key] || key;
+
+    // Optimistically update UI
+    setSettings(prev => ({ ...prev, [key]: nextValue }));
+
+    try {
+      const snakeKey = {
+        predictiveScaling: "predictive_scaling",
+        autoRollback: "auto_rollback",
+        aiThreatMitigation: "ai_threat_mitigation",
+        autoOOMRestart: "auto_oom_restart",
+        slackNotifications: "slack_notifications",
+        emailAlerts: "email_alerts",
+      }[key];
+
+      await api.updateSettings({
+        [snakeKey]: nextValue
+      });
+
       addToast(`${title} has been ${nextValue ? "enabled" : "disabled"}.`, nextValue ? "success" : "warning");
       
       addNotification({
         title: "Settings Updated",
         message: `${title} is now ${nextValue ? "active" : "inactive"}.`,
-        type: nextValue ? "info" : "warning"
+        type: nextValue ? "info" : "warning",
+        category: "system",
+        action_url: null
       });
-
-      return { ...prev, [key]: nextValue };
-    });
+    } catch (err) {
+      // Revert on error
+      setSettings(prev => ({ ...prev, [key]: !nextValue }));
+      addToast(`Failed to update ${title}`, "error");
+    }
   };
 
   const copyApiKey = () => {
@@ -63,7 +104,9 @@ export default function SettingsPage() {
     addNotification({
       title: "Security Token Rotated",
       message: "A new CLI access token has been generated. Old tokens are now revoked.",
-      type: "warning"
+      type: "warning",
+      category: "security",
+      action_url: null
     });
   };
 

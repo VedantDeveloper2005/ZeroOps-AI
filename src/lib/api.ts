@@ -1,0 +1,358 @@
+// ============================================
+// ZeroOps AI — Centralized API Client
+// All data fetched from FastAPI backend (per-user, database-backed)
+// ============================================
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const url = `${API_BASE_URL}${path}`;
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body.detail || `Request failed: ${res.status}`);
+  }
+
+  // Handle 204 No Content
+  if (res.status === 204) return {} as T;
+  return res.json();
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+}
+
+// ──────────────────────────────────────────────
+// TYPES
+// ──────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  full_name: string;
+  repo_url: string | null;
+  framework: string;
+  language: string;
+  branch: string;
+  region: string;
+  status: string;
+  last_deployed_at: string | null;
+  created_at: string | null;
+  deployment_count: number;
+  latest_deployment_status: string | null;
+}
+
+export interface Deployment {
+  id: string;
+  project_id: string;
+  project_name: string | null;
+  status: "queued" | "building" | "deploying" | "running" | "failed" | "stopped" | "rolled_back";
+  environment: "production" | "staging" | "development";
+  branch: string;
+  version: string | null;
+  commit_sha: string | null;
+  image: string | null;
+  duration_seconds: number | null;
+  duration: string | null;
+  live_url: string | null;
+  deployed_by: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface DeploymentLog {
+  line_number: number;
+  level: "INFO" | "WARN" | "ERROR" | "DEBUG";
+  message: string;
+  timestamp: string | null;
+}
+
+export interface DeploymentDetail extends Deployment {
+  logs: DeploymentLog[];
+}
+
+export interface Notification {
+  id: string;
+  title: string;
+  message: string;
+  type: "info" | "success" | "warning" | "critical";
+  category: string;
+  read: boolean;
+  action_url: string | null;
+  created_at: string | null;
+}
+
+export interface AIAction {
+  id: string;
+  project_id: string | null;
+  type: "scaling" | "security" | "deployment" | "optimization" | "healing" | "monitoring";
+  severity: "info" | "warning" | "success" | "critical";
+  message: string;
+  recommendation: string | null;
+  status: "pending" | "applied" | "dismissed";
+  icon: string;
+  created_at: string | null;
+}
+
+export interface AIAnalysis {
+  id: string;
+  project_id: string;
+  framework: string | null;
+  framework_version: string | null;
+  language: string | null;
+  risk_score: number;
+  confidence: number;
+  cpu_recommendation: string | null;
+  memory_recommendation: string | null;
+  storage_recommendation: string | null;
+  port: string | null;
+  dependencies: string[];
+  vulnerabilities: string[];
+  dockerfile: string | null;
+  kubernetes_manifest: string | null;
+  created_at: string | null;
+}
+
+export interface DashboardStats {
+  total_projects: number;
+  total_deployments: number;
+  active_deployments: number;
+  failed_deployments: number;
+  security_score: number;
+  pending_ai_actions: number;
+  unread_notifications: number;
+  has_deployed: boolean;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_url: string | null;
+  plan: string;
+  provider: string;
+  created_at: string | null;
+  total_projects: number;
+  total_deployments: number;
+  active_deployments: number;
+}
+
+export interface UserSettings {
+  predictive_scaling: boolean;
+  auto_rollback: boolean;
+  ai_threat_mitigation: boolean;
+  auto_oom_restart: boolean;
+  slack_notifications: boolean;
+  email_alerts: boolean;
+  theme: string;
+}
+
+export interface GitHubRepoItem {
+  id: number;
+  name: string;
+  full_name: string;
+  description: string | null;
+  private: boolean;
+  language: string | null;
+  stargazers_count: number;
+  default_branch: string;
+  updated_at: string;
+  html_url: string;
+  owner_avatar_url: string | null;
+}
+
+export interface GitHubReposResponse {
+  repos: GitHubRepoItem[];
+  total_count: number;
+  page: number;
+  per_page: number;
+  has_next: boolean;
+}
+
+export interface GitHubStatus {
+  connected: boolean;
+  username: string | null;
+  avatar_url: string | null;
+}
+
+// Keep old interface as alias for backward compatibility
+export type GitHubRepo = GitHubRepoItem;
+
+// ──────────────────────────────────────────────
+// API CLIENT
+// ──────────────────────────────────────────────
+
+export const api = {
+  // ── Projects ──
+  getProjects: () => request<Project[]>("/api/projects"),
+
+  createProject: (data: {
+    name: string;
+    full_name: string;
+    repo_url?: string;
+    framework?: string;
+    language?: string;
+    branch?: string;
+    region?: string;
+  }) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify(data) }),
+
+  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+
+  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+
+  // ── Deployments ──
+  getDeployments: (limit = 20) => request<Deployment[]>(`/api/deployments?limit=${limit}`),
+
+  startDeployment: (data: {
+    project_id: string;
+    branch?: string;
+    environment?: string;
+  }) => request<{ status: string; deployment_id: string; project_id: string }>(
+    "/api/deployments/deploy",
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+
+  getDeployment: (id: string) => request<DeploymentDetail>(`/api/deployments/${id}`),
+
+  // ── Notifications ──
+  getNotifications: (category?: string, limit = 50) => {
+    const params = new URLSearchParams();
+    if (category) params.set("category", category);
+    params.set("limit", String(limit));
+    return request<Notification[]>(`/api/notifications?${params}`);
+  },
+
+  markNotificationRead: (id: string) =>
+    request<void>(`/api/notifications/${id}/read`, { method: "POST" }),
+
+  markAllNotificationsRead: () =>
+    request<void>("/api/notifications/read-all", { method: "POST" }),
+
+  // ── AI Actions ──
+  getAIActions: (opts?: { status?: string; type?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.type) params.set("type", opts.type);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    return request<AIAction[]>(`/api/ai/actions?${params}`);
+  },
+
+  applyAIAction: (id: string) =>
+    request<void>(`/api/ai/actions/${id}/apply`, { method: "POST" }),
+
+  dismissAIAction: (id: string) =>
+    request<void>(`/api/ai/actions/${id}/dismiss`, { method: "POST" }),
+
+  // ── AI Analysis ──
+  getAIAnalysis: (projectId: string) =>
+    request<AIAnalysis>(`/api/ai/analysis/${projectId}`),
+
+  analyzeRepo: (repo: string, branch: string) =>
+    request<Record<string, unknown>>("/api/ai/analyze", {
+      method: "POST",
+      body: JSON.stringify({ repo, branch }),
+    }),
+
+  // ── Dashboard ──
+  getDashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),
+
+  // ── User Profile ──
+  getProfile: () => request<UserProfile>("/api/user/profile"),
+
+  updateProfile: (data: { first_name?: string; last_name?: string; avatar_url?: string }) =>
+    request<UserProfile>("/api/user/profile", { method: "PUT", body: JSON.stringify(data) }),
+
+  // ── User Settings ──
+  getSettings: () => request<UserSettings>("/api/user/settings"),
+
+  updateSettings: (data: Partial<UserSettings>) =>
+    request<UserSettings>("/api/user/settings", { method: "PUT", body: JSON.stringify(data) }),
+
+  resetOnboarding: () =>
+    request<{ status: string; message: string }>("/api/user/reset", { method: "POST" }),
+
+  // ── GitHub OAuth ──
+  getGitHubStatus: () => request<GitHubStatus>("/api/github/status"),
+
+  getGitHubRepos: (opts?: {
+    page?: number;
+    per_page?: number;
+    sort?: string;
+    q?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.page) params.set("page", String(opts.page));
+    if (opts?.per_page) params.set("per_page", String(opts.per_page));
+    if (opts?.sort) params.set("sort", opts.sort);
+    if (opts?.q) params.set("q", opts.q);
+    return request<GitHubReposResponse>(`/api/github/repos?${params}`);
+  },
+
+  getRepoBranches: (repo: string) =>
+    request<{ branches: string[] }>(`/api/github/branches?repo=${encodeURIComponent(repo)}`),
+
+  disconnectGitHub: () =>
+    request<void>("/api/github/disconnect", { method: "POST" }),
+
+  getRepoMetadata: (repo: string) =>
+    request<{ branches: string[] }>(`/api/github/repo-metadata?repo=${encodeURIComponent(repo)}`),
+
+  // ── Health ──
+  getHealth: () => request<{
+    status: string;
+    service: string;
+    environment: string;
+    dockerAvailable: boolean;
+    kubernetesAvailable: boolean;
+    openAIConfigured: boolean;
+  }>("/api/health"),
+
+  // ── Monitoring ──
+  getMetrics: (projectId?: string) => {
+    const params = projectId ? `?project_id=${projectId}` : "";
+    return request<Record<string, unknown>>(`/api/monitoring/metrics${params}`);
+  },
+
+  // ── Secrets ──
+  addSecret: (projectId: string, key: string, value: string) =>
+    request<void>("/api/secrets", {
+      method: "POST",
+      body: JSON.stringify({ projectId, key, value }),
+    }),
+
+  getSecrets: (projectId: string) =>
+    request<{ key: string; value: string }[]>(`/api/secrets/${projectId}`),
+
+  deleteSecret: (projectId: string, key: string) =>
+    request<void>(`/api/secrets/${projectId}/${key}`, { method: "DELETE" }),
+
+  // ── Security ──
+  getSecurityStatus: (projectId: string) =>
+    request<Record<string, unknown>>(`/api/security/status/${projectId}`),
+
+  // ── Autoscaling ──
+  getAutoscalingStatus: (projectId: string) =>
+    request<Record<string, unknown>>(`/api/autoscaling/${projectId}`),
+
+  configureAutoscaling: (data: {
+    projectId: string;
+    minReplicas: number;
+    maxReplicas: number;
+    cpuTarget: number;
+  }) =>
+    request<void>("/api/autoscaling/configure", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};

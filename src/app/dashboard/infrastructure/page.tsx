@@ -3,7 +3,40 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { Server, Box, Hexagon, Activity } from "lucide-react";
-import { infraNodes } from "@/lib/mock-data";
+interface InfraNode {
+  id: string;
+  name: string;
+  type: "cluster" | "node" | "pod" | "service" | "deployment";
+  status: "healthy" | "warning" | "critical";
+  cpu: number;
+  memory: number;
+  connections: string[];
+  x: number;
+  y: number;
+}
+
+const infraNodes: InfraNode[] = [
+  { id: "cluster-1", name: "aks-prod-eastus", type: "cluster", status: "healthy", cpu: 67, memory: 72, connections: ["node-1", "node-2", "node-3"], x: 400, y: 80 },
+  { id: "node-1", name: "aks-nodepool1-vm0", type: "node", status: "healthy", cpu: 78, memory: 65, connections: ["pod-1", "pod-2", "pod-3", "pod-4"], x: 200, y: 220 },
+  { id: "node-2", name: "aks-nodepool1-vm1", type: "node", status: "healthy", cpu: 54, memory: 71, connections: ["pod-5", "pod-6", "pod-7"], x: 400, y: 220 },
+  { id: "node-3", name: "aks-nodepool1-vm2", type: "node", status: "warning", cpu: 91, memory: 88, connections: ["pod-8", "pod-9", "pod-10"], x: 600, y: 220 },
+  { id: "pod-1", name: "web-app-7d4f", type: "pod", status: "healthy", cpu: 34, memory: 45, connections: ["svc-web"], x: 100, y: 380 },
+  { id: "pod-2", name: "web-app-8e5g", type: "pod", status: "healthy", cpu: 28, memory: 41, connections: ["svc-web"], x: 180, y: 380 },
+  { id: "pod-3", name: "api-gateway-a1b2", type: "pod", status: "healthy", cpu: 67, memory: 58, connections: ["svc-api"], x: 260, y: 380 },
+  { id: "pod-4", name: "api-gateway-c3d4", type: "pod", status: "healthy", cpu: 72, memory: 62, connections: ["svc-api"], x: 340, y: 380 },
+  { id: "pod-5", name: "auth-service-e5f6", type: "pod", status: "healthy", cpu: 45, memory: 52, connections: ["svc-auth"], x: 420, y: 380 },
+  { id: "pod-6", name: "payments-g7h8", type: "pod", status: "warning", cpu: 89, memory: 84, connections: ["svc-pay"], x: 500, y: 380 },
+  { id: "pod-7", name: "payments-i9j0", type: "pod", status: "healthy", cpu: 56, memory: 48, connections: ["svc-pay"], x: 580, y: 380 },
+  { id: "pod-8", name: "ml-pipeline-k1l2", type: "pod", status: "healthy", cpu: 92, memory: 76, connections: ["svc-ml"], x: 660, y: 380 },
+  { id: "pod-9", name: "notif-svc-m3n4", type: "pod", status: "critical", cpu: 12, memory: 95, connections: ["svc-notif"], x: 740, y: 380 },
+  { id: "pod-10", name: "cache-redis-o5p6", type: "pod", status: "healthy", cpu: 22, memory: 38, connections: [], x: 820, y: 380 },
+  { id: "svc-web", name: "web-app-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: ["svc-api"], x: 140, y: 500 },
+  { id: "svc-api", name: "api-gateway-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: ["svc-auth", "svc-pay", "svc-ml", "svc-notif"], x: 300, y: 500 },
+  { id: "svc-auth", name: "auth-service-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: [], x: 460, y: 500 },
+  { id: "svc-pay", name: "payments-svc", type: "service", status: "warning", cpu: 0, memory: 0, connections: [], x: 540, y: 500 },
+  { id: "svc-ml", name: "ml-pipeline-svc", type: "service", status: "healthy", cpu: 0, memory: 0, connections: [], x: 660, y: 500 },
+  { id: "svc-notif", name: "notification-svc", type: "service", status: "critical", cpu: 0, memory: 0, connections: [], x: 740, y: 500 },
+];
 
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";

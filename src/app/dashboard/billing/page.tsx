@@ -1,7 +1,9 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CreditCard, Check, Download, TrendingUp } from "lucide-react";
+import { CreditCard, Check, Download, TrendingUp, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { api, type UserProfile } from "@/lib/api";
 
 const billingHistory = [
   { id: "inv-001", date: "May 15, 2026", amount: "$99.00", status: "paid", plan: "Pro Plan (Monthly)" },
@@ -9,14 +11,53 @@ const billingHistory = [
   { id: "inv-003", date: "Mar 15, 2026", amount: "$99.00", status: "paid", plan: "Pro Plan (Monthly)" },
 ];
 
-const usageStats = [
-  { name: "AKS CPU Hours", used: "4,250", limit: "10,000", unit: "hrs", percent: 42.5, color: "bg-primary" },
-  { name: "Bandwidth Egress", used: "324.5", limit: "500", unit: "GB", percent: 64.9, color: "bg-accent" },
-  { name: "Container Deployments", used: "78", limit: "200", unit: "builds", percent: 39, color: "bg-success" },
-  { name: "AI Autopilot Actions", used: "2,450", limit: "5,000", unit: "actions", percent: 49, color: "bg-info" },
-];
-
 export default function BillingPage() {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadProfile() {
+      try {
+        const data = await api.getProfile();
+        setProfile(data);
+      } catch (err) {
+        console.error("Failed to load profile for billing:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadProfile();
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="animate-spin text-primary" size={24} />
+      </div>
+    );
+  }
+
+  const fullName = profile?.first_name 
+    ? `${profile.first_name} ${profile.last_name || ""}`.trim()
+    : "Vedant S.";
+
+  const planName = profile?.plan 
+    ? profile.plan.charAt(0).toUpperCase() + profile.plan.slice(1) + " Plan"
+    : "Starter Plan";
+
+  const isPro = profile?.plan === "pro";
+  const planPrice = isPro ? 99 : 29;
+  const maxDeploymentsLimit = isPro ? 200 : 5;
+  const totalDeployments = profile?.total_deployments ?? 0;
+  const deploymentsPercent = Math.min(100, Math.round((totalDeployments / maxDeploymentsLimit) * 100));
+
+  const usageStats = [
+    { name: "AKS CPU Hours", used: isPro ? "4,250" : "120", limit: isPro ? "10,000" : "500", unit: "hrs", percent: isPro ? 42.5 : 24, color: "bg-primary" },
+    { name: "Bandwidth Egress", used: isPro ? "324.5" : "15.2", limit: isPro ? "500" : "50", unit: "GB", percent: isPro ? 64.9 : 30.4, color: "bg-accent" },
+    { name: "Container Deployments", used: String(totalDeployments), limit: String(maxDeploymentsLimit), unit: "builds", percent: deploymentsPercent, color: "bg-success" },
+    { name: "AI Autopilot Actions", used: isPro ? "2,450" : "0", limit: isPro ? "5,000" : "100", unit: "actions", percent: isPro ? 49 : 0, color: "bg-info" },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
@@ -42,11 +83,11 @@ export default function BillingPage() {
                 <span className="text-xs px-2.5 py-1 rounded-full bg-primary-subtle text-primary font-medium tracking-wide">
                   CURRENT SUBSCRIPTION
                 </span>
-                <h3 className="text-3xl font-extrabold text-foreground mt-3">Pro Plan</h3>
+                <h3 className="text-3xl font-extrabold text-foreground mt-3">{planName}</h3>
                 <p className="text-foreground-muted text-sm mt-1">For production clusters and growing engineering teams.</p>
               </div>
               <div className="text-left sm:text-right">
-                <p className="text-3xl font-extrabold text-foreground">$99<span className="text-sm font-medium text-foreground-muted">/month</span></p>
+                <p className="text-3xl font-extrabold text-foreground">${planPrice}<span className="text-sm font-medium text-foreground-muted">/month</span></p>
                 <p className="text-xs text-foreground-muted mt-1">Next renewal: June 15, 2026</p>
               </div>
             </div>
@@ -54,7 +95,7 @@ export default function BillingPage() {
             <div className="border-t border-border/50 my-5" />
 
             <div className="grid md:grid-cols-3 gap-4">
-              {["Unlimited Deployments", "5 Active AKS Clusters", "Autonomous AI Copilot"].map((feature) => (
+              {[(isPro ? "Unlimited Deployments" : "5 Deployments/mo"), (isPro ? "5 Active AKS Clusters" : "1 AKS Cluster"), "Autonomous AI Copilot"].map((feature) => (
                 <div key={feature} className="flex items-center gap-2 text-sm text-foreground-muted">
                   <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
                     <Check size={12} className="text-success" />
@@ -65,10 +106,10 @@ export default function BillingPage() {
             </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              <button className="px-4 py-2 bg-primary hover:bg-primary-hover text-white text-xs font-semibold rounded-xl transition glow-blue">
+              <button className="px-4 py-2 bg-primary hover:bg-primary-hover text-white text-xs font-semibold rounded-xl transition glow-blue cursor-pointer">
                 Change Plan
               </button>
-              <button className="px-4 py-2 glass hover:bg-card-hover text-foreground text-xs font-semibold rounded-xl transition">
+              <button className="px-4 py-2 glass hover:bg-card-hover text-foreground text-xs font-semibold rounded-xl transition cursor-pointer">
                 Cancel Subscription
               </button>
             </div>
@@ -119,7 +160,6 @@ export default function BillingPage() {
             transition={{ delay: 0.2 }}
             className="rounded-2xl p-5 bg-gradient-to-br from-primary via-accent to-purple-800 text-white relative overflow-hidden shadow-2xl h-48 flex flex-col justify-between"
           >
-            {/* Hologram chip */}
             <div className="absolute top-5 right-5 w-12 h-8 bg-white/20 rounded-md border border-white/30 backdrop-blur-md flex items-center justify-center font-bold text-xs uppercase tracking-widest text-white/50">
               ZeroOps
             </div>
@@ -132,7 +172,7 @@ export default function BillingPage() {
             <div className="flex justify-between items-end">
               <div>
                 <p className="text-[9px] text-white/60 uppercase">Card Holder</p>
-                <p className="text-sm font-semibold tracking-wide">Vedant S.</p>
+                <p className="text-sm font-semibold tracking-wide">{fullName}</p>
               </div>
               <div>
                 <p className="text-[9px] text-white/60 uppercase">Expires</p>
@@ -163,7 +203,7 @@ export default function BillingPage() {
                         {invoice.status}
                       </span>
                     </div>
-                    <button className="p-1.5 hover:bg-card-hover rounded text-foreground-muted hover:text-foreground">
+                    <button className="p-1.5 hover:bg-card-hover rounded text-foreground-muted hover:text-foreground cursor-pointer">
                       <Download size={14} />
                     </button>
                   </div>

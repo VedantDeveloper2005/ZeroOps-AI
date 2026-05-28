@@ -16,6 +16,8 @@ export interface User {
   avatar_url?: string;
   plan: string;
   created_at?: string;
+  github_connected?: boolean;
+  github_username?: string;
 }
 
 interface AuthContextType {
@@ -23,6 +25,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<User>;
   signup: (firstName: string, lastName: string, email: string, password: string) => Promise<User>;
+  loginWithGitHub: () => void;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -81,18 +84,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const isAuthRoute = pathname === "/login" || pathname === "/signup";
     const isDashboardRoute = pathname.startsWith("/dashboard");
+    const isGitHubCallback = pathname.startsWith("/auth/github/callback");
+
+    // Don't redirect on the GitHub callback page — it handles its own routing
+    if (isGitHubCallback) return;
 
     if (!user && isDashboardRoute) {
       addToast("Please sign in to access the dashboard", "warning");
       router.push("/login");
     } else if (user && isAuthRoute) {
-      // Route based on onboarding state: new users go to onboarding wizard
-      const deployed = typeof window !== "undefined" && localStorage.getItem("zo_has_deployed") === "true";
-      if (deployed) {
-        router.push("/dashboard");
-      } else {
-        router.push("/dashboard/repositories");
-      }
+      // Check deployment state from backend API instead of localStorage
+      fetch(`${API_BASE_URL}/api/dashboard/stats`, { credentials: "include" })
+        .then((res) => res.ok ? res.json() : { has_deployed: false })
+        .then((stats) => {
+          if (stats.has_deployed) {
+            router.push("/dashboard");
+          } else {
+            router.push("/dashboard/repositories");
+          }
+        })
+        .catch(() => router.push("/dashboard/repositories"));
     }
   }, [user, loading, pathname, router]);
 
@@ -148,6 +159,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return data;
   };
 
+  // GitHub OAuth login — redirects to backend which redirects to GitHub
+  const loginWithGitHub = () => {
+    const githubAuthUrl = `${API_BASE_URL}/api/auth/github`;
+    window.location.href = githubAuthUrl;
+  };
+
   // Logout handler
   const logout = async () => {
     try {
@@ -171,6 +188,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         login,
         signup,
+        loginWithGitHub,
         logout,
         refreshUser,
       }}

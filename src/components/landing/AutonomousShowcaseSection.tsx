@@ -2,7 +2,25 @@
 
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { aiActions } from "@/lib/mock-data";
+interface AIActionShowcase {
+  id: string;
+  type: "scaling" | "security" | "deployment" | "optimization" | "healing" | "monitoring";
+  message: string;
+  timestamp: string;
+  severity: "info" | "warning" | "success" | "critical";
+  icon: string;
+}
+
+const aiActions: AIActionShowcase[] = [
+  { id: "ai-001", type: "scaling", message: "AI optimized scaling for api-gateway — 3→5 pods", timestamp: "2s ago", severity: "info", icon: "TrendingUp" },
+  { id: "ai-002", type: "security", message: "Firewall rule applied: blocked 45.33.21.x (DDoS)", timestamp: "15s ago", severity: "critical", icon: "Shield" },
+  { id: "ai-003", type: "deployment", message: "Rollback triggered for payments-service v2.3.1", timestamp: "1m ago", severity: "warning", icon: "RotateCcw" },
+  { id: "ai-004", type: "security", message: "Suspicious traffic blocked from 103.42.89.x", timestamp: "2m ago", severity: "critical", icon: "AlertTriangle" },
+  { id: "ai-005", type: "healing", message: "Pod api-gateway-7d4f restarted (OOMKilled)", timestamp: "3m ago", severity: "warning", icon: "RefreshCw" },
+  { id: "ai-006", type: "healing", message: "Deployment healed: web-app scaled back to healthy", timestamp: "5m ago", severity: "success", icon: "Heart" },
+  { id: "ai-007", type: "optimization", message: "Cost optimization: idle pod detected in staging", timestamp: "8m ago", severity: "info", icon: "DollarSign" },
+  { id: "ai-008", type: "security", message: "SSL certificate renewed for web-app.zeroops.dev", timestamp: "12m ago", severity: "success", icon: "Lock" },
+];
 import { TrendingUp, Shield, Rocket, Heart, DollarSign, Activity, RefreshCw, Lock, ShieldCheck, Cpu, AlertTriangle, BarChart3, Maximize, CheckCircle } from "lucide-react";
 
 const iconMap: Record<string, React.ElementType> = {

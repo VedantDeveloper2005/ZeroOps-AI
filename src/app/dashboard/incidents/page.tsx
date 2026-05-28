@@ -3,7 +3,23 @@
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { AlertTriangle, CheckCircle, Clock, Brain, FileText, RefreshCw, X, Copy } from "lucide-react";
-import { incidents } from "@/lib/mock-data";
+interface Incident {
+  id: string;
+  title: string;
+  severity: "critical" | "warning" | "resolved";
+  affectedServices: string[];
+  startTime: string;
+  duration: string;
+  status: "active" | "investigating" | "resolved";
+  description: string;
+}
+
+const incidents: Incident[] = [
+  { id: "inc-001", title: "API Gateway High Latency", severity: "warning", affectedServices: ["api-gateway", "web-app"], startTime: "25 min ago", duration: "25m", status: "investigating", description: "P99 latency exceeded 500ms threshold on api-gateway" },
+  { id: "inc-002", title: "Payment Service OOMKill", severity: "resolved", affectedServices: ["payments-service"], startTime: "2 hours ago", duration: "12m", status: "resolved", description: "payments-service pod killed due to memory limit exceeded. AI auto-scaled memory limits." },
+  { id: "inc-003", title: "Database Connection Pool Exhaustion", severity: "resolved", affectedServices: ["auth-service", "api-gateway"], startTime: "1 day ago", duration: "8m", status: "resolved", description: "Connection pool maxed out during traffic spike. AI increased pool size and added connection recycling." },
+  { id: "inc-004", title: "SSL Certificate Expiry Warning", severity: "resolved", affectedServices: ["web-app"], startTime: "3 days ago", duration: "1m", status: "resolved", description: "SSL certificate approaching expiry. AI auto-renewed via Azure Key Vault." },
+];
 import { AIThinkingIndicator } from "@/components/ui/AIThinkingIndicator";
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";

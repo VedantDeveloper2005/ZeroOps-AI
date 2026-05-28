@@ -11,7 +11,12 @@ export type StatusType =
   | "healing"
   | "healthy"
   | "warning"
-  | "critical";
+  | "critical"
+  | "active"
+  | "deploying"
+  | "queued"
+  | "rolled_back"
+  | "archived";
 
 const statusConfig: Record<
   StatusType,
@@ -29,11 +34,35 @@ const statusConfig: Record<
     text: "text-success",
     label: "Healthy",
   },
+  active: {
+    dot: "status-dot-green",
+    bg: "bg-success/10 border-success/20",
+    text: "text-success",
+    label: "Active",
+  },
   building: {
     dot: "status-dot-yellow",
     bg: "bg-warning/10 border-warning/20",
     text: "text-warning",
     label: "Building",
+  },
+  deploying: {
+    dot: "status-dot-blue",
+    bg: "bg-info/10 border-info/20",
+    text: "text-info",
+    label: "Deploying",
+  },
+  queued: {
+    dot: "status-dot-yellow",
+    bg: "bg-warning/10 border-warning/20",
+    text: "text-warning",
+    label: "Queued",
+  },
+  rolled_back: {
+    dot: "status-dot-yellow",
+    bg: "bg-warning/10 border-warning/20",
+    text: "text-warning",
+    label: "Rolled Back",
   },
   warning: {
     dot: "status-dot-yellow",
@@ -59,6 +88,12 @@ const statusConfig: Record<
     text: "text-foreground-muted",
     label: "Stopped",
   },
+  archived: {
+    dot: "",
+    bg: "bg-foreground-muted/10 border-foreground-muted/20",
+    text: "text-foreground-muted",
+    label: "Archived",
+  },
   healing: {
     dot: "status-dot-blue",
     bg: "bg-info/10 border-info/20",
@@ -68,7 +103,7 @@ const statusConfig: Record<
 };
 
 export interface StatusBadgeProps {
-  status: StatusType;
+  status: StatusType | string;
   label?: string;
   className?: string;
 }
@@ -78,7 +113,12 @@ export function StatusBadge({
   label,
   className,
 }: StatusBadgeProps) {
-  const config = statusConfig[status];
+  const config = statusConfig[status as StatusType] || {
+    dot: "status-dot-green",
+    bg: "bg-success/10 border-success/20",
+    text: "text-success",
+    label: status || "Active",
+  };
 
   return (
     <motion.div

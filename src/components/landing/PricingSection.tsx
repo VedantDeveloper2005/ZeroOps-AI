@@ -4,7 +4,35 @@ import { useState } from "react";
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import { Check } from "lucide-react";
-import { pricingPlans } from "@/lib/mock-data";
+const pricingPlans = [
+  {
+    name: "Starter",
+    price: "$29",
+    yearlyPrice: "$24",
+    description: "For individual developers and small projects",
+    features: ["5 Deployments/month", "1 AKS Cluster", "Basic AI Analysis", "Community Support", "SSL Certificates", "Basic Monitoring"],
+    cta: "Get Started",
+    highlighted: false,
+  },
+  {
+    name: "Pro",
+    price: "$99",
+    yearlyPrice: "$79",
+    description: "For growing teams and production workloads",
+    features: ["Unlimited Deployments", "5 AKS Clusters", "Advanced AI Analysis", "Priority Support", "Custom Domains", "Advanced Monitoring", "Autoscaling", "Security Center", "Cost Optimization"],
+    cta: "Start Free Trial",
+    highlighted: true,
+  },
+  {
+    name: "Enterprise",
+    price: "Custom",
+    yearlyPrice: "Custom",
+    description: "For organizations with complex infrastructure needs",
+    features: ["Everything in Pro", "Unlimited Clusters", "Dedicated AI Engine", "24/7 Support + SLA", "SSO & SAML", "Compliance (SOC2/HIPAA)", "Custom Integrations", "Private Cloud Option", "Dedicated Account Manager"],
+    cta: "Contact Sales",
+    highlighted: false,
+  },
+];
 import { cn } from "@/lib/utils";
 
 export function PricingSection() {

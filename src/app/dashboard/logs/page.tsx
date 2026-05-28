@@ -3,10 +3,52 @@
 import { motion } from "framer-motion";
 import { useState, useEffect, useRef } from "react";
 import { Search } from "lucide-react";
-import { logEntries } from "@/lib/mock-data";
-import { DEFAULT_PROJECT_ID, createLiveLogLine } from "@/lib/demo-runtime";
+import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 
+const createLiveLogLine = (index: number, pod: string) => {
+  const messages = [
+    "GET /api/v1/health 200 4ms",
+    "Database connection pool healthy: 4/50 active",
+    "Memory threshold checking completed: 42% utilized",
+    "Incoming connection routed via ingress load balancer",
+    "Autopilot metrics push: success",
+    "Garbage collection executed successfully",
+  ];
+  return {
+    id: `fallback-log-${index}-${Date.now()}`,
+    timestamp: new Date().toLocaleTimeString(),
+    level: "INFO" as const,
+    pod,
+    message: messages[index % messages.length],
+  };
+};
+
+interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: "INFO" | "WARN" | "ERROR" | "DEBUG";
+  pod: string;
+  message: string;
+}
+
+const logEntries: LogEntry[] = [
+  { id: "log-001", timestamp: "09:06:55.234", level: "INFO", pod: "api-gateway-a1b2", message: "GET /api/v1/deployments 200 23ms" },
+  { id: "log-002", timestamp: "09:06:54.891", level: "INFO", pod: "web-app-7d4f", message: "Compiled successfully in 1.2s" },
+  { id: "log-003", timestamp: "09:06:54.123", level: "WARN", pod: "payments-g7h8", message: "Connection pool reaching 80% capacity (40/50)" },
+  { id: "log-004", timestamp: "09:06:53.456", level: "ERROR", pod: "notif-svc-m3n4", message: "Failed to send notification: SMTP connection timeout after 30s" },
+  { id: "log-005", timestamp: "09:06:52.789", level: "INFO", pod: "auth-service-e5f6", message: "JWT token validated for user_id=usr_2847" },
+  { id: "log-006", timestamp: "09:06:51.012", level: "DEBUG", pod: "ml-pipeline-k1l2", message: "Feature extraction completed: 1247 features, batch_size=64" },
+  { id: "log-007", timestamp: "09:06:50.345", level: "INFO", pod: "api-gateway-c3d4", message: "POST /api/v1/deploy 201 156ms" },
+  { id: "log-008", timestamp: "09:06:49.678", level: "WARN", pod: "cache-redis-o5p6", message: "Memory usage at 78% — consider scaling" },
+  { id: "log-009", timestamp: "09:06:48.901", level: "INFO", pod: "web-app-8e5g", message: "Static assets served: 24 files, 1.8MB total" },
+  { id: "log-010", timestamp: "09:06:47.234", level: "ERROR", pod: "payments-i9j0", message: "Stripe webhook signature verification failed" },
+  { id: "log-011", timestamp: "09:06:46.567", level: "INFO", pod: "api-gateway-a1b2", message: "Rate limiter: 847/1000 requests in current window" },
+  { id: "log-012", timestamp: "09:06:45.890", level: "DEBUG", pod: "auth-service-e5f6", message: "RBAC check passed for role=admin on resource=deployments" },
+  { id: "log-013", timestamp: "09:06:44.123", level: "INFO", pod: "ml-pipeline-k1l2", message: "Model inference completed: prediction_score=0.94, latency=12ms" },
+  { id: "log-014", timestamp: "09:06:43.456", level: "WARN", pod: "notif-svc-m3n4", message: "Retry attempt 2/3 for notification nid_8823" },
+  { id: "log-015", timestamp: "09:06:42.789", level: "INFO", pod: "web-app-7d4f", message: "Server-side render completed: /dashboard 89ms" },
+];
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
 

@@ -26,6 +26,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # Users can supply a fallback GitHub Personal Access Token (PAT) for listing real private/public repos
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
+# GitHub OAuth App credentials (create at https://github.com/settings/developers)
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+GITHUB_OAUTH_SCOPES = os.getenv("GITHUB_OAUTH_SCOPES", "repo,read:user,user:email")
+
+# Frontend URL for OAuth redirect (after callback, redirect user here)
+FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "http://localhost:3000"))
+
 # Workspace folder for temporary checkouts
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
 os.makedirs(WORKSPACE_DIR, exist_ok=True)

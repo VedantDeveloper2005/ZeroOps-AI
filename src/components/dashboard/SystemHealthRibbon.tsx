@@ -1,37 +1,51 @@
 "use client";
 
-import { systemHealth } from "@/lib/mock-data";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
+import { api } from "@/lib/api";
+
+interface HealthItem {
+  name: string;
+  status: "healthy" | "warning" | "critical";
+  detail: string;
+}
 
 export function SystemHealthRibbon() {
-  return (
-    <div className="h-11 bg-background-secondary border-b border-border flex items-center justify-center px-4 relative overflow-hidden">
-      {/* Shimmer border effect */}
-      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+  const [items, setItems] = useState<HealthItem[]>([]);
 
-      <div className="flex items-center gap-6 text-xs">
-        {systemHealth.map((item, i) => (
-          <motion.button
-            key={item.name}
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05, duration: 0.3 }}
-            className="flex items-center gap-2 hover:bg-card/50 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
-          >
-            <span
-              className={`status-dot ${
-                item.status === "healthy"
-                  ? "status-dot-green"
-                  : item.status === "warning"
-                  ? "status-dot-yellow"
-                  : "status-dot-red"
-              }`}
-            />
-            <span className="text-foreground font-medium whitespace-nowrap">{item.name}</span>
-            <span className="text-foreground-muted hidden lg:inline whitespace-nowrap">{item.detail}</span>
-          </motion.button>
-        ))}
-      </div>
+  useEffect(() => {
+    async function fetchHealth() {
+      try {
+        const data = await api.getHealth();
+        // Build health items from backend health response
+        const healthItems: HealthItem[] = [
+          { name: "API Status", status: data.status === "ok" ? "healthy" : "warning", detail: data.status === "ok" ? "Operational" : "Degraded" },
+          { name: "AI Engine", status: data.openAIConfigured ? "healthy" : "warning", detail: data.openAIConfigured ? "Online" : "Not configured" },
+          { name: "Environment", status: "healthy", detail: data.environment || "production" },
+        ];
+        setItems(healthItems);
+      } catch {
+        setItems([
+          { name: "API Status", status: "warning", detail: "Connecting..." },
+        ]);
+      }
+    }
+    fetchHealth();
+  }, []);
+
+  if (items.length === 0) return null;
+
+  const statusColor = (s: string) =>
+    s === "healthy" ? "bg-emerald-400" : s === "warning" ? "bg-amber-400" : "bg-red-400";
+
+  return (
+    <div className="flex items-center gap-4 px-4 py-1.5 border-b border-border bg-background-secondary text-xs overflow-x-auto no-scrollbar">
+      {items.map((item) => (
+        <div key={item.name} className="flex items-center gap-1.5 flex-shrink-0">
+          <span className={`w-1.5 h-1.5 rounded-full ${statusColor(item.status)}`} />
+          <span className="text-foreground-muted">{item.name}:</span>
+          <span className="text-foreground font-medium">{item.detail}</span>
+        </div>
+      ))}
     </div>
   );
 }

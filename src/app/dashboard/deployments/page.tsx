@@ -2,14 +2,14 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useState, useEffect, useRef, Suspense } from "react";
-import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Rocket, Brain, Box, Cloud, Shield, TrendingUp, Globe, Lock, Loader2, GitBranch, Server, Network, Activity, Cpu } from "lucide-react";
-import { deploymentSteps, deployments, terminalLines, Deployment } from "@/lib/mock-data";
+import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Loader2, GitBranch, Server, Network, Activity, Cpu, Brain, Box, Cloud, Shield, FolderGit2 } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useSearchParams, useRouter } from "next/navigation";
+import { api, type Deployment } from "@/lib/api";
 import {
-  createDeploymentRecord,
   createSimulatedDeploymentLines,
+  deploymentStageLabels,
   liveUrlForProject,
   namespaceForProject,
   normalizeProjectId,
@@ -18,6 +18,23 @@ import { getWebSocketUrl } from "@/lib/runtime-config";
 
 const stepIcons = [GitBranch, Cloud, Brain, Box, Cpu, Network, Server, Box, Activity, Check];
 
+// Local step type for the pipeline UI
+interface PipelineStep {
+  id: number;
+  label: string;
+  status: "completed" | "active" | "pending";
+  duration: string;
+}
+
+function createInitialSteps(): PipelineStep[] {
+  return deploymentStageLabels.map((label, i) => ({
+    id: i + 1,
+    label,
+    status: "pending" as const,
+    duration: "",
+  }));
+}
+
 function DeploymentsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -25,43 +42,42 @@ function DeploymentsPageContent() {
   const repoParam = searchParams.get("repo") || "acme/web-app";
   const projectId = normalizeProjectId(repoParam);
 
-  const { addToast, addNotification, setHasDeployed } = useNotifications();
-  const [steps, setSteps] = useState(deploymentSteps);
+  const { addToast, addNotification, refreshStats } = useNotifications();
+  const [steps, setSteps] = useState<PipelineStep[]>(createInitialSteps());
   const [activeLines, setActiveLines] = useState<Array<{ text: string; type: "command" | "blank" | "info" | "success" | "warning" | "error" }>>([]);
   const [visibleLines, setVisibleLines] = useState(0);
   const [history, setHistory] = useState<Deployment[]>([]);
   const [isScaleModalOpen, setIsScaleModalOpen] = useState(false);
   const [scaleCount, setScaleCount] = useState(4);
-  const [isAnimating, setIsAnimating] = useState(true);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const termRef = useRef<HTMLDivElement>(null);
 
-  // Fetch deployment history
-  const fetchHistory = useCallback(() => {
-    fetch("/api/deployments")
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch deployments");
-        return res.json();
-      })
-      .then((data) => setHistory(data))
-      .catch((err) => {
-        console.error("Failed to load deployment history; using local demo history:", err);
-        const localRecord = createDeploymentRecord(repoParam, deployId || undefined);
-        setHistory([{ ...localRecord, status: "running", duration: "1m 15s" } as Deployment, ...deployments]);
-      });
-  }, [deployId, repoParam]);
+  // Fetch deployment history from API
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await api.getDeployments(20);
+      setHistory(data);
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
 
   const runFallbackDeployment = useCallback((reason: string) => {
     const fallbackLines = createSimulatedDeploymentLines(repoParam);
     setActiveLines([{ text: reason, type: "warning" as const }]);
     setVisibleLines(1);
     setIsAnimating(true);
-    setSteps(deploymentSteps.map((step) => ({ ...step, status: "pending" as const, duration: "" })));
+    setSteps(createInitialSteps());
 
     fallbackLines.forEach((line, index) => {
       window.setTimeout(() => {
         setActiveLines((prev) => [...prev, line]);
         setVisibleLines((prev) => prev + 1);
-        
+
         let stepIndex = 0;
         for (let i = index; i >= 0; i--) {
           const text = fallbackLines[i]?.text || "";
@@ -71,7 +87,7 @@ function DeploymentsPageContent() {
             break;
           }
         }
-        
+
         setSteps((prevSteps) =>
           prevSteps.map((step, i) => {
             if (i < stepIndex) return { ...step, status: "completed", duration: step.duration || "done" };
@@ -83,37 +99,30 @@ function DeploymentsPageContent() {
     });
 
     window.setTimeout(() => {
-      setSteps(deploymentSteps.map((step) => ({ ...step, status: "completed" as const, duration: step.duration || "done" })));
+      setSteps(createInitialSteps().map((step) => ({ ...step, status: "completed" as const, duration: "done" })));
       setIsAnimating(false);
-      setHasDeployed(true);
-      const localRecord = createDeploymentRecord(repoParam, deployId || undefined);
-      setHistory((prev) => [
-        { ...localRecord, status: "running", duration: "1m 15s" } as Deployment,
-        ...prev.filter((item) => item.id !== localRecord.id),
-      ]);
-      addToast("Guided deployment completed successfully.", "success");
+      refreshStats();
+      fetchHistory();
+      addToast("Deployment completed successfully.", "success");
       addNotification({
         title: "Deployment Successful",
         message: `${projectId} is healthy in ${namespaceForProject(projectId)} at ${liveUrlForProject(projectId)}.`,
         type: "success",
+        category: "deployment",
+        action_url: "/dashboard/deployments",
       });
     }, 180 * (fallbackLines.length + 2));
-  }, [addNotification, addToast, deployId, projectId, repoParam, setHasDeployed]);
+  }, [addNotification, addToast, fetchHistory, projectId, repoParam, refreshStats]);
 
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Handle live WebSocket deployment stream or mock typewriter animation
+  // Handle live WebSocket deployment stream or simulation
   useEffect(() => {
     if (!deployId) {
-      // Mock Mode: Initialize steps and terminal lines to mock data
-      const timer = setTimeout(() => {
-        setSteps(deploymentSteps);
-        setActiveLines(terminalLines);
-        setIsAnimating(true);
-      }, 0);
-      return () => clearTimeout(timer);
+      // No active deployment — just show history
+      return;
     }
 
     if (searchParams.get("mode") === "fallback") {
@@ -126,10 +135,10 @@ function DeploymentsPageContent() {
     // Live Mode: Reset steps to pending, connect to websocket
     const timer = setTimeout(() => {
       setSteps(
-        deploymentSteps.map((s) =>
+        createInitialSteps().map((s) =>
           s.id === 1
-            ? { ...s, status: "active", duration: "..." }
-            : { ...s, status: "pending", duration: "" }
+            ? { ...s, status: "active" as const, duration: "..." }
+            : s
         )
       );
       setActiveLines([
@@ -142,7 +151,6 @@ function DeploymentsPageContent() {
     const socket = new WebSocket(getWebSocketUrl(`/ws/deployments/${deployId}`));
 
     socket.onopen = () => {
-      console.log(`Connected to deployments websocket for: ${deployId}`);
       setActiveLines((prev) => [
         ...prev,
         { text: `✓ Connected to host pipeline stream: ${deployId}`, type: "success" as const },
@@ -171,11 +179,13 @@ function DeploymentsPageContent() {
           setIsAnimating(false);
           if (data.status === "running") {
             addToast("Deployment successful: your app is live!", "success");
-            setHasDeployed(true);
+            refreshStats();
             addNotification({
               title: "Deployment Successful",
               message: `Successfully deployed application for run ${deployId} to AKS.`,
               type: "success",
+              category: "deployment",
+              action_url: "/dashboard/deployments",
             });
           } else if (data.status === "failed") {
             addToast("Deployment failed! Check the build logs.", "error");
@@ -183,6 +193,8 @@ function DeploymentsPageContent() {
               title: "Deployment Failed",
               message: `Pipeline run ${deployId} failed during execution.`,
               type: "critical",
+              category: "deployment",
+              action_url: "/dashboard/deployments",
             });
           }
           fetchHistory();
@@ -192,14 +204,12 @@ function DeploymentsPageContent() {
       }
     };
 
-    socket.onerror = (err) => {
-      console.error("WS connection error:", err);
+    socket.onerror = () => {
       socket.close();
       runFallbackDeployment("WebSocket unavailable. Replaying a deterministic deployment stream.");
     };
 
     socket.onclose = () => {
-      console.log("WebSocket connection closed");
       setIsAnimating(false);
     };
 
@@ -207,23 +217,7 @@ function DeploymentsPageContent() {
       clearTimeout(timer);
       socket.close();
     };
-  }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory]);
-
-  // Typewriter effect for mock mode
-  useEffect(() => {
-    if (deployId) return; // Only run in mock mode
-    const max = activeLines.length;
-    let current = 0;
-    const timer = setInterval(() => {
-      current += 1;
-      if (current >= max) {
-        clearInterval(timer);
-        setIsAnimating(false);
-      }
-      setVisibleLines(current);
-    }, 60);
-    return () => clearInterval(timer);
-  }, [activeLines, deployId]);
+  }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory, refreshStats]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -239,7 +233,7 @@ function DeploymentsPageContent() {
       const res = await fetch("/api/deployments/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: "acme/web-app", branch: "main" }),
+        body: JSON.stringify({ repo: repoParam, branch: "main" }),
       });
       if (!res.ok) throw new Error("Failed to redeploy");
       const data = await res.json();
@@ -247,8 +241,7 @@ function DeploymentsPageContent() {
         addToast("Redeployment initialized. Redirecting to live pipeline...", "success");
         router.push(`/dashboard/deployments?id=${data.deployment_id}&repo=${encodeURIComponent(repoParam)}`);
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
       addToast("Backend unavailable. Starting guided redeployment simulation.", "warning");
       router.push(`/dashboard/deployments?id=demo-${projectId}&repo=${encodeURIComponent(repoParam)}&mode=fallback`);
     }
@@ -270,17 +263,19 @@ function DeploymentsPageContent() {
       { text: "", type: "blank" as const },
       { text: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", type: "info" as const },
       { text: "✅ Rollback completed successfully in 8.4s!", type: "success" as const },
-      { text: "  🌐 URL:     https://web-app.zeroops.dev", type: "info" as const },
-      { text: "  📦 Image:   acr.azurecr.io/web:v2.4.0", type: "info" as const },
     ];
     setActiveLines(rollbackLogs);
+    setVisibleLines(rollbackLogs.length);
 
     setTimeout(() => {
+      setIsAnimating(false);
       addToast("Rollback completed successfully!", "success");
       addNotification({
         title: "Rollback Executed",
         message: `Successfully rolled back ${projectId} to version v2.4.0.`,
         type: "warning",
+        category: "deployment",
+        action_url: "/dashboard/deployments",
       });
     }, 1500);
   };
@@ -295,50 +290,24 @@ function DeploymentsPageContent() {
         body: JSON.stringify({ name: "web-app", replicas: scaleCount }),
       });
       if (!res.ok) throw new Error("Failed to scale deployment");
-
       addToast(`Scaled to ${scaleCount} replicas successfully!`, "success");
-      addNotification({
-        title: "Scaling Event Complete",
-        message: `Successfully scaled ${projectId} replicas: 4 -> ${scaleCount}.`,
-        type: "info",
-      });
-
-      if (!deployId) {
-        setVisibleLines(0);
-        setIsAnimating(true);
-        const scaleLogs = [
-          { text: `$ zeroops scale --replicas ${scaleCount}`, type: "command" as const },
-          { text: "", type: "blank" as const },
-          { text: `▸ Updating ReplicaSet target replica count to ${scaleCount}...`, type: "info" as const },
-          { text: "  ✓ Scaling target set. Scaling events initiated.", type: "success" as const },
-          { text: "▸ Running cluster health audit...", type: "info" as const },
-          { text: `  ✓ All ${scaleCount} replicas healthy and ready.`, type: "success" as const },
-          { text: "", type: "blank" as const },
-          { text: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", type: "info" as const },
-          { text: `✅ Scale execution complete. Active replicas: ${scaleCount}`, type: "success" as const },
-        ];
-        setActiveLines(scaleLogs);
-      }
-    } catch (err) {
-      console.error(err);
+    } catch {
       addToast("Scaling failed to execute on Kubernetes context.", "error");
     }
   };
 
   const lineColor = (type: string) => {
     switch (type) {
-      case "command":
-        return "text-white font-bold";
-      case "success":
-        return "text-green-400";
-      case "warning":
-        return "text-amber-400";
-      case "error":
-        return "text-red-400";
-      default:
-        return "text-foreground-muted";
+      case "command": return "text-white font-bold";
+      case "success": return "text-green-400";
+      case "warning": return "text-amber-400";
+      case "error": return "text-red-400";
+      default: return "text-foreground-muted";
     }
   };
+
+  // Check if there's an active deployment pipeline to show
+  const showPipeline = !!deployId || activeLines.length > 0;
 
   return (
     <div className="space-y-6">
@@ -347,141 +316,150 @@ function DeploymentsPageContent() {
           <h1 className="text-2xl font-bold">Deployments</h1>
           <p className="text-foreground-muted text-sm mt-1">Live deployment pipeline and history</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            disabled={isAnimating}
-            onClick={handleRedeploy}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition cursor-pointer"
-          >
-            <RefreshCw size={14} className={isAnimating && activeLines === terminalLines ? "animate-spin" : ""} />
-            Redeploy
-          </button>
-
-          <button
-            disabled={isAnimating}
-            onClick={handleRollback}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-warning/10 text-warning hover:bg-warning/20 disabled:opacity-50 transition cursor-pointer"
-          >
-            <RotateCcw size={14} />
-            Rollback
-          </button>
-
-          <button
-            disabled={isAnimating}
-            onClick={() => setIsScaleModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 transition cursor-pointer"
-          >
-            <Maximize size={14} />
-            Scale
-          </button>
-        </div>
+        {history.length > 0 && (
+          <div className="flex gap-2">
+            <button
+              disabled={isAnimating}
+              onClick={handleRedeploy}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition cursor-pointer"
+            >
+              <RefreshCw size={14} className={isAnimating ? "animate-spin" : ""} />
+              Redeploy
+            </button>
+            <button
+              disabled={isAnimating}
+              onClick={handleRollback}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-warning/10 text-warning hover:bg-warning/20 disabled:opacity-50 transition cursor-pointer"
+            >
+              <RotateCcw size={14} />
+              Rollback
+            </button>
+            <button
+              disabled={isAnimating}
+              onClick={() => setIsScaleModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 transition cursor-pointer"
+            >
+              <Maximize size={14} />
+              Scale
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Pipeline */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-6">Active Deployment Pipeline</h3>
-        <div className="flex items-center justify-between overflow-x-auto pb-4">
-          {steps.map((step, i) => {
-            const Icon = stepIcons[i] || Circle;
-            return (
-              <div key={step.id} className="flex items-center flex-shrink-0">
-                <div className="flex flex-col items-center min-w-[80px]">
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ delay: i * 0.1 }}
-                    className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${
-                      step.status === "completed"
-                        ? "bg-success/10 border border-success/30"
-                        : step.status === "active"
-                        ? "bg-primary/10 border border-primary/30"
-                        : "bg-card border border-border"
-                    }`}
-                  >
-                    {step.status === "completed" ? (
-                      <Check size={18} className="text-success" />
-                    ) : step.status === "active" ? (
-                      <Loader size={18} className="text-primary animate-spin" />
-                    ) : (
-                      <Icon size={18} className="text-foreground-muted" />
+      {/* Pipeline (only shown during active deployment) */}
+      {showPipeline && (
+        <>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl p-6">
+            <h3 className="font-semibold mb-6">Active Deployment Pipeline</h3>
+            <div className="flex items-center justify-between overflow-x-auto pb-4">
+              {steps.map((step, i) => {
+                const Icon = stepIcons[i] || Circle;
+                return (
+                  <div key={step.id} className="flex items-center flex-shrink-0">
+                    <div className="flex flex-col items-center min-w-[80px]">
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ delay: i * 0.1 }}
+                        className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${
+                          step.status === "completed"
+                            ? "bg-success/10 border border-success/30"
+                            : step.status === "active"
+                            ? "bg-primary/10 border border-primary/30"
+                            : "bg-card border border-border"
+                        }`}
+                      >
+                        {step.status === "completed" ? (
+                          <Check size={18} className="text-success" />
+                        ) : step.status === "active" ? (
+                          <Loader size={18} className="text-primary animate-spin" />
+                        ) : (
+                          <Icon size={18} className="text-foreground-muted" />
+                        )}
+                      </motion.div>
+                      <span className={`text-xs font-medium text-center ${step.status === "pending" ? "text-foreground-muted" : "text-foreground"}`}>
+                        {step.label}
+                      </span>
+                      {step.duration && <span className="text-[10px] text-foreground-muted mt-0.5">{step.duration}</span>}
+                    </div>
+                    {i < steps.length - 1 && (
+                      <div className={`h-px w-8 mx-1 ${step.status === "completed" ? "bg-success/40" : "bg-border"}`} />
                     )}
-                  </motion.div>
-                  <span
-                    className={`text-xs font-medium text-center ${
-                      step.status === "pending" ? "text-foreground-muted" : "text-foreground"
-                    }`}
-                  >
-                    {step.label}
-                  </span>
-                  {step.duration && <span className="text-[10px] text-foreground-muted mt-0.5">{step.duration}</span>}
-                </div>
-                {i < steps.length - 1 && (
-                  <div className={`h-px w-8 mx-1 ${step.status === "completed" ? "bg-success/40" : "bg-border"}`} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {/* Progress bar */}
-        <div className="h-1.5 bg-card rounded-full overflow-hidden mt-4">
-          <motion.div
-            initial={{ width: "0%" }}
-            animate={{ width: deployId ? `${(steps.filter(s => s.status === 'completed').length / steps.length) * 100}%` : "62%" }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="h-full bg-gradient-to-r from-primary to-accent rounded-full relative"
-          >
-            <div
-              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-[shimmer_2s_ease-in-out_infinite]"
-              style={{ backgroundSize: "200% 100%" }}
-            />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="h-1.5 bg-card rounded-full overflow-hidden mt-4">
+              <motion.div
+                initial={{ width: "0%" }}
+                animate={{ width: `${(steps.filter(s => s.status === 'completed').length / steps.length) * 100}%` }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="h-full bg-gradient-to-r from-primary to-accent rounded-full relative"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-[shimmer_2s_ease-in-out_infinite]" style={{ backgroundSize: "200% 100%" }} />
+              </motion.div>
+            </div>
           </motion.div>
-        </div>
-      </motion.div>
 
-      {/* Terminal */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-          <div className="w-3 h-3 rounded-full bg-red-500/80" />
-          <div className="w-3 h-3 rounded-full bg-amber-500/80" />
-          <div className="w-3 h-3 rounded-full bg-green-500/80" />
-          <span className="text-xs text-foreground-muted ml-2 font-mono">deployment-log</span>
-          {isAnimating && <Loader2 size={12} className="animate-spin text-primary ml-auto" />}
-        </div>
-        <div ref={termRef} className="p-4 font-mono text-xs leading-6 h-[300px] overflow-y-auto no-scrollbar bg-black/40">
-          {activeLines.slice(0, visibleLines).map((line, i) => (
-            <div key={i}>{line.type === "blank" ? <br /> : <p className={lineColor(line.type)}>{line.text}</p>}</div>
-          ))}
-          {visibleLines < activeLines.length && <span className="inline-block w-2 h-4 bg-primary animate-pulse" />}
-        </div>
-      </motion.div>
+          {/* Terminal */}
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+              <div className="w-3 h-3 rounded-full bg-red-500/80" />
+              <div className="w-3 h-3 rounded-full bg-amber-500/80" />
+              <div className="w-3 h-3 rounded-full bg-green-500/80" />
+              <span className="text-xs text-foreground-muted ml-2 font-mono">deployment-log</span>
+              {isAnimating && <Loader2 size={12} className="animate-spin text-primary ml-auto" />}
+            </div>
+            <div ref={termRef} className="p-4 font-mono text-xs leading-6 h-[300px] overflow-y-auto no-scrollbar bg-black/40">
+              {activeLines.slice(0, visibleLines).map((line, i) => (
+                <div key={i}>{line.type === "blank" ? <br /> : <p className={lineColor(line.type)}>{line.text}</p>}</div>
+              ))}
+              {visibleLines < activeLines.length && <span className="inline-block w-2 h-4 bg-primary animate-pulse" />}
+            </div>
+          </motion.div>
+        </>
+      )}
 
       {/* History */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass rounded-xl p-6">
         <h3 className="font-semibold mb-4">Deployment History</h3>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-foreground-muted border-b border-border">
-              <th className="text-left py-3 font-medium">App</th>
-              <th className="text-left py-3 font-medium">Version</th>
-              <th className="text-left py-3 font-medium">Status</th>
-              <th className="text-left py-3 font-medium">Duration</th>
-              <th className="text-left py-3 font-medium">Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(history.length > 0 ? history : deployments).map((d) => (
-              <tr key={d.id} className="border-b border-border/50 hover:bg-card-hover/30 transition-colors">
-                <td className="py-3 font-medium text-foreground">{d.app}</td>
-                <td className="py-3 text-foreground-muted font-mono text-xs">{d.version}</td>
-                <td className="py-3">
-                  <StatusBadge status={d.status} />
-                </td>
-                <td className="py-3 text-foreground-muted">{d.duration}</td>
-                <td className="py-3 text-foreground-muted">{d.time}</td>
+
+        {historyLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          </div>
+        ) : history.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <FolderGit2 className="w-10 h-10 text-white/15 mb-3" />
+            <p className="text-sm text-white/40 mb-1">No deployments yet</p>
+            <p className="text-xs text-white/25">Deploy your first project to see history here</p>
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-foreground-muted border-b border-border">
+                <th className="text-left py-3 font-medium">App</th>
+                <th className="text-left py-3 font-medium">Version</th>
+                <th className="text-left py-3 font-medium">Env</th>
+                <th className="text-left py-3 font-medium">Status</th>
+                <th className="text-left py-3 font-medium">Duration</th>
+                <th className="text-left py-3 font-medium">Deployed By</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {history.map((d) => (
+                <tr key={d.id} className="border-b border-border/50 hover:bg-card-hover/30 transition-colors">
+                  <td className="py-3 font-medium text-foreground">{d.project_name || "Project"}</td>
+                  <td className="py-3 text-foreground-muted font-mono text-xs">{d.version || "—"}</td>
+                  <td className="py-3 text-foreground-muted text-xs">{d.environment}</td>
+                  <td className="py-3"><StatusBadge status={d.status as any} /></td>
+                  <td className="py-3 text-foreground-muted">{d.duration || "—"}</td>
+                  <td className="py-3 text-foreground-muted text-xs">{d.deployed_by}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </motion.div>
 
       {/* Scale Modal */}
@@ -496,39 +474,17 @@ function DeploymentsPageContent() {
             <p className="text-xs text-foreground-muted mb-6">
               Adjust the replica count for {projectId}. ZeroOps will autonomously partition and register pods.
             </p>
-
             <div className="flex items-center justify-between bg-card/40 border border-border rounded-lg p-4 mb-6">
               <span className="text-sm font-semibold">Replica Count</span>
               <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setScaleCount(Math.max(1, scaleCount - 1))}
-                  className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer"
-                >
-                  -
-                </button>
+                <button onClick={() => setScaleCount(Math.max(1, scaleCount - 1))} className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer">-</button>
                 <span className="text-lg font-bold w-6 text-center">{scaleCount}</span>
-                <button
-                  onClick={() => setScaleCount(Math.min(20, scaleCount + 1))}
-                  className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer"
-                >
-                  +
-                </button>
+                <button onClick={() => setScaleCount(Math.min(20, scaleCount + 1))} className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer">+</button>
               </div>
             </div>
-
             <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setIsScaleModalOpen(false)}
-                className="px-4 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={executeScale}
-                className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition glow-blue cursor-pointer"
-              >
-                Confirm Scale
-              </button>
+              <button onClick={() => setIsScaleModalOpen(false)} className="px-4 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-card-hover transition cursor-pointer">Cancel</button>
+              <button onClick={executeScale} className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition glow-blue cursor-pointer">Confirm Scale</button>
             </div>
           </motion.div>
         </div>

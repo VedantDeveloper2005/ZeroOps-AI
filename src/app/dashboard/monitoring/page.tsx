@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, Clock, AlertTriangle, Wifi, Cpu, HardDrive } from "lucide-react";
-import { cpuMetrics, memoryMetrics, tracingSpans, logEntries, infraNodes } from "@/lib/mock-data";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
@@ -16,7 +15,31 @@ const topMetrics = [
   { icon: Wifi, label: "Uptime", value: "99.99%", color: "text-success" },
 ];
 
-const pods = infraNodes.filter(n => n.type === "pod");
+function generateMetricData(points: number, min: number, max: number) {
+  const data: { time: string; value: number }[] = [];
+  let current = (min + max) / 2;
+  for (let i = 0; i < points; i++) {
+    const noise = (Math.sin(i * 0.7) * 0.5) * (max - min) * 0.3;
+    current = Math.max(min, Math.min(max, current + noise));
+    const hour = Math.floor(i / (points / 24));
+    data.push({ time: `${String(hour).padStart(2, "0")}:${String((i * 60 / points * 24) % 60 | 0).padStart(2, "0")}`, value: Math.round(current * 10) / 10 });
+  }
+  return data;
+}
+
+const cpuMetrics = generateMetricData(48, 20, 85);
+const memoryMetrics = generateMetricData(48, 40, 78);
+
+const tracingSpans = [
+  { id: "span-1", service: "api-gateway", operation: "GET /api/deployments", duration: 47, start: 0, color: "#3b82f6" },
+  { id: "span-2", service: "auth-service", operation: "validateToken", duration: 8, start: 2, color: "#8b5cf6" },
+  { id: "span-3", service: "api-gateway", operation: "fetchDeployments", duration: 28, start: 12, color: "#3b82f6" },
+  { id: "span-4", service: "database", operation: "SELECT deployments", duration: 15, start: 14, color: "#06b6d4" },
+  { id: "span-5", service: "cache-redis", operation: "GET cache:deployments", duration: 2, start: 13, color: "#f59e0b" },
+  { id: "span-6", service: "api-gateway", operation: "serialize response", duration: 5, start: 40, color: "#3b82f6" },
+];
+
+const pods: { id: string; name: string; status: string; cpu: number; memory: number }[] = [];
 
 export default function MonitoringPage() {
   const { hasDeployed } = useNotifications();
@@ -126,14 +149,7 @@ export default function MonitoringPage() {
           <div className="w-2 h-2 rounded-full bg-success animate-pulse" /><span className="text-sm font-medium">Live Log Stream</span>
         </div>
         <div className="p-4 font-mono text-xs leading-6 bg-black/20 max-h-[200px] overflow-y-auto no-scrollbar">
-          {logEntries.slice(0, 5).map(log => (
-            <div key={log.id} className="flex gap-3">
-              <span className="text-foreground-muted w-24 flex-shrink-0">{log.timestamp}</span>
-              <span className={`w-12 text-center rounded text-[10px] font-medium ${levelColor[log.level]}`}>{log.level}</span>
-              <span className="text-foreground-muted w-36 truncate flex-shrink-0">{log.pod}</span>
-              <span className="text-foreground">{log.message}</span>
-            </div>
-          ))}
+            <p className="text-foreground-muted">Waiting for live log data from active deployments...</p>
         </div>
       </motion.div>
     </div>

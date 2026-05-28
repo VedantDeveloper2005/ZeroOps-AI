@@ -1,41 +1,13 @@
-import {
-  Deployment,
-  Repository,
-  deploymentSteps,
-  repositories as demoRepositories,
-  terminalLines,
-} from "@/lib/mock-data";
+// ============================================
+// ZeroOps AI — Runtime Utilities
+// Utility functions for project naming, URL generation, and deployment simulation.
+// No mock/fake data — all data comes from the backend API.
+// ============================================
 
 export const DEFAULT_PROJECT_ID = "web-app";
 export const DEFAULT_NAMESPACE = `zeroops-${DEFAULT_PROJECT_ID}`;
 export const DEFAULT_HOST = `${DEFAULT_PROJECT_ID}.zeroops.dev`;
 export const DEFAULT_LIVE_URL = `https://${DEFAULT_HOST}`;
-
-export interface AnalysisResult {
-  framework: string;
-  version: string;
-  language: string;
-  confidence: number;
-  resources: {
-    cpu: string;
-    memory: string;
-    storage: string;
-  };
-  risk_score: number;
-  dependencies: string[];
-  vulnerabilities: string[];
-  dockerfile: string;
-  kubernetes_manifest: string;
-}
-
-export interface DeploymentRecord extends Omit<Deployment, "commit" | "image"> {
-  commit?: string;
-  image?: string;
-  namespace?: string;
-  liveUrl?: string;
-}
-
-export type TerminalLine = (typeof terminalLines)[number];
 
 export function normalizeProjectId(repo: string) {
   const basename = repo.split("/").pop() || repo || DEFAULT_PROJECT_ID;
@@ -58,98 +30,9 @@ export function liveUrlForProject(projectId: string) {
   return `https://${hostForProject(projectId)}`;
 }
 
-export function fallbackRepositories(): Repository[] {
-  return demoRepositories;
-}
-
-export function createFallbackAnalysis(repo = "acme/web-app"): AnalysisResult {
-  const projectId = normalizeProjectId(repo);
-  const namespace = namespaceForProject(projectId);
-  const host = hostForProject(projectId);
-
-  return {
-    framework: "Next.js",
-    version: "16.2.6",
-    language: "TypeScript",
-    confidence: 96,
-    resources: {
-      cpu: "200m",
-      memory: "256Mi",
-      storage: "1Gi",
-    },
-    risk_score: 18,
-    dependencies: [
-      "next@16.2.6",
-      "react@19.2.4",
-      "tailwindcss@4",
-      "framer-motion@12.40.0",
-      "lucide-react@1.16.0",
-      "typescript@5",
-    ],
-    vulnerabilities: [
-      "No blocking vulnerabilities detected in production path",
-      "Recommend rotating demo GitHub token before production use",
-      "Enable image signing before enterprise rollout",
-    ],
-    dockerfile: [
-      "FROM node:20-alpine",
-      "WORKDIR /app",
-      "COPY package*.json ./",
-      "RUN npm ci",
-      "COPY . .",
-      "RUN npm run build",
-      "EXPOSE 3000",
-      "CMD [\"npm\", \"start\"]",
-    ].join("\n"),
-    kubernetes_manifest: [
-      "apiVersion: apps/v1",
-      "kind: Deployment",
-      "metadata:",
-      `  name: ${projectId}`,
-      `  namespace: ${namespace}`,
-      "---",
-      "apiVersion: v1",
-      "kind: Service",
-      "metadata:",
-      `  name: ${projectId}-svc`,
-      `  namespace: ${namespace}`,
-      "---",
-      "apiVersion: networking.k8s.io/v1",
-      "kind: Ingress",
-      "metadata:",
-      `  name: ${projectId}-ingress`,
-      `  namespace: ${namespace}`,
-      "  annotations:",
-      "    cert-manager.io/cluster-issuer: letsencrypt-prod",
-      "spec:",
-      "  ingressClassName: nginx",
-      "  tls:",
-      "  - hosts:",
-      `    - ${host}`,
-      "---",
-      "apiVersion: autoscaling/v2",
-      "kind: HorizontalPodAutoscaler",
-    ].join("\n"),
-  };
-}
-
-export function createDeploymentRecord(repo = "acme/web-app", id?: string): DeploymentRecord {
-  const projectId = normalizeProjectId(repo);
-  return {
-    id: id || `dep-${Date.now().toString(36)}`,
-    app: projectId,
-    repo,
-    environment: "production",
-    status: "building",
-    duration: "0s",
-    deployedBy: "AI Auto-Deploy",
-    time: "Just now",
-    version: "v1.0.0",
-    commit: "demo",
-    image: `acr.azurecr.io/${projectId}:v1.0.0`,
-    namespace: namespaceForProject(projectId),
-    liveUrl: liveUrlForProject(projectId),
-  };
+export interface TerminalLine {
+  text: string;
+  type: "command" | "info" | "success" | "warning" | "error" | "blank";
 }
 
 export function createSimulatedDeploymentLines(repo = "acme/web-app"): TerminalLine[] {
@@ -192,34 +75,15 @@ export function createSimulatedDeploymentLines(repo = "acme/web-app"): TerminalL
   ];
 }
 
-export function createSimulatedSteps() {
-  return deploymentSteps.map((step) => ({ ...step, status: "completed" as const }));
-}
-
-export function createLiveLogLine(index: number, pod = `${DEFAULT_PROJECT_ID}-7d4f`) {
-  const messages = [
-    "GET /api/v1/deployments 200 23ms",
-    "Health probe passed on /readyz",
-    "Pulled secret project-secrets from namespace cache",
-    "HPA recommendation stable at 4 replicas",
-    "Ingress controller synced TLS certificate",
-    "POST /api/v1/deploy 201 156ms",
-    "RBAC check passed for role=project-admin",
-  ];
-  const levels = ["INFO", "INFO", "DEBUG", "INFO", "INFO", "INFO", "DEBUG"] as const;
-  const messageIndex = index % messages.length;
-  const timestamp = new Date().toLocaleTimeString("en-US", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-
-  return {
-    id: `fallback-log-${Date.now()}-${index}`,
-    timestamp,
-    level: levels[messageIndex],
-    pod,
-    message: messages[messageIndex],
-  };
-}
+export const deploymentStageLabels = [
+  "Connecting Repository",
+  "Cloning Source Code",
+  "AI Code Analysis",
+  "Installing Dependencies",
+  "Building Application",
+  "Generating Infrastructure",
+  "Provisioning Cloud Resources",
+  "Deploying Containers",
+  "Health Check Verification",
+  "Deployment Successful",
+];

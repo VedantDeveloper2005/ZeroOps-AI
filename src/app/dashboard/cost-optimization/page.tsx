@@ -2,7 +2,60 @@
 
 import { motion } from "framer-motion";
 import { DollarSign, TrendingDown, AlertTriangle } from "lucide-react";
-import { costRecommendations, idleResources, overprovisionedPods, generateMetricData } from "@/lib/mock-data";
+interface MetricPoint {
+  time: string;
+  value: number;
+}
+
+function generateMetricData(points: number, min: number, max: number, trend: "up" | "down" | "stable" = "stable"): MetricPoint[] {
+  const data: MetricPoint[] = [];
+  let current = (min + max) / 2;
+  const pseudoRandom = (seed: number) => {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  };
+  for (let i = 0; i < points; i++) {
+    const seed = i + min + max + (trend === "up" ? 1 : trend === "down" ? 2 : 3);
+    const noise = (pseudoRandom(seed) - 0.5) * (max - min) * 0.3;
+    const trendBias = trend === "up" ? 0.5 : trend === "down" ? -0.5 : 0;
+    current = Math.max(min, Math.min(max, current + noise + trendBias));
+    const hour = Math.floor(i / (points / 24));
+    data.push({
+      time: `${String(hour).padStart(2, "0")}:${String((i * 60 / points * 24) % 60 | 0).padStart(2, "0")}`,
+      value: Math.round(current * 10) / 10,
+    });
+  }
+  return data;
+}
+
+interface CostRecommendation {
+  id: string;
+  title: string;
+  description: string;
+  savings: string;
+  type: "rightsize" | "idle" | "reserved" | "spot" | "consolidate";
+  impact: "high" | "medium" | "low";
+}
+
+const costRecommendations: CostRecommendation[] = [
+  { id: "cost-001", title: "Right-size api-gateway", description: "Reduce CPU limit 500m→200m based on 30-day usage analysis", savings: "$18/mo", type: "rightsize", impact: "medium" },
+  { id: "cost-002", title: "Enable Spot Instances for Staging", description: "Switch staging cluster nodes to spot instances for non-critical workloads", savings: "$45/mo", type: "spot", impact: "high" },
+  { id: "cost-003", title: "Consolidate Idle Staging Pods", description: "3 pods in staging haven't received traffic in 72 hours", savings: "$22/mo", type: "idle", impact: "medium" },
+  { id: "cost-004", title: "Reserved Pricing for Production", description: "Switch to 1-year reserved instances for stable production workloads", savings: "$42/mo", type: "reserved", impact: "high" },
+  { id: "cost-005", title: "Optimize Container Images", description: "Multi-stage builds could reduce image sizes by 60%, saving on registry storage", savings: "$8/mo", type: "consolidate", impact: "low" },
+];
+
+const idleResources = [
+  { name: "staging-api", type: "Pod", lastActive: "72h ago", allocatedCpu: "500m", allocatedMemory: "512Mi", suggestedAction: "Scale to 0" },
+  { name: "test-worker-2", type: "Pod", lastActive: "48h ago", allocatedCpu: "250m", allocatedMemory: "256Mi", suggestedAction: "Scale to 0" },
+  { name: "dev-cache", type: "Pod", lastActive: "5 days ago", allocatedCpu: "100m", allocatedMemory: "128Mi", suggestedAction: "Delete" },
+];
+
+const overprovisionedPods = [
+  { pod: "api-gateway", allocatedCpu: "500m", usedCpu: "89m", allocatedMemory: "512Mi", usedMemory: "156Mi", savings: "$12/mo" },
+  { pod: "ml-pipeline", allocatedCpu: "1000m", usedCpu: "234m", allocatedMemory: "2Gi", usedMemory: "890Mi", savings: "$28/mo" },
+  { pod: "notification-svc", allocatedCpu: "250m", usedCpu: "45m", allocatedMemory: "256Mi", usedMemory: "67Mi", savings: "$6/mo" },
+];
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { useNotifications } from "@/lib/NotificationContext";

@@ -9,8 +9,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function SignupPage() {
-  const { signup } = useAuth();
+  const { signup, loginWithGitHub } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
+  const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -145,7 +146,22 @@ export default function SignupPage() {
           {/* Social login buttons */}
           <div className="grid grid-cols-2 gap-4 w-full">
             <SocialButton icon={ChromeIcon} label="Google" />
-            <SocialButton icon={GithubIcon} label="GitHub" />
+            <button
+              type="button"
+              onClick={() => {
+                setIsGitHubRedirecting(true);
+                loginWithGitHub();
+              }}
+              disabled={isGitHubRedirecting}
+              className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
+            >
+              {isGitHubRedirecting ? (
+                <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <GithubIcon size={18} />
+              )}
+              <span className="text-sm">{isGitHubRedirecting ? "Redirecting..." : "GitHub"}</span>
+            </button>
           </div>
 
           {/* Divider */}

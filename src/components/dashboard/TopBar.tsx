@@ -154,7 +154,7 @@ export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
                             {n.message}
                           </p>
                           <span className="text-[9px] text-foreground-muted/60 mt-1 block">
-                            {n.timestamp}
+                            {n.created_at ? new Date(n.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ""}
                           </span>
                         </div>
                       </div>

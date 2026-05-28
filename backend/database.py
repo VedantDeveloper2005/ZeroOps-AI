@@ -95,7 +95,10 @@ async def init_db():
             await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables initialized successfully.")
             database_available = True
-            return True
+
+        # Run schema migrations for existing tables
+        await run_migrations()
+        return True
     except Exception as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "3d000" in error_msg:
@@ -120,7 +123,10 @@ async def init_db():
                     await conn.run_sync(Base.metadata.create_all)
                     logger.info("Database tables initialized successfully after database creation.")
                     database_available = True
-                    return True
+
+                # Run schema migrations for existing tables
+                await run_migrations()
+                return True
             except Exception as create_err:
                 logger.error(f"Auto-creation of database 'zeroops' failed: {create_err}")
                 
@@ -128,3 +134,37 @@ async def init_db():
         logger.warning("FastAPI backend starting in fallback mock mode. DB operations will be unavailable.")
         database_available = False
         return False
+
+
+async def run_migrations():
+    """Run idempotent schema migrations using ALTER TABLE ADD COLUMN IF NOT EXISTS.
+    Safe to run on every startup — only adds columns that don't already exist.
+    This handles the case where create_all created the initial table but new columns
+    were added to the SQLAlchemy model after deployment."""
+    if not database_available or async_engine is None:
+        return
+
+    from sqlalchemy import text
+
+    migration_statements = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_id TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_username TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_avatar_url TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_access_token_encrypted TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN DEFAULT FALSE",
+        # Partial unique index for github_id (only non-null values)
+        """DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_users_github_id_unique') THEN
+                CREATE UNIQUE INDEX ix_users_github_id_unique ON users(github_id) WHERE github_id IS NOT NULL;
+            END IF;
+        END $$""",
+    ]
+
+    try:
+        async with async_engine.begin() as conn:
+            for stmt in migration_statements:
+                await conn.execute(text(stmt))
+        logger.info("Schema migrations completed successfully (GitHub OAuth columns).")
+    except Exception as e:
+        logger.warning(f"Schema migration encountered an issue (may be non-critical): {e}")
+

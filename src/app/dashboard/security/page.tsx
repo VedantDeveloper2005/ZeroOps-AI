@@ -3,7 +3,40 @@
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { Shield, Lock, Eye, ShieldCheck, AlertTriangle, Search } from "lucide-react";
-import { securityThreats, blockedIPs, complianceItems } from "@/lib/mock-data";
+interface SecurityThreat {
+  id: string;
+  type: string;
+  severity: "critical" | "high" | "medium" | "low";
+  source: string;
+  timestamp: string;
+  status: "blocked" | "detected" | "resolved" | "investigating";
+  description: string;
+}
+
+const securityThreats: SecurityThreat[] = [
+  { id: "threat-001", type: "DDoS Attempt", severity: "critical", source: "45.33.21.x", timestamp: "2 min ago", status: "blocked", description: "Large-scale distributed denial of service attempt detected and mitigated" },
+  { id: "threat-002", type: "SQL Injection", severity: "high", source: "192.168.1.45", timestamp: "15 min ago", status: "blocked", description: "SQL injection attempt on /api/users endpoint" },
+  { id: "threat-003", type: "Brute Force", severity: "medium", source: "103.42.89.x", timestamp: "1 hour ago", status: "blocked", description: "Multiple failed authentication attempts detected" },
+  { id: "threat-004", type: "XSS Attempt", severity: "medium", source: "78.92.13.x", timestamp: "2 hours ago", status: "resolved", description: "Cross-site scripting attempt in comment field" },
+  { id: "threat-005", type: "Port Scan", severity: "low", source: "212.47.xx.x", timestamp: "4 hours ago", status: "detected", description: "Systematic port scanning activity from external source" },
+  { id: "threat-006", type: "Suspicious API Call", severity: "high", source: "Internal", timestamp: "6 hours ago", status: "investigating", description: "Unusual API call pattern from service account" },
+];
+
+const blockedIPs = [
+  { ip: "45.33.21.x", country: "Unknown", attacks: 1247, lastBlocked: "2 min ago" },
+  { ip: "192.168.1.45", country: "US", attacks: 89, lastBlocked: "15 min ago" },
+  { ip: "103.42.89.x", country: "CN", attacks: 456, lastBlocked: "1 hour ago" },
+  { ip: "78.92.13.x", country: "RU", attacks: 23, lastBlocked: "2 hours ago" },
+  { ip: "212.47.xx.x", country: "FR", attacks: 12, lastBlocked: "4 hours ago" },
+];
+
+const complianceItems = [
+  { name: "SOC 2 Type II", status: "compliant" as const, progress: 100, lastAudit: "2025-12-15" },
+  { name: "HIPAA", status: "in-progress" as const, progress: 78, lastAudit: "2025-11-20" },
+  { name: "GDPR", status: "compliant" as const, progress: 100, lastAudit: "2026-01-10" },
+  { name: "ISO 27001", status: "in-progress" as const, progress: 65, lastAudit: "2025-10-05" },
+];
+
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { useNotifications } from "@/lib/NotificationContext";
 import { DEFAULT_PROJECT_ID } from "@/lib/demo-runtime";
@@ -60,7 +93,9 @@ export default function SecurityPage() {
       addNotification({
         title: "Security Scan Completed",
         message: "Full compliance audit and key vault check completed. AKS namespace isolation is verified.",
-        type: "success"
+        type: "success",
+        category: "security",
+        action_url: "/dashboard/security"
       });
       
       // Refresh state

@@ -205,7 +205,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* User profile */}
-      <div className="border-t border-border p-3">
+      <Link href="/dashboard/profile" className="border-t border-border p-3 block hover:bg-card/40 transition-colors">
         <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-sm font-bold text-foreground flex-shrink-0 relative">
             {initials}
@@ -225,7 +225,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           </AnimatePresence>
         </div>
-      </div>
+      </Link>
     </motion.aside>
   );
 }

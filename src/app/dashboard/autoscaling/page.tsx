@@ -2,7 +2,41 @@
 
 import { motion } from "framer-motion";
 import { ArrowUp, ArrowDown, Cpu, HardDrive, Brain, Sliders } from "lucide-react";
-import { scalingHistory, trafficMetrics } from "@/lib/mock-data";
+interface MetricPoint {
+  time: string;
+  value: number;
+}
+
+function generateMetricData(points: number, min: number, max: number, trend: "up" | "down" | "stable" = "stable"): MetricPoint[] {
+  const data: MetricPoint[] = [];
+  let current = (min + max) / 2;
+  const pseudoRandom = (seed: number) => {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  };
+  for (let i = 0; i < points; i++) {
+    const seed = i + min + max + (trend === "up" ? 1 : trend === "down" ? 2 : 3);
+    const noise = (pseudoRandom(seed) - 0.5) * (max - min) * 0.3;
+    const trendBias = trend === "up" ? 0.5 : trend === "down" ? -0.5 : 0;
+    current = Math.max(min, Math.min(max, current + noise + trendBias));
+    const hour = Math.floor(i / (points / 24));
+    data.push({
+      time: `${String(hour).padStart(2, "0")}:${String((i * 60 / points * 24) % 60 | 0).padStart(2, "0")}`,
+      value: Math.round(current * 10) / 10,
+    });
+  }
+  return data;
+}
+
+const trafficMetrics = generateMetricData(48, 200, 1400, "up");
+
+const scalingHistory = [
+  { time: "09:00", event: "Scale Up", service: "web-app", from: 2, to: 4, trigger: "CPU > 75%" },
+  { time: "08:30", event: "Scale Up", service: "api-gateway", from: 3, to: 5, trigger: "AI Prediction" },
+  { time: "07:45", event: "Scale Down", service: "ml-pipeline", from: 4, to: 2, trigger: "Low Traffic" },
+  { time: "06:00", event: "Scale Up", service: "payments-service", from: 2, to: 3, trigger: "Queue Length" },
+  { time: "03:00", event: "Scale Down", service: "web-app", from: 4, to: 2, trigger: "Off-Peak" },
+];
 import { AreaChart } from "@/components/ui/AreaChart";
 import { useCallback, useEffect, useState } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -72,6 +106,8 @@ export default function AutoscalingPage() {
         title: "Manual Scaling Complete",
         message: `Scaled web-app replicas: ${hpa.currentReplicas} → ${replicas}.`,
         type: "success",
+        category: "scaling",
+        action_url: "/dashboard/autoscaling"
       });
       fetchHPAStatus();
     } catch (err) {
@@ -97,6 +133,8 @@ export default function AutoscalingPage() {
         title: "AI Autoscale Tuned",
         message: `Applied autoscale recommendation: ${text}`,
         type: "success",
+        category: "scaling",
+        action_url: "/dashboard/autoscaling"
       });
       fetchHPAStatus();
     } catch (err) {

@@ -6,14 +6,17 @@ import { TopBar } from "@/components/dashboard/TopBar";
 import { SystemHealthRibbon } from "@/components/dashboard/SystemHealthRibbon";
 import { AIActionFeed } from "@/components/dashboard/AIActionFeed";
 import { motion, AnimatePresence } from "framer-motion";
+import { useNotifications } from "@/lib/NotificationContext";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [feedOpen, setFeedOpen] = useState(false);
+  const { hasDeployed } = useNotifications();
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
-      <SystemHealthRibbon />
+      {/* Only show system health ribbon after user has deployed */}
+      {hasDeployed && <SystemHealthRibbon />}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -32,7 +35,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </motion.div>
               </AnimatePresence>
             </main>
-            <AIActionFeed isOpen={feedOpen} onClose={() => setFeedOpen(false)} />
+            {/* Only show AI action feed after deployment */}
+            {hasDeployed && <AIActionFeed isOpen={feedOpen} onClose={() => setFeedOpen(false)} />}
           </div>
         </div>
       </div>
