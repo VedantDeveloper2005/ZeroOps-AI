@@ -98,10 +98,6 @@ export default function LogsPage() {
   if (!hasDeployed) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Logs</h1>
-          <p className="text-foreground-muted text-sm mt-1">Real-time log stream from all pods</p>
-        </div>
         <LockedView featureName="Real-Time Logs" />
       </div>
     );
@@ -197,82 +193,76 @@ export default function LogsPage() {
 
   return (
     <div className="space-y-4 h-full flex flex-col">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Logs</h1>
-          <p className="text-foreground-muted text-sm mt-1">Real-time log stream from all pods</p>
-        </div>
-      </div>
-
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="glass-subtle rounded-xl px-4 py-2 flex items-center gap-2 flex-1 max-w-md">
+        <div className="bg-card border border-border/80 rounded-xl px-4 py-2 flex items-center gap-2 flex-1 max-w-md shadow-sm">
           <Search size={16} className="text-foreground-muted" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter logs..."
-            className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full"
+            placeholder="Search stream / filter logs..."
+            className="bg-transparent border-none outline-none text-xs text-foreground placeholder:text-foreground-muted w-full font-semibold"
           />
         </div>
+        
         <select
           value={selectedPod}
           onChange={(e) => setSelectedPod(e.target.value)}
-          className="glass-subtle rounded-xl px-3 py-2 text-sm text-foreground bg-background border border-border"
+          className="rounded-xl px-3 py-2 text-xs font-semibold text-foreground bg-card border border-border/80 shadow-sm cursor-pointer outline-none focus:ring-1 focus:ring-primary"
         >
-          <option value="all" className="bg-background text-foreground">
-            All Pods
-          </option>
+          <option value="all">All Pods</option>
           {uniquePods.map((p) => (
-            <option key={p} value={p} className="bg-background text-foreground">
-              {p}
-            </option>
+            <option key={p} value={p}>{p}</option>
           ))}
         </select>
-        <div className="flex gap-1">
-          {levels.map((l) => (
-            <button
-              key={l}
-              onClick={() => toggleLevel(l)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                activeLevels.has(l) ? levelColor[l] : "text-foreground-muted/30 bg-card/30"
-              }`}
-            >
-              {l}
-            </button>
-          ))}
+
+        <div className="flex gap-1.5 bg-background-secondary p-0.5 rounded-lg border border-border/50">
+          {levels.map((l) => {
+            const isActive = activeLevels.has(l);
+            return (
+              <button
+                key={l}
+                onClick={() => toggleLevel(l)}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition select-none cursor-pointer ${
+                  isActive ? levelColor[l] + " shadow-sm border border-border/40 font-bold" : "text-foreground-muted hover:text-foreground"
+                }`}
+              >
+                {l}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Log viewer */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass rounded-xl overflow-hidden flex-1">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-border rounded-xl overflow-hidden flex-1 shadow-sm">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background-secondary">
           <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span className="text-xs font-mono text-foreground-muted">Live stream — {filtered.length} entries</span>
+          <span className="text-[10px] uppercase font-bold text-foreground-muted font-mono tracking-wider">Live stream — {filtered.length} entries</span>
         </div>
         <div
           ref={scrollRef}
-          className="p-4 font-mono text-xs leading-7 overflow-y-auto no-scrollbar bg-black/20"
+          className="p-4 font-mono text-[11px] leading-7 overflow-y-auto no-scrollbar bg-background-secondary/40"
           style={{ maxHeight: "calc(100vh - 320px)" }}
         >
           {filtered.map((log) => (
-            <div key={log.id} className="flex gap-3 hover:bg-card/30 px-2 py-0.5 rounded">
-              <span className="text-foreground-muted w-28 flex-shrink-0">{log.timestamp}</span>
+            <div key={log.id} className="flex gap-3 hover:bg-card/40 px-2 py-0.5 rounded border border-transparent hover:border-border/20 transition-colors">
+              <span className="text-foreground-muted w-24 flex-shrink-0 font-bold">{log.timestamp}</span>
               <span
-                className={`w-14 text-center rounded text-[10px] font-semibold py-0.5 ${levelColor[log.level]}`}
+                className={`w-14 text-center rounded text-[9px] font-bold py-0.5 shrink-0 ${levelColor[log.level]}`}
               >
                 {log.level}
               </span>
-              <span className="text-foreground-muted w-40 truncate flex-shrink-0">{log.pod}</span>
+              <span className="text-foreground-muted w-36 truncate flex-shrink-0 font-bold">{log.pod}</span>
               <span
-                className={
+                className={`truncate ${
                   log.level === "ERROR"
                     ? "text-danger"
                     : log.level === "WARN"
                     ? "text-warning"
                     : "text-foreground"
-                }
+                }`}
               >
                 {log.message}
               </span>

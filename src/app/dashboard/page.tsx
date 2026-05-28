@@ -56,8 +56,8 @@ export default function DashboardHome() {
   if (contextLoading || loading || !hasDeployed) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
-        <p className="text-white/50 text-sm">Loading dashboard...</p>
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-foreground-muted text-sm font-medium">Loading dashboard...</p>
       </div>
     );
   }
@@ -72,16 +72,22 @@ export default function DashboardHome() {
   ] : [];
 
   const statusColors: Record<string, string> = {
-    running: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-    building: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-    deploying: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-    failed: "bg-red-500/20 text-red-400 border-red-500/30",
-    stopped: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
-    queued: "bg-purple-500/20 text-purple-400 border-purple-500/30",
+    running: "bg-success/10 text-success border-success/20",
+    building: "bg-warning/10 text-warning border-warning/20",
+    deploying: "bg-primary/10 text-primary border-primary/20",
+    failed: "bg-danger/10 text-danger border-danger/20",
+    stopped: "bg-foreground-muted/10 text-foreground-muted border-border",
+    queued: "bg-accent/10 text-accent border-accent/20",
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* Dynamic Title for Overview (Overview doesn't render SubPageHeader, so we show page header here) */}
+      <div className="mb-4">
+        <h1 className="text-xl font-bold tracking-tight text-foreground">System Overview</h1>
+        <p className="mt-1 text-xs text-foreground-muted">High-level operational stats, recent deployments, and autonomic tuning recommendations.</p>
+      </div>
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {dashboardCards.map((stat, i) => {
@@ -89,24 +95,24 @@ export default function DashboardHome() {
           return (
             <motion.div
               key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.06, duration: 0.4 }}
-              className="relative overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.03] backdrop-blur-sm p-4 hover:bg-white/[0.05] transition-all duration-300 group"
+              transition={{ delay: i * 0.04, duration: 0.3 }}
+              className="relative overflow-hidden rounded-xl border border-border bg-card p-4 hover:bg-card-hover transition-all duration-200 group shadow-sm"
             >
               <div className="flex items-start justify-between mb-3">
-                <div className={`p-2 rounded-lg bg-${stat.color}-500/10`}>
-                  <IconComponent className={`w-4 h-4 text-${stat.color}-400`} />
+                <div className={`p-1.5 rounded-md bg-primary-subtle`}>
+                  <IconComponent className={`w-4 h-4 text-primary`} />
                 </div>
                 {stat.trend === "up" && stat.color !== "red" && (
-                  <TrendingUp className="w-3 h-3 text-emerald-400" />
+                  <TrendingUp className="w-3.5 h-3.5 text-success" />
                 )}
                 {stat.trend === "up" && stat.color === "red" && (
-                  <TrendingDown className="w-3 h-3 text-red-400" />
+                  <TrendingDown className="w-3.5 h-3.5 text-danger" />
                 )}
               </div>
-              <div className="text-2xl font-bold text-white mb-1">{stat.value}</div>
-              <div className="text-xs text-white/40">{stat.label}</div>
+              <div className="text-2xl font-bold text-foreground mb-1">{stat.value}</div>
+              <div className="text-xs text-foreground-muted">{stat.label}</div>
             </motion.div>
           );
         })}
@@ -116,54 +122,54 @@ export default function DashboardHome() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Deployments */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="rounded-xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-sm overflow-hidden"
+          transition={{ delay: 0.2 }}
+          className="rounded-xl border border-border bg-card overflow-hidden shadow-sm"
         >
-          <div className="flex items-center justify-between p-5 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">Recent Deployments</h2>
+              <Activity className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-bold text-foreground">Recent Deployments</h2>
             </div>
             <button
               onClick={() => router.push("/dashboard/deployments")}
-              className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
+              className="text-xs text-primary hover:text-primary-hover font-semibold flex items-center gap-1 transition-colors"
             >
-              View All <ArrowUpRight className="w-3 h-3" />
+              View All <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {recentDeps.length === 0 ? (
             <div className="p-8 text-center">
-              <FolderGit2 className="w-8 h-8 text-white/20 mx-auto mb-3" />
-              <p className="text-sm text-white/40">No deployments yet</p>
+              <FolderGit2 className="w-8 h-8 text-foreground-muted/30 mx-auto mb-3" />
+              <p className="text-sm text-foreground-muted">No deployments yet</p>
             </div>
           ) : (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-border/60">
               {recentDeps.map((dep) => (
                 <div
                   key={dep.id}
-                  className="flex items-center justify-between p-4 hover:bg-white/[0.02] transition-colors cursor-pointer"
+                  className="flex items-center justify-between p-4 hover:bg-card-hover/40 transition-colors cursor-pointer"
                   onClick={() => router.push("/dashboard/deployments")}
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-2 h-2 rounded-full ${
-                      dep.status === "running" ? "bg-emerald-400" :
-                      dep.status === "failed" ? "bg-red-400" :
-                      dep.status === "building" ? "bg-amber-400 animate-pulse" :
-                      "bg-zinc-400"
+                      dep.status === "running" ? "bg-success" :
+                      dep.status === "failed" ? "bg-danger" :
+                      dep.status === "building" ? "bg-warning animate-pulse" :
+                      "bg-foreground-muted"
                     }`} />
                     <div>
-                      <p className="text-sm font-medium text-white">{dep.project_name || "Project"}</p>
-                      <p className="text-xs text-white/40">{dep.environment} • {dep.branch}</p>
+                      <p className="text-sm font-semibold text-foreground">{dep.project_name || "Project"}</p>
+                      <p className="text-xs text-foreground-muted">{dep.environment} • {dep.branch}</p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <span className={`text-xs px-2 py-1 rounded-full border ${statusColors[dep.status] || statusColors.stopped}`}>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusColors[dep.status] || statusColors.stopped}`}>
                       {dep.status}
                     </span>
-                    <p className="text-xs text-white/30 mt-1">{dep.duration || "—"}</p>
+                    <p className="text-[10px] text-foreground-muted mt-1">{dep.duration || "—"}</p>
                   </div>
                 </div>
               ))}
@@ -173,55 +179,55 @@ export default function DashboardHome() {
 
         {/* AI Recommendations */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="rounded-xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-sm overflow-hidden"
+          transition={{ delay: 0.25 }}
+          className="rounded-xl border border-border bg-card overflow-hidden shadow-sm"
         >
-          <div className="flex items-center justify-between p-5 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center gap-2">
-              <Brain className="w-4 h-4 text-purple-400" />
-              <h2 className="text-sm font-semibold text-white">AI Recommendations</h2>
+              <Brain className="w-4 h-4 text-accent" />
+              <h2 className="text-sm font-bold text-foreground">AI Recommendations</h2>
             </div>
           </div>
 
           {aiActions.length === 0 ? (
             <div className="p-8 text-center">
-              <Brain className="w-8 h-8 text-white/20 mx-auto mb-3" />
-              <p className="text-sm text-white/40">No pending recommendations</p>
-              <p className="text-xs text-white/25 mt-1">AI will generate insights after deployments</p>
+              <Brain className="w-8 h-8 text-foreground-muted/30 mx-auto mb-3" />
+              <p className="text-sm text-foreground-muted">No pending recommendations</p>
+              <p className="text-xs text-foreground-muted/70 mt-1">AI will generate insights after deployments</p>
             </div>
           ) : (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-border/60">
               {aiActions.map((action) => (
-                <div key={action.id} className="flex items-start gap-3 p-4 hover:bg-white/[0.02] transition-colors">
-                  <div className={`p-1.5 rounded-lg mt-0.5 ${
-                    action.severity === "critical" ? "bg-red-500/10" :
-                    action.severity === "warning" ? "bg-amber-500/10" :
-                    action.severity === "success" ? "bg-emerald-500/10" :
-                    "bg-cyan-500/10"
+                <div key={action.id} className="flex items-start gap-3 p-4 hover:bg-card-hover/40 transition-colors">
+                  <div className={`p-1.5 rounded-md mt-0.5 ${
+                    action.severity === "critical" ? "bg-danger/10" :
+                    action.severity === "warning" ? "bg-warning/10" :
+                    action.severity === "success" ? "bg-success/10" :
+                    "bg-primary/10"
                   }`}>
                     <AlertTriangle className={`w-3.5 h-3.5 ${
-                      action.severity === "critical" ? "text-red-400" :
-                      action.severity === "warning" ? "text-amber-400" :
-                      action.severity === "success" ? "text-emerald-400" :
-                      "text-cyan-400"
+                      action.severity === "critical" ? "text-danger" :
+                      action.severity === "warning" ? "text-warning" :
+                      action.severity === "success" ? "text-success" :
+                      "text-primary"
                     }`} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white/80 line-clamp-2">{action.message}</p>
-                    <p className="text-xs text-white/30 mt-1">{action.type}</p>
+                    <p className="text-xs text-foreground/80 leading-relaxed">{action.message}</p>
+                    <p className="text-[10px] text-foreground-muted mt-1 uppercase font-semibold">{action.type}</p>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
                     <button
                       onClick={() => api.applyAIAction(action.id)}
-                      className="text-xs px-2.5 py-1 rounded-md bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
+                      className="text-[10px] font-bold px-2.5 py-1 rounded bg-primary text-white hover:bg-primary-hover transition-colors"
                     >
                       Apply
                     </button>
                     <button
                       onClick={() => api.dismissAIAction(action.id)}
-                      className="text-xs px-2.5 py-1 rounded-md bg-white/5 text-white/40 hover:bg-white/10 transition-colors"
+                      className="text-[10px] font-bold px-2.5 py-1 rounded bg-background-secondary text-foreground-muted hover:bg-card-hover transition-colors border border-border"
                     >
                       Dismiss
                     </button>

@@ -15,48 +15,18 @@ import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
 
 const lockedRoutes = new Set([
-  "/dashboard/cost-optimization",
-  "/dashboard/security",
-  "/dashboard/monitoring",
-  "/dashboard/autoscaling",
-  "/dashboard/infrastructure",
-  "/dashboard/logs",
-  "/dashboard/incidents"
+  "/dashboard/operations", // Operations category is locked if no deployment
 ]);
-
 
 const navSections = [
   {
-    label: "CORE",
+    label: "SYSTEM",
     items: [
-      { name: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
-      { name: "Repositories", icon: GitBranch, href: "/dashboard/repositories" },
-      { name: "Deployments", icon: Rocket, href: "/dashboard/deployments" },
-    ],
-  },
-  {
-    label: "INTELLIGENCE",
-    items: [
-      { name: "AI Analysis", icon: Brain, href: "/dashboard/ai-analysis" },
-      { name: "Cost Optimization", icon: DollarSign, href: "/dashboard/cost-optimization" },
-    ],
-  },
-  {
-    label: "OPERATIONS",
-    items: [
-      { name: "Security Center", icon: Shield, href: "/dashboard/security" },
-      { name: "Monitoring", icon: Activity, href: "/dashboard/monitoring" },
-      { name: "Autoscaling", icon: TrendingUp, href: "/dashboard/autoscaling" },
-      { name: "Infrastructure", icon: Network, href: "/dashboard/infrastructure" },
-      { name: "Logs", icon: Terminal, href: "/dashboard/logs" },
-    ],
-  },
-  {
-    label: "PLATFORM",
-    items: [
-      { name: "Incidents", icon: AlertTriangle, href: "/dashboard/incidents" },
-      { name: "Billing", icon: CreditCard, href: "/dashboard/billing" },
-      { name: "Settings", icon: Settings, href: "/dashboard/settings" },
+      { name: "Overview", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
+      { name: "App Delivery", icon: GitBranch, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories", "/dashboard/deployments"] },
+      { name: "Intelligence", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis", "/dashboard/security", "/dashboard/cost-optimization"] },
+      { name: "Operations", icon: Activity, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring", "/dashboard/infrastructure", "/dashboard/autoscaling", "/dashboard/logs", "/dashboard/incidents"], isLockedIfNoDeploy: true },
+      { name: "Preferences", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings", "/dashboard/billing", "/dashboard/profile"] },
     ],
   },
 ];
@@ -90,9 +60,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     ? user.email.split("@")[0]
     : "Vedant S.";
 
-  const isActive = (href: string) => {
-    if (href === "/dashboard") return pathname === "/dashboard";
-    return pathname.startsWith(href);
+  const isActive = (activePaths: string[]) => {
+    return activePaths.some(path => {
+      if (path === "/dashboard") return pathname === "/dashboard";
+      return pathname.startsWith(path);
+    });
   };
 
   return (
@@ -140,9 +112,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               )}
             </AnimatePresence>
             {section.items.map((item) => {
-              const active = isActive(item.href);
+              const active = isActive(item.activePaths);
               const Icon = item.icon;
-              const isLocked = !hasDeployed && lockedRoutes.has(item.href);
+              const isLocked = !hasDeployed && item.isLockedIfNoDeploy;
               return (
                 <Link
                   key={item.href}

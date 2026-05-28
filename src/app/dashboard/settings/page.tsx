@@ -112,13 +112,6 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Settings & Configuration</h1>
-        <p className="text-foreground-muted text-sm mt-1">
-          Configure AI autonomics, integrate cloud providers, and manage API authorization credentials.
-        </p>
-      </div>
-
       <div className="grid md:grid-cols-3 gap-6">
         {/* Left Column: AI Autonomics switches */}
         <div className="md:col-span-2 space-y-6">
@@ -126,17 +119,17 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            className="glass rounded-xl p-6"
+            className="bg-card border border-border rounded-xl p-6 shadow-sm"
           >
-            <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
-              <Shield size={20} className="text-primary" />
+            <h3 className="font-bold text-base text-foreground mb-2 flex items-center gap-2">
+              <Shield size={18} className="text-primary" />
               AI Autonomic Settings
             </h3>
             <p className="text-xs text-foreground-muted mb-6">
               Configure how much autonomous control the ZeroOps AI agent is allowed to execute on your Azure Kubernetes clusters.
             </p>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               {[
                 {
                   key: "predictiveScaling" as const,
@@ -159,17 +152,17 @@ export default function SettingsPage() {
                   desc: "AI identifies OOM (Out Of Memory) crashes and auto-restarts pods with optimized memory thresholds.",
                 },
               ].map((item) => (
-                <div key={item.key} className="flex items-center justify-between p-4 rounded-lg bg-card/40 hover:bg-card/70 transition">
-                  <div className="space-y-1 pr-6">
-                    <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                    <p className="text-xs text-foreground-muted">{item.desc}</p>
+                <div key={item.key} className="flex items-center justify-between p-4 rounded-lg bg-background-secondary/50 hover:bg-card-hover/40 transition border border-border/40">
+                  <div className="space-y-0.5 pr-6">
+                    <p className="text-xs font-bold text-foreground">{item.title}</p>
+                    <p className="text-[10px] text-foreground-muted leading-relaxed">{item.desc}</p>
                   </div>
                   <button
                     onClick={() => handleToggle(item.key)}
-                    className={`w-11 h-6 rounded-full transition-all duration-300 relative cursor-pointer ${settings[item.key] ? "bg-primary" : "bg-card-hover border border-border"}`}
+                    className={`w-10 h-5.5 rounded-full transition-all duration-200 relative cursor-pointer flex-shrink-0 ${settings[item.key] ? "bg-primary" : "bg-card-hover border border-border"}`}
                   >
                     <div
-                      className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-all duration-300 ${settings[item.key] ? "right-1" : "left-1"}`}
+                      className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-all duration-200 ${settings[item.key] ? "right-1" : "left-1"}`}
                     />
                   </button>
                 </div>
@@ -181,29 +174,29 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="glass rounded-xl p-6"
+            transition={{ delay: 0.05 }}
+            className="bg-card border border-border rounded-xl p-6 shadow-sm"
           >
-            <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
-              <Link2 size={20} className="text-primary" />
-              Connected Provider integrations
+            <h3 className="font-bold text-base text-foreground mb-4 flex items-center gap-2">
+              <Link2 size={18} className="text-primary" />
+              Connected Provider Integrations
             </h3>
             
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {[
                 { name: "GitHub Integration", details: "Connected to GitHub Organization 'acme-corp'", status: "active", icon: "🐙" },
                 { name: "Microsoft Azure (AKS)", details: "Authorized subscription: 'Azure-Enterprise-AKS'", status: "active", icon: "☁️" },
                 { name: "Slack Notifications", details: "Send autonomous incident summaries to #ops-alerts", status: "inactive", icon: "💬" }
               ].map((prov) => (
-                <div key={prov.name} className="flex items-center justify-between p-3 rounded-lg bg-card/45">
+                <div key={prov.name} className="flex items-center justify-between p-3 rounded-lg bg-background-secondary/40 border border-border/40">
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl">{prov.icon}</span>
+                    <span className="text-xl">{prov.icon}</span>
                     <div>
-                      <p className="text-xs font-semibold text-foreground">{prov.name}</p>
+                      <p className="text-xs font-bold text-foreground">{prov.name}</p>
                       <p className="text-[10px] text-foreground-muted">{prov.details}</p>
                     </div>
                   </div>
-                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-medium ${prov.status === "active" ? "bg-success/15 text-success" : "bg-foreground-muted/10 text-foreground-muted"}`}>
+                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${prov.status === "active" ? "bg-success/15 text-success" : "bg-foreground-muted/10 text-foreground-muted"}`}>
                     {prov.status === "active" ? "Connected" : "Not Configured"}
                   </span>
                 </div>
@@ -215,11 +208,11 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="glass rounded-xl p-6 border border-warning/20"
+            transition={{ delay: 0.1 }}
+            className="bg-card border border-warning/30 rounded-xl p-6 shadow-sm"
           >
-            <h3 className="font-semibold text-lg mb-2 flex items-center gap-2 text-warning">
-              <RefreshCw size={20} className="text-warning animate-[spin_10s_linear_infinite]" />
+            <h3 className="font-bold text-base mb-2 flex items-center gap-2 text-warning">
+              <RefreshCw size={18} className="text-warning" />
               Developer Sandbox Tools
             </h3>
             <p className="text-xs text-foreground-muted mb-6">
@@ -234,7 +227,7 @@ export default function SettingsPage() {
                   window.location.href = "/dashboard";
                 }, 1000);
               }}
-              className="px-4 py-2.5 bg-warning hover:bg-warning/80 text-black rounded-lg text-xs font-semibold transition cursor-pointer"
+              className="px-4 py-2 bg-warning hover:bg-warning/85 text-black rounded-lg text-xs font-bold transition cursor-pointer shadow-sm"
             >
               Reset Onboarding State
             </button>
@@ -247,20 +240,20 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, x: 15 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.2 }}
-            className="glass rounded-xl p-5"
+            transition={{ delay: 0.1 }}
+            className="bg-card border border-border rounded-xl p-5 shadow-sm"
           >
-            <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
-              <Key size={16} className="text-primary" />
+            <h3 className="font-bold text-sm mb-2 flex items-center gap-2 text-foreground">
+              <Key size={14} className="text-primary" />
               CLI Access Tokens
             </h3>
-            <p className="text-[11px] text-foreground-muted mb-4">
+            <p className="text-[10px] text-foreground-muted mb-4 leading-normal">
               Use this key to authorize the ZeroOps CLI in your local terminal workspaces.
             </p>
 
             <div className="space-y-3">
               <div className="flex gap-2">
-                <div className="flex-1 bg-card border border-border rounded-lg px-3 py-2 flex items-center justify-between min-w-0">
+                <div className="flex-1 bg-background-secondary border border-border rounded-lg px-3 py-2 flex items-center justify-between min-w-0">
                   <span className="font-mono text-xs truncate select-none text-foreground-muted">
                     {apiKeyVisible ? apiKey : "••••••••••••••••••••••••••••••••••••"}
                   </span>
@@ -273,7 +266,7 @@ export default function SettingsPage() {
                 </div>
                 <button
                   onClick={copyApiKey}
-                  className="px-3 bg-primary hover:bg-primary-hover text-white text-xs font-semibold rounded-lg transition cursor-pointer"
+                  className="px-3 bg-primary hover:bg-primary-hover text-white text-xs font-bold rounded-lg transition cursor-pointer shadow-sm"
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>
@@ -281,7 +274,7 @@ export default function SettingsPage() {
               
               <button 
                 onClick={regenerateApiKey}
-                className="w-full py-2 border border-border hover:bg-card-hover text-foreground text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <RefreshCw size={12} />
                 Regenerate Access Key
@@ -293,11 +286,11 @@ export default function SettingsPage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="glass rounded-xl p-5"
+            transition={{ delay: 0.15 }}
+            className="bg-card border border-border rounded-xl p-5 shadow-sm"
           >
-            <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
-              <Bell size={16} className="text-primary" />
+            <h3 className="font-bold text-sm mb-3 flex items-center gap-2 text-foreground">
+              <Bell size={14} className="text-primary" />
               Alert Subscriptions
             </h3>
             
@@ -308,8 +301,8 @@ export default function SettingsPage() {
               ].map((alert) => (
                 <div key={alert.key} className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium text-foreground">{alert.label}</p>
-                    <p className="text-[10px] text-foreground-muted">{alert.desc}</p>
+                    <p className="font-bold text-foreground">{alert.label}</p>
+                    <p className="text-[10px] text-foreground-muted mt-0.5">{alert.desc}</p>
                   </div>
                   <input
                     type="checkbox"

@@ -49,10 +49,6 @@ export default function AutoscalingPage() {
   if (!hasDeployed) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Autoscaling</h1>
-          <p className="text-foreground-muted text-sm mt-1">AI-powered horizontal pod autoscaling</p>
-        </div>
         <LockedView featureName="Autoscaling & Replicas" />
       </div>
     );
@@ -145,54 +141,49 @@ export default function AutoscalingPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Autoscaling</h1>
-        <p className="text-foreground-muted text-sm mt-1">AI-powered horizontal pod autoscaling</p>
-      </div>
-
       {/* Current Pod Count + HPA */}
       <div className="grid md:grid-cols-2 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl p-6 text-center">
-          <p className="text-foreground-muted text-sm mb-2">Current Replicas</p>
-          <p className="text-6xl font-bold text-primary mb-4">{hpa.currentReplicas}</p>
-          <div className="flex items-center justify-center gap-2">
-            {Array.from({ length: hpa.maxReplicas }).map((_, i) => (
-              <motion.div
-                key={i}
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ delay: i * 0.05 }}
-                className={`w-4 h-4 rounded-full ${i < hpa.currentReplicas ? "bg-primary" : "bg-card border border-border"}`}
-                style={{
-                  filter: i < hpa.currentReplicas ? "drop-shadow(0 0 4px hsla(217,91%,60%,0.4))" : undefined,
-                }}
-              />
-            ))}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 text-center shadow-sm flex flex-col justify-between min-h-[220px]">
+          <div>
+            <p className="text-[10px] uppercase font-bold text-foreground-muted tracking-wider">Current Replicas</p>
+            <p className="text-6xl font-bold text-primary my-4">{hpa.currentReplicas}</p>
           </div>
-          <p className="text-xs text-foreground-muted mt-3">Min: {hpa.minReplicas} • Max: {hpa.maxReplicas}</p>
+          <div>
+            <div className="flex items-center justify-center gap-2.5 mb-3">
+              {Array.from({ length: hpa.maxReplicas }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ delay: i * 0.05 }}
+                  className={`w-3 h-3 rounded-full ${i < hpa.currentReplicas ? "bg-primary" : "bg-background-secondary border border-border"}`}
+                />
+              ))}
+            </div>
+            <p className="text-xs font-semibold text-foreground-muted">Min: {hpa.minReplicas} • Max: {hpa.maxReplicas}</p>
+          </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass rounded-xl p-6 space-y-4">
-          <h3 className="font-semibold">HPA Thresholds</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl p-6 space-y-4 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-2">HPA Thresholds</h3>
           {[
-            { label: "CPU", target: hpa.targetCPU, current: hpa.currentCPU, icon: Cpu, color: "#3b82f6" },
-            { label: "Memory", target: hpa.targetMemory, current: hpa.currentMemory, icon: HardDrive, color: "#8b5cf6" },
+            { label: "CPU Utilization", target: hpa.targetCPU, current: hpa.currentCPU, icon: Cpu, color: "bg-primary" },
+            { label: "Memory Usage", target: hpa.targetMemory, current: hpa.currentMemory, icon: HardDrive, color: "bg-accent" },
           ].map((m) => (
             <div key={m.label}>
-              <div className="flex items-center justify-between text-sm mb-1">
+              <div className="flex items-center justify-between text-xs font-semibold mb-1.5">
                 <span className="flex items-center gap-2 text-foreground-muted">
                   <m.icon size={14} />
                   {m.label}
                 </span>
                 <span className="text-foreground">{m.current}% / {m.target}%</span>
               </div>
-              <div className="h-2 bg-card rounded-full overflow-hidden relative">
+              <div className="h-2 bg-background-secondary rounded-full overflow-hidden relative border border-border/40">
                 <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${m.current}%` }}
                   transition={{ duration: 1 }}
-                  className="h-full rounded-full"
-                  style={{ backgroundColor: m.color }}
+                  className={`h-full rounded-full ${m.color}`}
                 />
                 <div className="absolute top-0 h-full w-0.5 bg-foreground/30" style={{ left: `${m.target}%` }} />
               </div>
@@ -202,15 +193,15 @@ export default function AutoscalingPage() {
       </div>
 
       {/* Traffic Prediction */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Traffic Prediction</h3>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+        <h3 className="text-sm font-bold text-foreground mb-4">Traffic Prediction & Scaling Capacity</h3>
         <AreaChart data={trafficMetrics} color="#3b82f6" height={200} />
       </motion.div>
 
       {/* Scaling History + Manual */}
       <div className="grid md:grid-cols-2 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4">Scaling History</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4">Scaling History</h3>
           <div className="space-y-3">
             {scalingHistory.map((event, i) => (
               <motion.div
@@ -218,70 +209,74 @@ export default function AutoscalingPage() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.4 + i * 0.08 }}
-                className="flex items-center gap-3 p-3 rounded-lg bg-card/50"
+                className="flex items-center gap-3 p-3 rounded-lg bg-background-secondary border border-border/50"
               >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${event.event.includes("Up") ? "bg-primary/10" : "bg-accent/10"}`}>
-                  {event.event.includes("Up") ? <ArrowUp size={16} className="text-primary" /> : <ArrowDown size={16} className="text-accent" />}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${event.event.includes("Up") ? "bg-primary/10" : "bg-accent/10"}`}>
+                  {event.event.includes("Up") ? <ArrowUp size={14} className="text-primary" /> : <ArrowDown size={14} className="text-accent" />}
                 </div>
-                <div className="flex-1">
-                  <p className="text-sm text-foreground">{event.service}: {event.from}→{event.to} pods</p>
-                  <p className="text-xs text-foreground-muted">{event.trigger}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-foreground truncate">{event.service}: {event.from}→{event.to} pods</p>
+                  <p className="text-[10px] text-foreground-muted mt-0.5">{event.trigger}</p>
                 </div>
-                <span className="text-xs text-foreground-muted">{event.time}</span>
+                <span className="text-[10px] font-semibold text-foreground-muted font-mono">{event.time}</span>
               </motion.div>
             ))}
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="space-y-4">
-          <div className="glass rounded-xl p-6">
-            <h3 className="font-semibold mb-4 flex items-center gap-2">
+          <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2">
               <Sliders size={16} />
-              Manual Scale
+              Manual Replica Override
             </h3>
-            <div className="flex items-center gap-4 mb-4">
+            <div className="flex items-center gap-4 mb-5">
               <input
                 type="range"
                 min={hpa.minReplicas}
                 max={hpa.maxReplicas}
                 value={replicas}
                 onChange={(e) => setReplicas(+e.target.value)}
-                className="flex-1 accent-primary"
+                className="flex-1 h-1.5 bg-background-secondary rounded-lg appearance-none cursor-pointer accent-primary border border-border/60"
               />
-              <span className="text-2xl font-bold text-primary w-8 text-center">{replicas}</span>
+              <span className="text-2xl font-bold text-primary w-8 text-center font-mono">{replicas}</span>
             </div>
             <button
               onClick={handleApplyManualScale}
               disabled={isScaling}
-              className="w-full py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover disabled:opacity-50 transition cursor-pointer"
+              className="w-full py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
-              {isScaling ? "Scaling..." : "Apply Scale"}
+              {isScaling ? "Applying..." : "Set Manual Scale Target"}
             </button>
           </div>
 
-          <div className="glass rounded-xl p-6">
-            <h3 className="font-semibold mb-3 flex items-center gap-2">
+          <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
               <Brain size={16} className="text-primary" />
               AI Recommendations
             </h3>
             <div className="space-y-3">
-              <div className="p-3 rounded-lg bg-card/50">
-                <p className="text-sm text-foreground">Increase max replicas to 15 during peak hours (9-11 AM)</p>
-                <button
-                  onClick={() => handleApplyRecommendation("Increase max replicas to 15 during peak hours", hpa.minReplicas, 15, hpa.targetCPU)}
-                  className="text-xs text-primary mt-2 font-medium cursor-pointer"
-                >
-                  Apply →
-                </button>
+              <div className="p-3 rounded-lg bg-background-secondary border border-border/50 flex flex-col justify-between">
+                <p className="text-xs font-semibold text-foreground leading-relaxed">Increase max replicas to 15 during peak hours (9-11 AM)</p>
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={() => handleApplyRecommendation("Increase max replicas to 15 during peak hours", hpa.minReplicas, 15, hpa.targetCPU)}
+                    className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                  >
+                    Apply Recommendation →
+                  </button>
+                </div>
               </div>
-              <div className="p-3 rounded-lg bg-card/50">
-                <p className="text-sm text-foreground">Optimize predictive scaling for web-app (target 60% CPU)</p>
-                <button
-                  onClick={() => handleApplyRecommendation("Optimize predictive scaling to 60% CPU target", hpa.minReplicas, hpa.maxReplicas, 60)}
-                  className="text-xs text-primary mt-2 font-medium cursor-pointer"
-                >
-                  Apply →
-                </button>
+              <div className="p-3 rounded-lg bg-background-secondary border border-border/50 flex flex-col justify-between">
+                <p className="text-xs font-semibold text-foreground leading-relaxed">Optimize predictive scaling for web-app (target 60% CPU)</p>
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={() => handleApplyRecommendation("Optimize predictive scaling to 60% CPU target", hpa.minReplicas, hpa.maxReplicas, 60)}
+                    className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                  >
+                    Apply Recommendation →
+                  </button>
+                </div>
               </div>
             </div>
           </div>

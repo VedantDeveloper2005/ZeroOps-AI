@@ -776,14 +776,10 @@ export default function RepositoriesPage() {
   // ════════════════════════════════════════════════
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Repositories</h1>
-          <p className="text-foreground-muted text-sm mt-1">Connected GitHub repositories managed by ZeroOps</p>
-        </div>
+      <div className="flex items-center justify-end">
         <button
           onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover transition-colors glow-blue cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover transition-colors shadow-sm cursor-pointer"
         >
           <Plus size={16} /> Connect Repository
         </button>
@@ -808,12 +804,12 @@ export default function RepositoriesPage() {
         ].map((s, i) => (
           <motion.div
             key={s.label}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.08 }}
-            className="glass rounded-xl p-4 flex items-center gap-3"
+            transition={{ delay: i * 0.04 }}
+            className="bg-card border border-border rounded-xl p-4 flex items-center gap-3 shadow-sm"
           >
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-lg bg-primary-subtle flex items-center justify-center">
               <s.icon size={18} className="text-primary" />
             </div>
             <div>
@@ -826,7 +822,7 @@ export default function RepositoriesPage() {
 
       {/* Search */}
       <div className="flex gap-3">
-        <div className="flex-1 glass-subtle rounded-xl px-4 py-2.5 flex items-center gap-2">
+        <div className="flex-1 bg-background-secondary border border-border/80 rounded-xl px-4 py-2.5 flex items-center gap-2">
           <Search size={16} className="text-foreground-muted" />
           <input
             type="text"
@@ -843,10 +839,10 @@ export default function RepositoriesPage() {
         {filtered.map((repo, i) => (
           <motion.div
             key={repo.id}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.08 }}
-            className="glass rounded-xl p-5 hover:bg-card-hover/50 transition-all group"
+            transition={{ delay: i * 0.04 }}
+            className="bg-card border border-border rounded-xl p-5 hover:bg-card-hover/40 transition-all group shadow-sm"
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
@@ -884,7 +880,7 @@ export default function RepositoriesPage() {
                 <button
                   key={action.label}
                   onClick={() => handleCardAction(action.label, repo)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium glass-subtle hover:bg-card-hover/80 text-foreground-muted hover:text-foreground transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-background-secondary border border-border/80 hover:bg-card-hover text-foreground-muted hover:text-foreground transition-colors cursor-pointer shadow-sm"
                 >
                   <action.icon size={14} />
                   {action.label}
@@ -897,11 +893,11 @@ export default function RepositoriesPage() {
 
       {/* Connect Repo Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
+            initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="glass max-w-md w-full p-6 rounded-xl border border-border shadow-2xl relative"
+            className="bg-card max-w-md w-full p-6 rounded-xl border border-border shadow-2xl relative"
           >
             <button
               onClick={() => setIsModalOpen(false)}

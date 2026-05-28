@@ -7,107 +7,108 @@
 
 @layer base {
   :root {
-    /* Light Theme Core Colors (HSL) */
-    --background: hsl(0, 0%, 98%);
-    --background-secondary: hsl(0, 0%, 95%);
-    --foreground: hsl(228, 15%, 10%);
-    --foreground-muted: hsl(228, 10%, 45%);
+    /* Light Theme Core Colors (macOS Pro Clean) */
+    --background: hsl(240, 15%, 98%);
+    --background-secondary: hsl(240, 10%, 96%);
+    --foreground: hsl(240, 10%, 12%);
+    --foreground-muted: hsl(240, 5%, 45%);
 
-    /* Primary - Electric Blue */
-    --primary: hsl(217, 91%, 60%);
-    --primary-hover: hsl(217, 91%, 55%);
-    --primary-glow: hsla(217, 91%, 60%, 0.3);
-    --primary-subtle: hsla(217, 91%, 60%, 0.1);
+    /* Primary - macOS Blue */
+    --primary: hsl(211, 100%, 50%);
+    --primary-hover: hsl(211, 100%, 45%);
+    --primary-glow: hsla(211, 100%, 50%, 0.15);
+    --primary-subtle: hsla(211, 100%, 50%, 0.06);
 
-    /* Accent - Purple */
-    --accent: hsl(265, 83%, 58%);
-    --accent-hover: hsl(265, 83%, 52%);
-    --accent-glow: hsla(265, 83%, 58%, 0.3);
-    --accent-subtle: hsla(265, 83%, 58%, 0.1);
+    /* Accent - Purple/Graphite */
+    --accent: hsl(255, 60%, 55%);
+    --accent-hover: hsl(255, 60%, 50%);
+    --accent-glow: hsla(255, 60%, 55%, 0.15);
+    --accent-subtle: hsla(255, 60%, 55%, 0.06);
 
     /* Surfaces */
     --card: hsl(0, 0%, 100%);
-    --card-hover: hsl(0, 0%, 97%);
-    --card-active: hsl(0, 0%, 95%);
-    --border: hsl(228, 15%, 85%);
-    --border-hover: hsl(228, 15%, 75%);
+    --card-hover: hsl(240, 5%, 96%);
+    --card-active: hsl(240, 5%, 94%);
+    --border: hsl(240, 6%, 90%);
+    --border-hover: hsl(240, 6%, 82%);
 
     /* Semantic */
-    --success: hsl(142, 76%, 35%);
-    --success-glow: hsla(142, 76%, 35%, 0.2);
-    --warning: hsl(38, 92%, 45%);
-    --warning-glow: hsla(38, 92%, 45%, 0.2);
-    --danger: hsl(0, 84%, 55%);
-    --danger-glow: hsla(0, 84%, 55%, 0.2);
-    --info: hsl(199, 89%, 45%);
-    --info-glow: hsla(199, 89%, 45%, 0.2);
+    --success: hsl(142, 60%, 40%);
+    --success-glow: hsla(142, 60%, 40%, 0.1);
+    --warning: hsl(38, 80%, 45%);
+    --warning-glow: hsla(38, 80%, 45%, 0.1);
+    --danger: hsl(0, 72%, 50%);
+    --danger-glow: hsla(0, 72%, 50%, 0.1);
+    --info: hsl(199, 85%, 45%);
+    --info-glow: hsla(199, 85%, 45%, 0.1);
 
-    /* Spacing & Radius */
-    --radius-sm: 0.5rem;
-    --radius-md: 0.75rem;
-    --radius-lg: 1rem;
-    --radius-xl: 1.25rem;
-    --radius-2xl: 1.5rem;
+    /* Spacing & Radius (Standard macOS window rounded corners) */
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 1rem;
+    --radius-2xl: 1.25rem;
 
-    /* Shadows */
-    --shadow-glow-blue: 0 0 20px hsla(217, 91%, 60%, 0.1), 0 0 40px hsla(217, 91%, 60%, 0.05);
-    --shadow-glow-purple: 0 0 20px hsla(265, 83%, 58%, 0.1), 0 0 40px hsla(265, 83%, 58%, 0.05);
-    --shadow-glow-green: 0 0 20px hsla(142, 76%, 35%, 0.1), 0 0 40px hsla(142, 76%, 35%, 0.05);
-    --shadow-glow-red: 0 0 20px hsla(0, 84%, 55%, 0.1), 0 0 40px hsla(0, 84%, 55%, 0.05);
-    --shadow-glow-cyan: 0 0 20px hsla(199, 89%, 45%, 0.1), 0 0 40px hsla(199, 89%, 45%, 0.05);
+    /* Subtle Shadows instead of aggressive glow */
+    --shadow-glow-blue: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-glow-purple: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-glow-green: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-glow-red: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-glow-cyan: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
 
     /* Glass */
     --glass-base-rgb: 0, 0, 0;
-    --brand-gray: hsl(0, 0%, 95%);
+    --brand-gray: hsl(240, 10%, 96%);
   }
 
   .dark {
-    /* Dark Theme Core Colors (HSL) */
-    --background: hsl(228, 15%, 4%);
-    --background-secondary: hsl(228, 15%, 6%);
-    --foreground: hsl(210, 20%, 95%);
-    --foreground-muted: hsl(228, 10%, 55%);
-    --brand-gray: #1a1a1a;
+    /* Dark Theme Core Colors (macOS Pro Dark) */
+    --background: hsl(240, 10%, 6%);
+    --background-secondary: hsl(240, 10%, 8%);
+    --foreground: hsl(240, 10%, 95%);
+    --foreground-muted: hsl(240, 5%, 60%);
+    --brand-gray: hsl(240, 10%, 9%);
 
-    /* Primary - Electric Blue */
-    --primary: hsl(217, 91%, 60%);
-    --primary-hover: hsl(217, 91%, 55%);
-    --primary-glow: hsla(217, 91%, 60%, 0.4);
-    --primary-subtle: hsla(217, 91%, 60%, 0.1);
+    /* Primary - macOS Blue in Dark */
+    --primary: hsl(211, 100%, 50%);
+    --primary-hover: hsl(211, 100%, 45%);
+    --primary-glow: hsla(211, 100%, 50%, 0.3);
+    --primary-subtle: hsla(211, 100%, 50%, 0.1);
 
-    /* Accent - Purple */
-    --accent: hsl(265, 83%, 58%);
-    --accent-hover: hsl(265, 83%, 52%);
-    --accent-glow: hsla(265, 83%, 58%, 0.3);
-    --accent-subtle: hsla(265, 83%, 58%, 0.1);
+    /* Accent - Purple/Graphite */
+    --accent: hsl(255, 60%, 60%);
+    --accent-hover: hsl(255, 60%, 55%);
+    --accent-glow: hsla(255, 60%, 60%, 0.2);
+    --accent-subtle: hsla(255, 60%, 60%, 0.1);
 
     /* Surfaces */
-    --card: hsl(228, 15%, 7%);
-    --card-hover: hsl(228, 15%, 10%);
-    --card-active: hsl(228, 15%, 12%);
-    --border: hsl(228, 15%, 15%);
-    --border-hover: hsl(228, 15%, 22%);
+    --card: hsl(240, 10%, 9%);
+    --card-hover: hsl(240, 10%, 12%);
+    --card-active: hsl(240, 10%, 14%);
+    --border: hsl(240, 6%, 15%);
+    --border-hover: hsl(240, 6%, 22%);
 
     /* Semantic */
-    --success: hsl(142, 76%, 45%);
-    --success-glow: hsla(142, 76%, 45%, 0.3);
-    --warning: hsl(38, 92%, 50%);
-    --warning-glow: hsla(38, 92%, 50%, 0.3);
-    --danger: hsl(0, 84%, 60%);
-    --danger-glow: hsla(0, 84%, 60%, 0.3);
-    --info: hsl(199, 89%, 48%);
-    --info-glow: hsla(199, 89%, 48%, 0.3);
+    --success: hsl(142, 60%, 45%);
+    --success-glow: hsla(142, 60%, 45%, 0.2);
+    --warning: hsl(38, 80%, 50%);
+    --warning-glow: hsla(38, 80%, 50%, 0.2);
+    --danger: hsl(0, 72%, 55%);
+    --danger-glow: hsla(0, 72%, 55%, 0.2);
+    --info: hsl(199, 85%, 50%);
+    --info-glow: hsla(199, 85%, 50%, 0.2);
 
     /* Shadows */
-    --shadow-glow-blue: 0 0 20px hsla(217, 91%, 60%, 0.15), 0 0 60px hsla(217, 91%, 60%, 0.05);
-    --shadow-glow-purple: 0 0 20px hsla(265, 83%, 58%, 0.15), 0 0 60px hsla(265, 83%, 58%, 0.05);
-    --shadow-glow-green: 0 0 20px hsla(142, 76%, 45%, 0.15), 0 0 60px hsla(142, 76%, 45%, 0.05);
-    --shadow-glow-red: 0 0 20px hsla(0, 84%, 60%, 0.15), 0 0 60px hsla(0, 84%, 60%, 0.05);
-    --shadow-glow-cyan: 0 0 20px hsla(199, 89%, 48%, 0.15), 0 0 60px hsla(199, 89%, 48%, 0.05);
+    --shadow-glow-blue: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-glow-purple: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-glow-green: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-glow-red: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-glow-cyan: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
 
     /* Glass */
     --glass-base-rgb: 255, 255, 255;
   }
+
 }
 
 /* Tailwind v4 Theme */
@@ -152,7 +153,7 @@
 
 html {
   scroll-behavior: smooth;
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 body {

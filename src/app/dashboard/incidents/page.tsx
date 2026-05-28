@@ -54,10 +54,6 @@ export default function IncidentsPage() {
   if (!hasDeployed) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Incident Management</h1>
-          <p className="text-foreground-muted text-sm mt-1">AI-powered incident detection, diagnosis, and recovery</p>
-        </div>
         <LockedView featureName="Incident Management" />
       </div>
     );
@@ -103,48 +99,51 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">Incident Management</h1><p className="text-foreground-muted text-sm mt-1">AI-powered incident detection, diagnosis, and recovery</p></div>
+      <div className="flex items-center justify-end">
         <button 
           onClick={() => setIsReportOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 glass rounded-xl text-sm font-medium hover:bg-card-hover transition cursor-pointer"
+          className="flex items-center gap-2 px-3 py-1.5 bg-background-secondary border border-border/80 rounded-md text-xs font-semibold hover:bg-background transition cursor-pointer shadow-sm select-none"
         >
-          <FileText size={16} />Create Report
+          <FileText size={14} /> Create Post-Mortem Report
         </button>
       </div>
 
       {/* Active Incident Banner */}
       {activeIncidents.length > 0 && (
         <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}
-          className="glass rounded-xl p-5 border border-warning/30 glow-red relative overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-r from-warning/5 to-transparent" />
+          className="bg-card border border-border border-l-4 border-l-warning rounded-xl p-5 relative overflow-hidden shadow-sm">
+          <div className="absolute inset-0 bg-warning/5 pointer-events-none" />
           <div className="relative flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-warning/10 flex items-center justify-center"><AlertTriangle size={24} className="text-warning" /></div>
-            <div><p className="text-lg font-bold text-foreground">{activeIncidents.length} Active Incident{activeIncidents.length > 1 ? "s" : ""}</p><p className="text-sm text-foreground-muted">{activeIncidents.map(i => i.title).join(", ")}</p></div>
+            <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center shrink-0"><AlertTriangle size={20} className="text-warning" /></div>
+            <div>
+              <p className="text-sm font-bold text-foreground">{activeIncidents.length} Active Incident{activeIncidents.length > 1 ? "s" : ""}</p>
+              <p className="text-xs text-foreground-muted mt-0.5">{activeIncidents.map(i => i.title).join(", ")}</p>
+            </div>
           </div>
         </motion.div>
       )}
 
       {/* AI Diagnosis + Recovery */}
       <div className="grid md:grid-cols-2 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl overflow-hidden glow-purple">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-            <Brain size={18} className="text-accent" /><span className="text-sm font-semibold">AI Diagnosis</span>
+            <Brain size={16} className="text-accent" />
+            <span className="text-xs font-bold text-foreground">AI Diagnostics Live Feed</span>
             <AIThinkingIndicator size="sm" label="" className="ml-auto" />
           </div>
-          <div className="p-4 font-mono text-xs leading-6 bg-black/20 h-[280px] overflow-y-auto no-scrollbar">
+          <div className="p-4 font-mono text-xs leading-6 bg-background-secondary h-[280px] overflow-y-auto no-scrollbar">
             {aiDiagnosisText.slice(0, diagnosisLines).map((line, i) => (
               <motion.p key={i} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-                className={line.includes("Root cause") ? "text-danger" : line.includes("AI Action") ? "text-success" : line.includes("ETA") ? "text-primary font-bold" : "text-foreground-muted"}>
+                className={line.includes("Root cause") ? "text-danger" : line.includes("AI Action") ? "text-success font-semibold" : line.includes("ETA") ? "text-primary font-bold" : "text-foreground-muted"}>
                 {line.startsWith("AI Action") ? `✓ ${line}` : `▸ ${line}`}
               </motion.p>
             ))}
-            {diagnosisLines < aiDiagnosisText.length && <span className="inline-block w-2 h-4 bg-accent animate-pulse" />}
+            {diagnosisLines < aiDiagnosisText.length && <span className="inline-block w-1.5 h-3.5 bg-accent animate-pulse" />}
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-6">Recovery Progress</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-6">Autonomic Healing Recovery Progress</h3>
           <div className="space-y-0">
             {recoverySteps.map((step, i) => (
               <div key={i} className="flex items-start gap-4 relative">
@@ -153,8 +152,8 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
                   {step.status === "completed" ? <CheckCircle size={14} className="text-success" /> : step.status === "active" ? <RefreshCw size={14} className="text-primary animate-spin" /> : <Clock size={14} className="text-foreground-muted" />}
                 </div>
                 <div className="pb-8">
-                  <p className={`text-sm font-medium ${step.status === "pending" ? "text-foreground-muted" : "text-foreground"}`}>{step.label}</p>
-                  <p className="text-xs text-foreground-muted mt-0.5">{step.status === "completed" ? "Completed" : step.status === "active" ? "In progress..." : "Waiting"}</p>
+                  <p className={`text-xs font-bold ${step.status === "pending" ? "text-foreground-muted" : "text-foreground"}`}>{step.label}</p>
+                  <p className="text-[10px] text-foreground-muted mt-0.5 font-medium">{step.status === "completed" ? "Completed" : step.status === "active" ? "In progress..." : "Waiting"}</p>
                 </div>
               </div>
             ))}
@@ -163,26 +162,26 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
       </div>
 
       {/* Incident Timeline */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Incident Timeline</h3>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+        <h3 className="text-sm font-bold text-foreground mb-4">Incident Event log</h3>
         <div className="space-y-3">
           {incidents.map((incident, i) => {
             const config = severityConfig[incident.severity] || severityConfig.resolved;
             return (
               <motion.div key={incident.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 + i * 0.1 }}
-                className={`rounded-xl p-4 border-l-2 ${config.bg} ${config.border}`}>
+                className={`rounded-xl p-4 border border-border border-l-4 ${config.border} bg-background-secondary`}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <span className={`w-2.5 h-2.5 rounded-full ${incident.severity === "critical" ? "bg-danger" : incident.severity === "warning" ? "bg-warning animate-pulse" : "bg-success"}`} />
-                    <h4 className="text-sm font-semibold text-foreground">{incident.title}</h4>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${config.bg} ${config.color}`}>{incident.status}</span>
+                    <span className={`w-2 h-2 rounded-full ${incident.severity === "critical" ? "bg-danger" : incident.severity === "warning" ? "bg-warning animate-pulse" : "bg-success"}`} />
+                    <h4 className="text-xs font-bold text-foreground">{incident.title}</h4>
+                    <span className={`text-[9px] uppercase px-2 py-0.5 rounded-full font-bold bg-card border border-border/80 ${config.color}`}>{incident.status}</span>
                   </div>
-                  <span className="text-xs text-foreground-muted">{incident.startTime} • {incident.duration}</span>
+                  <span className="text-[10px] text-foreground-muted font-mono font-semibold">{incident.startTime} • {incident.duration}</span>
                 </div>
-                <p className="text-xs text-foreground-muted mb-2">{incident.description}</p>
-                <div className="flex gap-1.5">
+                <p className="text-xs text-foreground-muted mb-3 leading-relaxed">{incident.description}</p>
+                <div className="flex flex-wrap gap-1.5">
                   {incident.affectedServices.map(s => (
-                    <span key={s} className="text-[10px] px-2 py-0.5 rounded-full bg-card text-foreground-muted">{s}</span>
+                    <span key={s} className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-card border border-border/60 text-foreground-muted font-mono">{s}</span>
                   ))}
                 </div>
               </motion.div>
@@ -193,31 +192,31 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
 
       {/* Incident Report Generation Modal */}
       {isReportOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }} 
             animate={{ opacity: 1, scale: 1 }} 
-            className="glass max-w-lg w-full p-6 rounded-xl border border-border shadow-2xl relative flex flex-col max-h-[90vh]"
+            className="bg-card border border-border max-w-lg w-full p-6 rounded-xl shadow-2xl relative flex flex-col max-h-[90vh]"
           >
             <button 
               onClick={() => setIsReportOpen(false)}
-              className="absolute top-4 right-4 text-foreground-muted hover:text-foreground cursor-pointer"
+              className="absolute top-4 right-4 text-foreground-muted hover:text-foreground cursor-pointer transition"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
             
-            <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
-              <FileText size={20} className="text-primary" />
+            <h3 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2">
+              <FileText size={18} className="text-primary" />
               Incident Post-Mortem Report
             </h3>
-            <p className="text-xs text-foreground-muted mb-4">
+            <p className="text-[10px] text-foreground-muted font-semibold uppercase tracking-wider mb-4">
               Generated by ZeroOps Autonomic Diagnosis Engine
             </p>
 
-            <div className="flex-1 overflow-y-auto bg-black/30 border border-border/60 rounded-lg p-4 font-mono text-xs text-foreground space-y-4 no-scrollbar">
+            <div className="flex-1 overflow-y-auto bg-background-secondary border border-border/60 rounded-lg p-4 font-mono text-[11px] text-foreground space-y-4 no-scrollbar">
               <div>
                 <span className="text-primary font-bold"># ZEROOPS AI INCIDENT POST-MORTEM</span>
-                <p className="text-foreground-muted">Incident ID: INC-001</p>
+                <p className="text-foreground-muted mt-1">Incident ID: INC-001</p>
                 <p className="text-foreground-muted">Incident Title: API Gateway High Latency</p>
                 <p className="text-foreground-muted">Target Service: api-gateway, web-app</p>
                 <p className="text-foreground-muted">Audited At: 2026-05-25 19:15 UTC</p>
@@ -232,11 +231,11 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
 
               <div>
                 <span className="text-success font-bold">## 2. Autonomic Recovery Log</span>
-                <div className="space-y-1 text-[11px] mt-1 pl-2 text-foreground-muted border-l border-border/40">
-                  <p><span className="text-success">08:43:10 AM:</span> Analyzed logs and metrics; isolated pool lockup.</p>
-                  <p><span className="text-success">08:43:15 AM:</span> Dispatched configuration change: pool limit 50 → 100.</p>
-                  <p><span className="text-success">08:43:20 AM:</span> Configured connection recycle policy (30s max lifetime).</p>
-                  <p><span className="text-success">08:44:00 AM:</span> Scaled api-gateway service to 5 pods (+2 replicas).</p>
+                <div className="space-y-1 mt-1 pl-2 text-foreground-muted border-l border-border/40">
+                  <p><span className="text-success font-semibold">08:43:10 AM:</span> Analyzed logs and metrics; isolated pool lockup.</p>
+                  <p><span className="text-success font-semibold">08:43:15 AM:</span> Dispatched configuration change: pool limit 50 → 100.</p>
+                  <p><span className="text-success font-semibold">08:43:20 AM:</span> Configured connection recycle policy (30s max lifetime).</p>
+                  <p><span className="text-success font-semibold">08:44:00 AM:</span> Scaled api-gateway service to 5 pods (+2 replicas).</p>
                 </div>
               </div>
 
@@ -251,13 +250,13 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
             <div className="flex gap-3 justify-end pt-4 mt-2">
               <button 
                 onClick={() => setIsReportOpen(false)} 
-                className="px-4 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                className="px-3.5 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-background-secondary transition cursor-pointer"
               >
                 Close
               </button>
               <button 
                 onClick={handleCopyReport}
-                className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition glow-blue flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <Copy size={12} />
                 Copy Report

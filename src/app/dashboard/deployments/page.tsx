@@ -311,17 +311,13 @@ function DeploymentsPageContent() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Deployments</h1>
-          <p className="text-foreground-muted text-sm mt-1">Live deployment pipeline and history</p>
-        </div>
+      <div className="flex items-center justify-end">
         {history.length > 0 && (
           <div className="flex gap-2">
             <button
               disabled={isAnimating}
               onClick={handleRedeploy}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
               <RefreshCw size={14} className={isAnimating ? "animate-spin" : ""} />
               Redeploy
@@ -329,7 +325,7 @@ function DeploymentsPageContent() {
             <button
               disabled={isAnimating}
               onClick={handleRollback}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-warning/10 text-warning hover:bg-warning/20 disabled:opacity-50 transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-background-secondary text-foreground hover:bg-card-hover border border-border disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
               <RotateCcw size={14} />
               Rollback
@@ -337,7 +333,7 @@ function DeploymentsPageContent() {
             <button
               disabled={isAnimating}
               onClick={() => setIsScaleModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-background-secondary text-foreground hover:bg-card-hover border border-border disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
               <Maximize size={14} />
               Scale
@@ -349,8 +345,8 @@ function DeploymentsPageContent() {
       {/* Pipeline (only shown during active deployment) */}
       {showPipeline && (
         <>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl p-6">
-            <h3 className="font-semibold mb-6">Active Deployment Pipeline</h3>
+          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            <h3 className="text-sm font-bold mb-6 text-foreground">Active Deployment Pipeline</h3>
             <div className="flex items-center justify-between overflow-x-auto pb-4">
               {steps.map((step, i) => {
                 const Icon = stepIcons[i] || Circle;
@@ -360,12 +356,12 @@ function DeploymentsPageContent() {
                       <motion.div
                         initial={{ scale: 0 }}
                         animate={{ scale: 1 }}
-                        transition={{ delay: i * 0.1 }}
+                        transition={{ delay: i * 0.05 }}
                         className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${
                           step.status === "completed"
                             ? "bg-success/10 border border-success/30"
                             : step.status === "active"
-                            ? "bg-primary/10 border border-primary/30"
+                            ? "bg-primary/10 border border-primary/30 animate-pulse"
                             : "bg-card border border-border"
                         }`}
                       >
@@ -377,10 +373,10 @@ function DeploymentsPageContent() {
                           <Icon size={18} className="text-foreground-muted" />
                         )}
                       </motion.div>
-                      <span className={`text-xs font-medium text-center ${step.status === "pending" ? "text-foreground-muted" : "text-foreground"}`}>
+                      <span className={`text-[10px] font-semibold text-center ${step.status === "pending" ? "text-foreground-muted" : "text-foreground"}`}>
                         {step.label}
                       </span>
-                      {step.duration && <span className="text-[10px] text-foreground-muted mt-0.5">{step.duration}</span>}
+                      {step.duration && <span className="text-[9px] text-foreground-muted mt-0.5">{step.duration}</span>}
                     </div>
                     {i < steps.length - 1 && (
                       <div className={`h-px w-8 mx-1 ${step.status === "completed" ? "bg-success/40" : "bg-border"}`} />
@@ -389,12 +385,12 @@ function DeploymentsPageContent() {
                 );
               })}
             </div>
-            <div className="h-1.5 bg-card rounded-full overflow-hidden mt-4">
+            <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden mt-4">
               <motion.div
                 initial={{ width: "0%" }}
                 animate={{ width: `${(steps.filter(s => s.status === 'completed').length / steps.length) * 100}%` }}
                 transition={{ duration: 0.5, ease: "easeOut" }}
-                className="h-full bg-gradient-to-r from-primary to-accent rounded-full relative"
+                className="h-full bg-primary rounded-full relative"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-[shimmer_2s_ease-in-out_infinite]" style={{ backgroundSize: "200% 100%" }} />
               </motion.div>
@@ -402,15 +398,15 @@ function DeploymentsPageContent() {
           </motion.div>
 
           {/* Terminal */}
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-              <div className="w-3 h-3 rounded-full bg-red-500/80" />
-              <div className="w-3 h-3 rounded-full bg-amber-500/80" />
-              <div className="w-3 h-3 rounded-full bg-green-500/80" />
-              <span className="text-xs text-foreground-muted ml-2 font-mono">deployment-log</span>
+          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background-secondary/40">
+              <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+              <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+              <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+              <span className="text-[10px] text-foreground-muted ml-2 font-mono">deployment-log</span>
               {isAnimating && <Loader2 size={12} className="animate-spin text-primary ml-auto" />}
             </div>
-            <div ref={termRef} className="p-4 font-mono text-xs leading-6 h-[300px] overflow-y-auto no-scrollbar bg-black/40">
+            <div ref={termRef} className="p-4 font-mono text-[11px] leading-6 h-[300px] overflow-y-auto no-scrollbar bg-zinc-950 text-zinc-100">
               {activeLines.slice(0, visibleLines).map((line, i) => (
                 <div key={i}>{line.type === "blank" ? <br /> : <p className={lineColor(line.type)}>{line.text}</p>}</div>
               ))}
@@ -421,8 +417,8 @@ function DeploymentsPageContent() {
       )}
 
       {/* History */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Deployment History</h3>
+      <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+        <h3 className="text-sm font-bold mb-4 text-foreground">Deployment History</h3>
 
         {historyLoading ? (
           <div className="flex items-center justify-center py-12">
@@ -430,31 +426,31 @@ function DeploymentsPageContent() {
           </div>
         ) : history.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <FolderGit2 className="w-10 h-10 text-white/15 mb-3" />
-            <p className="text-sm text-white/40 mb-1">No deployments yet</p>
-            <p className="text-xs text-white/25">Deploy your first project to see history here</p>
+            <FolderGit2 className="w-10 h-10 text-foreground-muted/20 mb-3" />
+            <p className="text-sm text-foreground-muted mb-1">No deployments yet</p>
+            <p className="text-xs text-foreground-muted/60">Deploy your first project to see history here</p>
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-foreground-muted border-b border-border">
-                <th className="text-left py-3 font-medium">App</th>
-                <th className="text-left py-3 font-medium">Version</th>
-                <th className="text-left py-3 font-medium">Env</th>
-                <th className="text-left py-3 font-medium">Status</th>
-                <th className="text-left py-3 font-medium">Duration</th>
-                <th className="text-left py-3 font-medium">Deployed By</th>
+              <tr className="text-foreground-muted border-b border-border text-xs">
+                <th className="text-left py-3 font-semibold">App</th>
+                <th className="text-left py-3 font-semibold">Version</th>
+                <th className="text-left py-3 font-semibold">Env</th>
+                <th className="text-left py-3 font-semibold">Status</th>
+                <th className="text-left py-3 font-semibold">Duration</th>
+                <th className="text-left py-3 font-semibold">Deployed By</th>
               </tr>
             </thead>
             <tbody>
               {history.map((d) => (
-                <tr key={d.id} className="border-b border-border/50 hover:bg-card-hover/30 transition-colors">
-                  <td className="py-3 font-medium text-foreground">{d.project_name || "Project"}</td>
-                  <td className="py-3 text-foreground-muted font-mono text-xs">{d.version || "—"}</td>
-                  <td className="py-3 text-foreground-muted text-xs">{d.environment}</td>
+                <tr key={d.id} className="border-b border-border/50 hover:bg-card-hover/30 transition-colors text-xs">
+                  <td className="py-3 font-bold text-foreground">{d.project_name || "Project"}</td>
+                  <td className="py-3 text-foreground-muted font-mono">{d.version || "—"}</td>
+                  <td className="py-3 text-foreground-muted">{d.environment}</td>
                   <td className="py-3"><StatusBadge status={d.status as any} /></td>
                   <td className="py-3 text-foreground-muted">{d.duration || "—"}</td>
-                  <td className="py-3 text-foreground-muted text-xs">{d.deployed_by}</td>
+                  <td className="py-3 text-foreground-muted">{d.deployed_by}</td>
                 </tr>
               ))}
             </tbody>
@@ -464,11 +460,11 @@ function DeploymentsPageContent() {
 
       {/* Scale Modal */}
       {isScaleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
+            initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="glass max-w-md w-full p-6 rounded-xl border border-border shadow-2xl relative"
+            className="bg-card max-w-md w-full p-6 rounded-xl border border-border shadow-2xl relative"
           >
             <h3 className="text-lg font-bold mb-2">Scale Deployment</h3>
             <p className="text-xs text-foreground-muted mb-6">

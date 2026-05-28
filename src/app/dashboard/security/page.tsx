@@ -50,10 +50,6 @@ export default function SecurityPage() {
   if (!hasDeployed) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Security Command Center</h1>
-          <p className="text-foreground-muted text-sm mt-1">Real-time threat detection and automated security management</p>
-        </div>
         <LockedView featureName="Security Command Center" />
       </div>
     );
@@ -116,12 +112,11 @@ export default function SecurityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">Security Command Center</h1><p className="text-foreground-muted text-sm mt-1">Real-time threat detection and automated security management</p></div>
+      <div className="flex items-center justify-end">
         <button 
           onClick={handleSecurityScan} 
           disabled={isScanning}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover disabled:opacity-50 transition glow-blue cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover disabled:opacity-50 transition shadow-sm cursor-pointer"
         >
           <Search size={16} className={isScanning ? "animate-spin" : ""} />
           {isScanning ? "Scanning..." : "Run Security Scan"}
@@ -130,36 +125,36 @@ export default function SecurityPage() {
 
       {/* Score + Status cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} 
-          className="col-span-2 md:col-span-2 lg:col-span-1 glass rounded-xl p-4 flex flex-col items-center justify-center relative min-h-[120px]">
-          <GaugeChart value={securityData.securityScore} label="Security Score" size={90} color="hsl(142, 76%, 45%)" />
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} 
+          className="col-span-2 md:col-span-2 lg:col-span-1 bg-card border border-border rounded-xl p-4 flex flex-col items-center justify-center relative min-h-[120px] shadow-sm">
+          <GaugeChart value={securityData.securityScore} label="Security Score" size={90} color="hsl(142, 60%, 40%)" />
         </motion.div>
         {statusCards.map((card, i) => (
-          <motion.div key={card.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-            className="glass rounded-xl p-4 text-center flex flex-col items-center justify-center min-h-[120px]">
+          <motion.div key={card.label} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
+            className="bg-card border border-border rounded-xl p-4 text-center flex flex-col items-center justify-center min-h-[120px] shadow-sm">
             <card.icon size={20} className={`${card.color} mb-2`} />
-            <p className="text-xs text-foreground-muted">{card.label}</p>
-            <p className={`text-sm font-semibold ${card.color} mt-1`}>{card.status}</p>
+            <p className="text-[10px] uppercase font-bold text-foreground-muted">{card.label}</p>
+            <p className={`text-xs font-bold ${card.color} mt-1.5`}>{card.status}</p>
           </motion.div>
         ))}
       </div>
 
       {/* Threats Timeline */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Attack Detection Timeline</h3>
+      <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+        <h3 className="text-sm font-bold text-foreground mb-4">Attack Detection Timeline</h3>
         <div className="space-y-3">
           {securityThreats.map((threat, i) => (
-            <motion.div key={threat.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 + i * 0.08 }}
-              className={`rounded-xl p-4 border-l-2 ${severityColor[threat.severity]}`}>
+            <motion.div key={threat.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 + i * 0.05 }}
+              className={`rounded-xl p-4 border border-border/80 border-l-4 ${severityColor[threat.severity]}`}>
               <div className="flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm text-foreground">{threat.type}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${threat.status === "blocked" ? "bg-success/10 text-success" : threat.status === "resolved" ? "bg-info/10 text-info" : "bg-warning/10 text-warning"}`}>{threat.status}</span>
+                    <span className="font-bold text-xs text-foreground">{threat.type}</span>
+                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${threat.status === "blocked" ? "bg-success/15 text-success" : threat.status === "resolved" ? "bg-info/15 text-info" : "bg-warning/15 text-warning"}`}>{threat.status}</span>
                   </div>
-                  <p className="text-xs text-foreground-muted mt-1">{threat.description}</p>
+                  <p className="text-[11px] text-foreground-muted mt-1 leading-relaxed">{threat.description}</p>
                 </div>
-                <div className="text-right"><p className="text-xs text-foreground-muted">{threat.timestamp}</p><p className="text-[10px] text-foreground-muted font-mono">{threat.source}</p></div>
+                <div className="text-right"><p className="text-xs font-semibold text-foreground-muted">{threat.timestamp}</p><p className="text-[10px] text-foreground-muted font-mono font-semibold mt-0.5">{threat.source}</p></div>
               </div>
             </motion.div>
           ))}
@@ -168,31 +163,31 @@ export default function SecurityPage() {
 
       <div className="grid md:grid-cols-2 gap-4">
         {/* Blocked IPs */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4">Blocked IPs</h3>
+        <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4">Blocked IPs</h3>
           <table className="w-full text-sm">
-            <thead><tr className="text-foreground-muted border-b border-border"><th className="text-left py-2 font-medium">IP</th><th className="text-left py-2 font-medium">Country</th><th className="text-left py-2 font-medium">Attacks</th><th className="text-left py-2 font-medium">Last Blocked</th></tr></thead>
+            <thead><tr className="text-foreground-muted border-b border-border text-xs"><th className="text-left py-2 font-semibold">IP</th><th className="text-left py-2 font-semibold">Country</th><th className="text-left py-2 font-semibold">Attacks</th><th className="text-left py-2 font-semibold">Last Blocked</th></tr></thead>
             <tbody>{blockedIPs.map(ip => (
-              <tr key={ip.ip} className="border-b border-border/50"><td className="py-2 font-mono text-xs text-foreground">{ip.ip}</td><td className="py-2 text-foreground-muted">{ip.country}</td><td className="py-2 text-danger font-medium">{ip.attacks}</td><td className="py-2 text-foreground-muted">{ip.lastBlocked}</td></tr>
+              <tr key={ip.ip} className="border-b border-border/50 text-xs"><td className="py-2.5 font-mono font-bold text-foreground">{ip.ip}</td><td className="py-2.5 text-foreground-muted">{ip.country}</td><td className="py-2.5 text-danger font-bold">{ip.attacks}</td><td className="py-2.5 text-foreground-muted">{ip.lastBlocked}</td></tr>
             ))}</tbody>
           </table>
         </motion.div>
 
         {/* Compliance */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4">Compliance Status</h3>
+        <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4">Compliance Status</h3>
           <div className="space-y-4">
             {complianceItems.map(item => (
               <div key={item.name}>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-foreground">{item.name}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${item.status === "compliant" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>{item.status === "compliant" ? "Compliant" : "In Progress"}</span>
+                  <span className="text-xs font-bold text-foreground">{item.name}</span>
+                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${item.status === "compliant" ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>{item.status === "compliant" ? "Compliant" : "In Progress"}</span>
                 </div>
-                <div className="h-1.5 bg-card rounded-full overflow-hidden">
-                  <motion.div initial={{ width: 0 }} animate={{ width: `${item.progress}%` }} transition={{ duration: 1, delay: 0.5 }}
+                <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden border border-border/40">
+                  <motion.div initial={{ width: 0 }} animate={{ width: `${item.progress}%` }} transition={{ duration: 1, delay: 0.2 }}
                     className={`h-full rounded-full ${item.progress === 100 ? "bg-success" : "bg-warning"}`} />
                 </div>
-                <p className="text-[10px] text-foreground-muted mt-1">Last audit: {item.lastAudit}</p>
+                <p className="text-[10px] text-foreground-muted mt-1.5 font-semibold">Last audit: {item.lastAudit}</p>
               </div>
             ))}
           </div>

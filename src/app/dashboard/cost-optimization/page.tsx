@@ -76,10 +76,6 @@ export default function CostOptimizationPage() {
   if (!hasDeployed) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Cost Optimization</h1>
-          <p className="text-foreground-muted text-sm mt-1">AI-powered FinOps and resource efficiency analysis</p>
-        </div>
         <LockedView featureName="Cost Optimization & FinOps" />
       </div>
     );
@@ -87,29 +83,28 @@ export default function CostOptimizationPage() {
 
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold">Cost Optimization</h1><p className="text-foreground-muted text-sm mt-1">AI-powered FinOps and resource efficiency analysis</p></div>
-
       {/* Score + Savings + Breakdown */}
       <div className="grid md:grid-cols-3 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-xl p-6 flex flex-col items-center justify-center relative">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 flex flex-col items-center justify-center relative shadow-sm">
           <GaugeChart value={78} label="Efficiency Score" size={130} color="#3b82f6" />
-          <span className="text-xs text-primary mt-2 font-medium">Good</span>
+          <span className="text-xs text-primary mt-2 font-semibold">Good</span>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass rounded-xl p-6 text-center glow-green">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl p-6 text-center relative overflow-hidden shadow-sm">
+          <div className="absolute top-0 inset-x-0 h-1 bg-success" />
           <DollarSign size={32} className="text-success mx-auto mb-2" />
           <p className="text-4xl font-bold text-success">$127</p>
-          <p className="text-sm text-foreground-muted">Monthly Savings Potential</p>
+          <p className="text-xs font-bold text-foreground mt-2 uppercase tracking-wide">Monthly Savings Potential</p>
           <p className="text-xs text-foreground-muted mt-1">5 optimizations available</p>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4">Cost Breakdown</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4">Cost Breakdown</h3>
           <div className="space-y-3">
             {costBreakdown.map(item => (
               <div key={item.label}>
-                <div className="flex justify-between text-sm mb-1"><span className="text-foreground-muted">{item.label}</span><span className="text-foreground">{item.value}%</span></div>
-                <div className="h-2 bg-card rounded-full overflow-hidden">
+                <div className="flex justify-between text-xs font-semibold mb-1"><span className="text-foreground-muted">{item.label}</span><span className="text-foreground">{item.value}%</span></div>
+                <div className="h-2 bg-background-secondary rounded-full overflow-hidden border border-border/40">
                   <motion.div initial={{ width: 0 }} animate={{ width: `${item.value}%` }} transition={{ duration: 1 }} className={`h-full rounded-full ${item.color}`} />
                 </div>
               </div>
@@ -119,25 +114,27 @@ export default function CostOptimizationPage() {
       </div>
 
       {/* Cost Trend */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass rounded-xl p-6">
-        <h3 className="font-semibold mb-4">Daily Cost Trend (30 days)</h3>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+        <h3 className="text-sm font-bold text-foreground mb-4">Daily Cost Trend (30 days)</h3>
         <AreaChart data={costTrend} color="#22c55e" height={180} />
       </motion.div>
 
       {/* Recommendations */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-        <h3 className="font-semibold mb-4">AI Cost Recommendations</h3>
+        <h3 className="text-sm font-bold text-foreground mb-4">AI Cost Recommendations</h3>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {costRecommendations.map((rec, i) => (
             <motion.div key={rec.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 + i * 0.08 }}
-              className="glass rounded-xl p-5">
-              <div className="flex items-center justify-between mb-3">
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${impactColor[rec.impact]}`}>{rec.impact} impact</span>
-                <span className="text-sm font-bold text-success">{rec.savings}</span>
+              className="bg-card border border-border rounded-xl p-5 shadow-sm flex flex-col justify-between min-h-[180px]">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className={`text-[9px] uppercase px-2 py-0.5 rounded-full font-bold border ${rec.impact === 'high' ? 'bg-danger/10 text-danger border-danger/25' : rec.impact === 'medium' ? 'bg-warning/10 text-warning border-warning/25' : 'bg-info/10 text-info border-info/25'}`}>{rec.impact} impact</span>
+                  <span className="text-sm font-bold text-success">{rec.savings}</span>
+                </div>
+                <h4 className="text-xs font-bold text-foreground mb-1">{rec.title}</h4>
+                <p className="text-xs text-foreground-muted mb-3 leading-relaxed">{rec.description}</p>
               </div>
-              <h4 className="text-sm font-semibold text-foreground mb-1">{rec.title}</h4>
-              <p className="text-xs text-foreground-muted mb-3">{rec.description}</p>
-              <button className="w-full py-2 bg-primary/10 text-primary rounded-lg text-xs font-medium hover:bg-primary/20 transition">Apply Optimization</button>
+              <button className="w-full py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer shadow-sm mt-2">Apply Optimization</button>
             </motion.div>
           ))}
         </div>
@@ -145,28 +142,28 @@ export default function CostOptimizationPage() {
 
       {/* Idle Resources + Overprovisioned */}
       <div className="grid md:grid-cols-2 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4 flex items-center gap-2"><AlertTriangle size={16} className="text-warning" />Idle Resources</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2"><AlertTriangle size={16} className="text-warning" />Idle Resources</h3>
           <div className="space-y-3">
             {idleResources.map(r => (
-              <div key={r.name} className="flex items-center justify-between p-3 rounded-lg bg-card/50">
-                <div><p className="text-sm font-medium text-foreground">{r.name}</p><p className="text-xs text-foreground-muted">{r.type} • Last active: {r.lastActive}</p></div>
-                <button className="text-xs bg-warning/10 text-warning px-3 py-1 rounded-lg font-medium">{r.suggestedAction}</button>
+              <div key={r.name} className="flex items-center justify-between p-3 rounded-lg bg-background-secondary border border-border/50">
+                <div><p className="text-xs font-bold text-foreground">{r.name}</p><p className="text-[10px] text-foreground-muted mt-0.5">{r.type} • Last active: {r.lastActive}</p></div>
+                <button className="text-[10px] bg-warning/10 text-warning border border-warning/20 px-2.5 py-1 rounded-md font-bold hover:bg-warning/20 transition cursor-pointer">{r.suggestedAction}</button>
               </div>
             ))}
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="glass rounded-xl p-6">
-          <h3 className="font-semibold mb-4 flex items-center gap-2"><TrendingDown size={16} className="text-info" />Overprovisioned Pods</h3>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2"><TrendingDown size={16} className="text-info" />Overprovisioned Pods</h3>
           <table className="w-full text-xs">
-            <thead><tr className="text-foreground-muted border-b border-border"><th className="text-left py-2">Pod</th><th className="text-left py-2">CPU</th><th className="text-left py-2">Memory</th><th className="text-left py-2">Savings</th></tr></thead>
+            <thead><tr className="text-foreground-muted border-b border-border text-[10px] uppercase font-bold"><th className="text-left py-2">Pod</th><th className="text-left py-2">CPU</th><th className="text-left py-2">Memory</th><th className="text-left py-2">Savings</th></tr></thead>
             <tbody>{overprovisionedPods.map(p => (
               <tr key={p.pod} className="border-b border-border/50">
-                <td className="py-2 font-medium text-foreground">{p.pod}</td>
-                <td className="py-2 text-foreground-muted">{p.usedCpu}/{p.allocatedCpu}</td>
-                <td className="py-2 text-foreground-muted">{p.usedMemory}/{p.allocatedMemory}</td>
-                <td className="py-2 text-success font-medium">{p.savings}</td>
+                <td className="py-2.5 font-bold text-foreground">{p.pod}</td>
+                <td className="py-2.5 text-foreground-muted">{p.usedCpu}/{p.allocatedCpu}</td>
+                <td className="py-2.5 text-foreground-muted">{p.usedMemory}/{p.allocatedMemory}</td>
+                <td className="py-2.5 text-success font-bold">{p.savings}</td>
               </tr>
             ))}</tbody>
           </table>

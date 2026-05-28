@@ -92,13 +92,6 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">User Profile & Account</h1>
-        <p className="text-foreground-muted text-sm mt-1">
-          Manage your personal details, plan settings, and terminal security keys.
-        </p>
-      </div>
-
       <div className="grid md:grid-cols-3 gap-6">
         {/* Left column: Overview & Stats */}
         <div className="space-y-6">
@@ -106,9 +99,9 @@ export default function ProfilePage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            className="glass rounded-xl p-6 text-center flex flex-col items-center justify-center relative overflow-hidden"
+            className="bg-card border border-border rounded-xl p-6 text-center flex flex-col items-center justify-center relative overflow-hidden shadow-sm"
           >
-            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-3xl font-extrabold text-white mb-4 shadow-xl border border-white/10">
+            <div className="w-20 h-20 rounded-full bg-primary-subtle flex items-center justify-center text-3xl font-extrabold text-primary mb-4 border border-primary/20 shadow-inner">
               {initials || "VS"}
             </div>
             <h3 className="text-lg font-bold text-foreground">
@@ -121,20 +114,20 @@ export default function ProfilePage() {
               {profile?.plan || "Starter Plan"}
             </div>
 
-            <div className="border-t border-border/50 w-full my-5" />
+            <div className="border-t border-border/60 w-full my-5" />
 
             <div className="flex flex-col gap-2 w-full text-left text-xs">
               <div className="flex justify-between">
                 <span className="text-foreground-muted flex items-center gap-1"><Calendar size={12} /> Joined:</span>
-                <span className="text-foreground font-medium">{dateStr}</span>
+                <span className="text-foreground font-semibold">{dateStr}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-foreground-muted flex items-center gap-1"><Layout size={12} /> Projects:</span>
-                <span className="text-foreground font-medium">{profile?.total_projects ?? 0} connected</span>
+                <span className="text-foreground font-semibold">{profile?.total_projects ?? 0} connected</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-foreground-muted flex items-center gap-1"><Server size={12} /> Deployments:</span>
-                <span className="text-foreground font-medium">{profile?.total_deployments ?? 0} total</span>
+                <span className="text-foreground font-semibold">{profile?.total_deployments ?? 0} total</span>
               </div>
             </div>
           </motion.div>
@@ -146,41 +139,41 @@ export default function ProfilePage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="glass rounded-xl p-6"
+            transition={{ delay: 0.05 }}
+            className="bg-card border border-border rounded-xl p-6 shadow-sm"
           >
-            <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
-              <User size={20} className="text-primary" />
+            <h3 className="font-bold text-base mb-4 flex items-center gap-2 text-foreground">
+              <User size={18} className="text-primary" />
               Edit Account Information
             </h3>
 
             <form onSubmit={handleUpdateProfile} className="space-y-4">
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground-muted uppercase">First Name</label>
+                  <label className="text-[10px] font-bold text-foreground-muted uppercase">First Name</label>
                   <input
                     type="text"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
                     required
-                    className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none"
+                    className="w-full bg-background-secondary border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground-muted uppercase">Last Name</label>
+                  <label className="text-[10px] font-bold text-foreground-muted uppercase">Last Name</label>
                   <input
                     type="text"
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
-                    className="w-full bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none"
+                    className="w-full bg-background-secondary border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none"
                   />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-foreground-muted uppercase">Email Address</label>
-                <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-foreground-muted">
-                  <Mail size={16} />
+                <label className="text-[10px] font-bold text-foreground-muted uppercase">Email Address</label>
+                <div className="flex items-center gap-2 bg-background-secondary border border-border/80 rounded-lg px-3 py-2 text-xs text-foreground-muted">
+                  <Mail size={14} />
                   <span>{profile?.email}</span>
                 </div>
                 <p className="text-[10px] text-foreground-muted">Contact support if you need to update your email address.</p>
@@ -190,7 +183,7 @@ export default function ProfilePage() {
                 <button
                   type="submit"
                   disabled={isUpdating}
-                  className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold transition glow-blue cursor-pointer"
+                  className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-sm"
                 >
                   {isUpdating ? "Saving..." : "Save Changes"}
                 </button>
@@ -202,11 +195,11 @@ export default function ProfilePage() {
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="glass rounded-xl p-6"
+            transition={{ delay: 0.1 }}
+            className="bg-card border border-border rounded-xl p-6 shadow-sm"
           >
-            <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
-              <Key size={20} className="text-primary" />
+            <h3 className="font-bold text-base mb-2 flex items-center gap-2 text-foreground">
+              <Key size={18} className="text-primary" />
               CLI Access Tokens
             </h3>
             <p className="text-xs text-foreground-muted mb-4">
@@ -215,7 +208,7 @@ export default function ProfilePage() {
 
             <div className="space-y-3">
               <div className="flex gap-2">
-                <div className="flex-1 bg-card border border-border rounded-xl px-3 py-2 flex items-center justify-between min-w-0">
+                <div className="flex-1 bg-background-secondary border border-border rounded-lg px-3 py-2 flex items-center justify-between min-w-0">
                   <span className="font-mono text-xs truncate select-none text-foreground-muted">
                     {apiKeyVisible ? apiKey : "••••••••••••••••••••••••••••••••••••"}
                   </span>
@@ -228,7 +221,7 @@ export default function ProfilePage() {
                 </div>
                 <button
                   onClick={copyApiKey}
-                  className="px-4 bg-primary hover:bg-primary-hover text-white text-xs font-semibold rounded-xl transition cursor-pointer"
+                  className="px-3 bg-primary hover:bg-primary-hover text-white text-xs font-bold rounded-lg transition cursor-pointer shadow-sm"
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>
@@ -236,7 +229,7 @@ export default function ProfilePage() {
               
               <button 
                 onClick={regenerateApiKey}
-                className="w-full py-2.5 border border-border hover:bg-card-hover text-foreground text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <RefreshCw size={12} />
                 Regenerate Access Key

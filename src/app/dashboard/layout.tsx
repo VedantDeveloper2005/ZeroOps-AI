@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/dashboard/Sidebar";
 import { TopBar } from "@/components/dashboard/TopBar";
 import { SystemHealthRibbon } from "@/components/dashboard/SystemHealthRibbon";
 import { AIActionFeed } from "@/components/dashboard/AIActionFeed";
+import { SubPageHeader } from "@/components/dashboard/SubPageHeader";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -26,11 +27,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <AnimatePresence mode="wait">
                 <motion.div
                   key={typeof window !== "undefined" ? window.location.pathname : "page"}
-                  initial={{ opacity: 0, y: 20 }}
+                  initial={{ opacity: 0, y: 15 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.3, ease: "easeOut" }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
                 >
+                  <SubPageHeader />
                   {children}
                 </motion.div>
               </AnimatePresence>

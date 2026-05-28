@@ -38,10 +38,22 @@ const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/,
 if (typeof window !== "undefined") {
   const originalFetch = window.fetch;
   window.fetch = async function (input, init) {
-    if (API_BASE_URL && typeof input === "string" && input.startsWith("/api/")) {
-      input = `${API_BASE_URL}${input}`;
+    const initCopy = init ? { ...init } : {};
+    const headers = new Headers(initCopy.headers || {});
+    
+    // Automatically inject Bearer token if stored in localStorage
+    const token = localStorage.getItem("session_token");
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
     }
-    return originalFetch(input, init);
+    
+    let targetInput = input;
+    if (API_BASE_URL && typeof targetInput === "string" && targetInput.startsWith("/api/")) {
+      targetInput = `${API_BASE_URL}${targetInput}`;
+    }
+    
+    initCopy.headers = headers;
+    return originalFetch(targetInput, initCopy);
   };
 }
 
