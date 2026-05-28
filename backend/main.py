@@ -933,14 +933,28 @@ async def reset_user_onboarding(
 
 
 @app.get("/api/auth/github")
-async def github_oauth_redirect():
+async def github_oauth_redirect(request: Request):
     """Initiate GitHub OAuth flow by redirecting to GitHub's authorization page."""
     if not config.GITHUB_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GitHub OAuth is not configured. Set GITHUB_CLIENT_ID.")
 
-    state = github_oauth.generate_oauth_state()
+    import secrets
+    state = secrets.token_urlsafe(32)
     authorization_url = github_oauth.get_authorization_url(state)
-    return RedirectResponse(url=authorization_url, status_code=302)
+    
+    redirect_response = RedirectResponse(url=authorization_url, status_code=302)
+    
+    is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https")
+    redirect_response.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=True if is_prod_cookie else False,
+        samesite="none" if is_prod_cookie else "lax",
+        max_age=600  # 10 minutes
+    )
+    logger.info(f"[OAuth Redirect Telemetry] Generated state: {state}, is_prod_cookie: {is_prod_cookie}")
+    return redirect_response
 
 
 @app.get("/api/auth/github/callback")
@@ -976,29 +990,43 @@ async def github_oauth_callback(
         else:
             logger.info("[OAuth Callback Telemetry] Safeguard bypassed (local environment).")
 
+    # Helper to construct redirect response with cleared oauth_state cookie
+    def get_redirect_and_clean_state(url_target: str) -> RedirectResponse:
+        res = RedirectResponse(url=url_target, status_code=302)
+        is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https") or ("localhost" not in frontend_url)
+        res.delete_cookie(
+            key="oauth_state",
+            path="/",
+            secure=True if is_prod_cookie else False,
+            samesite="none" if is_prod_cookie else "lax"
+        )
+        return res
+
     # Handle errors from GitHub
     if error:
         logger.warning(f"GitHub OAuth error: {error}")
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error={error}")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error={error}")
 
     # Validate required parameters
     if not code or not state:
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=missing_params")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=missing_params")
 
-    # Validate CSRF state
-    if not github_oauth.validate_oauth_state(state):
-        logger.warning("GitHub OAuth state validation failed (possible CSRF)")
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=invalid_state")
+    # Validate CSRF state from cookie
+    cookie_state = request.cookies.get("oauth_state")
+    logger.info(f"[OAuth Callback Telemetry] Received state query param: {state}, state cookie: {cookie_state}")
+    if not state or not cookie_state or state != cookie_state:
+        logger.warning("GitHub OAuth state validation failed (mismatch or missing cookie)")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=invalid_state")
 
     # Exchange code for access token
     access_token = await github_oauth.exchange_code_for_token(code)
     if not access_token:
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=token_exchange_failed")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=token_exchange_failed")
 
     # Fetch GitHub user profile
     gh_user = await github_oauth.get_github_user(access_token)
     if not gh_user:
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=github_user_fetch_failed")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=github_user_fetch_failed")
 
     github_id = str(gh_user.get("id", ""))
     github_username = gh_user.get("login", "")
@@ -1010,7 +1038,7 @@ async def github_oauth_callback(
     if not email:
         email = await github_oauth.get_github_user_email(access_token)
     if not email:
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=no_email")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=no_email")
 
     email = email.strip().lower()
 
@@ -1087,23 +1115,24 @@ async def github_oauth_callback(
     except Exception as e:
         await db.rollback()
         logger.error(f"GitHub OAuth database error: {e}")
-        return RedirectResponse(url=f"{frontend_url}/auth/github/callback?error=server_error")
+        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=server_error")
 
     # Generate JWT session token
     token = auth.create_access_token(data={"sub": str(user.id)})
 
-    # Create redirect response with session cookie
+    # Create redirect response with session cookie and clean up state cookie
     redirect_url = f"{frontend_url}/auth/github/callback?token={token}"
-    redirect_response = RedirectResponse(url=redirect_url, status_code=302)
+    redirect_response = get_redirect_and_clean_state(redirect_url)
 
-    is_prod = config.APP_ENV == "production" or (request and request.url.scheme == "https")
+    # Secure cross-domain session token cookie handling
+    is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https") or ("localhost" not in frontend_url)
     redirect_response.set_cookie(
         key="session_token",
         value=token,
         httponly=True,
         max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        samesite="lax",
-        secure=is_prod,
+        samesite="none" if is_prod_cookie else "lax",
+        secure=True if is_prod_cookie else False,
     )
 
     return redirect_response
