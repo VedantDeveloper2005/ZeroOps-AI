@@ -152,6 +152,8 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_avatar_url TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_access_token_encrypted TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS failure_reason TEXT",
+        "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS infrastructure_metadata JSON",
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_users_github_id_unique') THEN

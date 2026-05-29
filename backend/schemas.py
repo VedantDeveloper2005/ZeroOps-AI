@@ -307,3 +307,31 @@ class GitHubReposListResponse(BaseModel):
     page: int = 1
     per_page: int = 30
     has_next: bool = False
+
+
+# ──────────────────────────────────────────────
+# ENVIRONMENT VARIABLES & TELEMETRY SCHEMAS
+# ──────────────────────────────────────────────
+
+class EnvVarResponse(BaseModel):
+    id: uuid.UUID
+    key: str
+    value: str
+    is_secret: bool
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class EnvVarCreate(BaseModel):
+    key: str
+    value: str
+    is_secret: bool = False
+
+class TelemetryMetricResponse(BaseModel):
+    cpu: List[dict] = []
+    memory: List[dict] = []
+    uptime: str = "99.99%"
+    error_rate: str = "0.0%"
+    response_time: str = "45ms"
+    request_count: int = 1200

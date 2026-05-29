@@ -118,10 +118,13 @@ function DeploymentsPageContent() {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Handle live WebSocket deployment stream or simulation
+  // Handle live WebSocket deployment stream, simulation, or loading historical logs
   useEffect(() => {
     if (!deployId) {
-      // No active deployment — just show history
+      setSteps(createInitialSteps());
+      setActiveLines([]);
+      setVisibleLines(0);
+      setIsAnimating(false);
       return;
     }
 
@@ -132,8 +135,47 @@ function DeploymentsPageContent() {
       return () => window.clearTimeout(timer);
     }
 
-    // Live Mode: Reset steps to pending, connect to websocket
-    const timer = setTimeout(() => {
+    let socket: WebSocket | null = null;
+    let active = true;
+
+    async function initializeLogsStream() {
+      // 1. Check if the deployment is a completed one by calling the API
+      try {
+        const detail = await api.getDeployment(deployId!);
+        if (!active) return;
+
+        const isFinished = ["running", "failed", "stopped", "rolled_back"].includes(detail.status);
+        if (isFinished) {
+          setIsAnimating(false);
+          const mappedLines = detail.logs.map(log => ({
+            text: log.message,
+            type: log.level.toLowerCase() as "command" | "blank" | "info" | "success" | "warning" | "error"
+          }));
+          setActiveLines(mappedLines);
+          setVisibleLines(mappedLines.length);
+
+          if (detail.status === "failed") {
+            setSteps(createInitialSteps().map((step, idx) => {
+              if (idx < 8) return { ...step, status: "completed" as const, duration: "done" };
+              if (idx === 8) return { ...step, status: "pending" as const, duration: "failed" };
+              return { ...step, status: "pending" as const, duration: "" };
+            }));
+          } else {
+            setSteps(createInitialSteps().map((step) => ({
+              ...step,
+              status: "completed" as const,
+              duration: "done"
+            })));
+          }
+          return;
+        }
+      } catch (err) {
+        console.error("Failed to check deployment details, falling back to websocket", err);
+      }
+
+      // 2. If it's building/active, connect to WebSocket
+      if (!active) return;
+      
       setSteps(
         createInitialSteps().map((s) =>
           s.id === 1
@@ -146,76 +188,84 @@ function DeploymentsPageContent() {
       ]);
       setVisibleLines(1);
       setIsAnimating(true);
-    }, 0);
 
-    const socket = new WebSocket(getWebSocketUrl(`/ws/deployments/${deployId}`));
+      socket = new WebSocket(getWebSocketUrl(`/ws/deployments/${deployId}`));
 
-    socket.onopen = () => {
-      setActiveLines((prev) => [
-        ...prev,
-        { text: `✓ Connected to host pipeline stream: ${deployId}`, type: "success" as const },
-      ]);
-      setVisibleLines((prev) => prev + 1);
-    };
+      socket.onopen = () => {
+        if (!active) return;
+        setActiveLines((prev) => [
+          ...prev,
+          { text: `✓ Connected to host pipeline stream: ${deployId}`, type: "success" as const },
+        ]);
+        setVisibleLines((prev) => prev + 1);
+      };
 
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "stage") {
-          setSteps((prevSteps) =>
-            prevSteps.map((step) =>
-              step.id === data.id
-                ? { ...step, status: data.status, duration: data.duration || step.duration }
-                : step
-            )
-          );
-        } else if (data.type === "log") {
-          setActiveLines((prev) => {
-            const updated = [...prev, { text: data.text, type: data.lineType as "command" | "blank" | "info" | "success" | "warning" | "error" }];
-            setVisibleLines(updated.length);
-            return updated;
-          });
-        } else if (data.type === "status") {
-          setIsAnimating(false);
-          if (data.status === "running") {
-            addToast("Deployment successful: your app is live!", "success");
-            refreshStats();
-            addNotification({
-              title: "Deployment Successful",
-              message: `Successfully deployed application for run ${deployId} to AKS.`,
-              type: "success",
-              category: "deployment",
-              action_url: "/dashboard/deployments",
+      socket.onmessage = (event) => {
+        if (!active) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "stage") {
+            setSteps((prevSteps) =>
+              prevSteps.map((step) =>
+                step.id === data.id
+                  ? { ...step, status: data.status, duration: data.duration || step.duration }
+                  : step
+              )
+            );
+          } else if (data.type === "log") {
+            setActiveLines((prev) => {
+              const updated = [...prev, { text: data.text, type: data.lineType as "command" | "blank" | "info" | "success" | "warning" | "error" }];
+              setVisibleLines(updated.length);
+              return updated;
             });
-          } else if (data.status === "failed") {
-            addToast("Deployment failed! Check the build logs.", "error");
-            addNotification({
-              title: "Deployment Failed",
-              message: `Pipeline run ${deployId} failed during execution.`,
-              type: "critical",
-              category: "deployment",
-              action_url: "/dashboard/deployments",
-            });
+          } else if (data.type === "status") {
+            setIsAnimating(false);
+            if (data.status === "running") {
+              addToast("Deployment successful: your app is live!", "success");
+              refreshStats();
+              addNotification({
+                title: "Deployment Successful",
+                message: `Successfully deployed application for run ${deployId} to AKS.`,
+                type: "success",
+                category: "deployment",
+                action_url: "/dashboard/deployments",
+              });
+            } else if (data.status === "failed") {
+              addToast("Deployment failed! Check the build logs.", "error");
+              addNotification({
+                title: "Deployment Failed",
+                message: `Pipeline run ${deployId} failed during execution.`,
+                type: "critical",
+                category: "deployment",
+                action_url: "/dashboard/deployments",
+              });
+            }
+            fetchHistory();
           }
-          fetchHistory();
+        } catch (e) {
+          console.error("Error parsing WS message:", e);
         }
-      } catch (e) {
-        console.error("Error parsing WS message:", e);
-      }
-    };
+      };
 
-    socket.onerror = () => {
-      socket.close();
-      runFallbackDeployment("WebSocket unavailable. Replaying a deterministic deployment stream.");
-    };
+      socket.onerror = () => {
+        if (!active) return;
+        socket?.close();
+        runFallbackDeployment("WebSocket unavailable. Replaying a deterministic deployment stream.");
+      };
 
-    socket.onclose = () => {
-      setIsAnimating(false);
-    };
+      socket.onclose = () => {
+        if (!active) return;
+        setIsAnimating(false);
+      };
+    }
+
+    initializeLogsStream();
 
     return () => {
-      clearTimeout(timer);
-      socket.close();
+      active = false;
+      if (socket) {
+        socket.close();
+      }
     };
   }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory, refreshStats]);
 
@@ -228,22 +278,27 @@ function DeploymentsPageContent() {
 
   const handleRedeploy = async () => {
     if (isAnimating) return;
-    addToast(`Initializing redeployment for ${projectId}...`, "info");
+    const currentDep = history.find(h => h.id === deployId);
+    const targetProjectId = currentDep?.project_id || (history.length > 0 ? history[0].project_id : null);
+    
+    if (!targetProjectId) {
+      addToast("No active project found to redeploy.", "error");
+      return;
+    }
+
+    addToast(`Initializing redeployment...`, "info");
     try {
-      const res = await fetch("/api/deployments/deploy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: repoParam, branch: "main" }),
+      const data = await api.startDeployment({
+        project_id: targetProjectId,
+        branch: currentDep?.branch || "main",
+        environment: currentDep?.environment || "production"
       });
-      if (!res.ok) throw new Error("Failed to redeploy");
-      const data = await res.json();
       if (data.status === "success") {
         addToast("Redeployment initialized. Redirecting to live pipeline...", "success");
         router.push(`/dashboard/deployments?id=${data.deployment_id}&repo=${encodeURIComponent(repoParam)}`);
       }
     } catch {
-      addToast("Backend unavailable. Starting guided redeployment simulation.", "warning");
-      router.push(`/dashboard/deployments?id=demo-${projectId}&repo=${encodeURIComponent(repoParam)}&mode=fallback`);
+      addToast("Failed to initialize redeployment.", "error");
     }
   };
 
@@ -282,17 +337,25 @@ function DeploymentsPageContent() {
 
   const executeScale = async () => {
     setIsScaleModalOpen(false);
-    addToast(`Scaling ${projectId} to ${scaleCount} replicas...`, "info");
+    const currentDep = history.find(h => h.id === deployId);
+    const targetProjectId = currentDep?.project_id || (history.length > 0 ? history[0].project_id : null);
+    
+    if (!targetProjectId) {
+      addToast("No active project selected to scale.", "error");
+      return;
+    }
+
+    addToast(`Scaling deployment to ${scaleCount} replicas...`, "info");
     try {
-      const res = await fetch("/api/deployments/scale", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "web-app", replicas: scaleCount }),
+      await api.configureAutoscaling({
+        projectId: targetProjectId,
+        minReplicas: scaleCount,
+        maxReplicas: scaleCount,
+        cpuTarget: 80
       });
-      if (!res.ok) throw new Error("Failed to scale deployment");
       addToast(`Scaled to ${scaleCount} replicas successfully!`, "success");
     } catch {
-      addToast("Scaling failed to execute on Kubernetes context.", "error");
+      addToast("Failed to scale deployment.", "error");
     }
   };
 
@@ -444,7 +507,11 @@ function DeploymentsPageContent() {
             </thead>
             <tbody>
               {history.map((d) => (
-                <tr key={d.id} className="border-b border-border/50 hover:bg-card-hover/30 transition-colors text-xs">
+                <tr
+                  key={d.id}
+                  onClick={() => router.push(`/dashboard/deployments?id=${d.id}&repo=${encodeURIComponent(d.project_name || "")}`)}
+                  className="border-b border-border/50 hover:bg-card-hover/30 transition-colors text-xs cursor-pointer"
+                >
                   <td className="py-3 font-bold text-foreground">{d.project_name || "Project"}</td>
                   <td className="py-3 text-foreground-muted font-mono">{d.version || "—"}</td>
                   <td className="py-3 text-foreground-muted">{d.environment}</td>

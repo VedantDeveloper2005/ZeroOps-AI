@@ -189,6 +189,23 @@ export interface GitHubStatus {
 // Keep old interface as alias for backward compatibility
 export type GitHubRepo = GitHubRepoItem;
 
+export interface EnvVar {
+  id: string;
+  key: string;
+  value: string;
+  is_secret: boolean;
+  created_at: string | null;
+}
+
+export interface TelemetryMetric {
+  cpu: { time: string; value: number }[];
+  memory: { time: string; value: number }[];
+  uptime: string;
+  error_rate: string;
+  response_time: string;
+  request_count: number;
+}
+
 // ──────────────────────────────────────────────
 // API CLIENT
 // ──────────────────────────────────────────────
@@ -354,5 +371,23 @@ export const api = {
     request<void>("/api/autoscaling/configure", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  // ── Project Metrics & Env Vars ──
+  getProjectMetrics: (projectId: string) =>
+    request<TelemetryMetric>(`/api/projects/${projectId}/metrics`),
+
+  getEnvVars: (projectId: string) =>
+    request<EnvVar[]>(`/api/projects/${projectId}/variables`),
+
+  addEnvVar: (projectId: string, data: { key: string; value: string; is_secret: boolean }) =>
+    request<EnvVar>(`/api/projects/${projectId}/variables`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  deleteEnvVar: (projectId: string, varId: string) =>
+    request<void>(`/api/projects/${projectId}/variables/${varId}`, {
+      method: "DELETE",
     }),
 };

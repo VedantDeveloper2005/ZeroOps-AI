@@ -61,6 +61,19 @@ function timeAgo(dateStr: string): string {
   return `${months}mo ago`;
 }
 
+function calculateReadinessScore(repo: GitHubRepoItem): number {
+  let score = 70; // baseline
+  if (repo.description) score += 10;
+  if (repo.default_branch === "main" || repo.default_branch === "master") score += 5;
+  if (repo.language) {
+    if (["TypeScript", "JavaScript", "Python"].includes(repo.language)) score += 15;
+    else if (["Go", "Rust"].includes(repo.language)) score += 10;
+    else score += 5;
+  }
+  if (repo.stargazers_count > 0) score += 5;
+  return Math.min(100, score);
+}
+
 export default function RepositoriesPage() {
   const router = useRouter();
   const { user, loginWithGitHub } = useAuth();
@@ -433,12 +446,26 @@ export default function RepositoriesPage() {
               </div>
 
               {isLoadingRepos ? (
-                <div className="p-8 text-center">
-                  <Loader2 className="animate-spin text-primary mx-auto mb-2" size={24} />
-                  <p className="text-xs text-foreground-muted">Discovering repositories...</p>
+                <div className="grid md:grid-cols-3 gap-3">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="p-4 rounded-xl border border-border bg-card/40 space-y-3 animate-pulse">
+                      <div className="flex items-center justify-between">
+                        <div className="h-4 bg-background-secondary rounded w-24" />
+                        <div className="h-4 bg-background-secondary rounded-full w-12" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="h-3 bg-background-secondary rounded w-full" />
+                        <div className="h-3 bg-background-secondary rounded w-2/3" />
+                      </div>
+                      <div className="flex items-center justify-between pt-2">
+                        <div className="h-3 bg-background-secondary rounded w-10" />
+                        <div className="h-3 bg-background-secondary rounded w-14" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : gitRepos.length === 0 ? (
-                <div className="p-8 text-center space-y-2">
+                <div className="p-8 text-center space-y-2 bg-card/20 border border-border/60 rounded-xl">
                   <GitBranch size={32} className="text-foreground-muted mx-auto" />
                   <p className="text-sm text-foreground-muted">No repositories found.</p>
                   {repoSearchQuery && (
@@ -453,49 +480,71 @@ export default function RepositoriesPage() {
               ) : (
                 <>
                   <div className="grid md:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1">
-                    {gitRepos.map((repo) => (
-                      <motion.div
-                        key={repo.id}
-                        initial={{ opacity: 0, y: 5 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        onClick={() => {
-                          setSelectedRepo(repo.full_name);
-                          setDetectedFramework(detectFramework(repo.language));
-                        }}
-                        className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
-                          selectedRepo === repo.full_name
-                            ? "bg-primary-subtle/20 border-primary shadow-lg"
-                            : "bg-card border-border hover:bg-card-hover hover:border-border/80"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
-                          <span className="font-semibold text-xs text-foreground truncate max-w-[130px]">
-                            {repo.name}
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            {repo.private && (
-                              <Lock size={10} className="text-foreground-muted" />
-                            )}
-                            {repo.language && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-foreground-muted font-medium">
-                                {repo.language}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-foreground-muted line-clamp-2 min-h-[28px]">
-                          {repo.description || "No description provided."}
-                        </p>
-                        <div className="flex items-center gap-3 mt-2 text-[10px] text-foreground-muted">
-                          {repo.stargazers_count > 0 && (
-                            <span className="flex items-center gap-0.5">
-                              <Star size={10} /> {repo.stargazers_count}
+                    {gitRepos.map((repo) => {
+                      const readiness = calculateReadinessScore(repo);
+                      return (
+                        <motion.div
+                          key={repo.id}
+                          initial={{ opacity: 0, y: 5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          onClick={() => {
+                            setSelectedRepo(repo.full_name);
+                            setDetectedFramework(detectFramework(repo.language));
+                          }}
+                          className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
+                            selectedRepo === repo.full_name
+                              ? "bg-primary-subtle/20 border-primary shadow-lg"
+                              : "bg-card border-border hover:bg-card-hover hover:border-border/80"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
+                            <span className="font-semibold text-xs text-foreground truncate max-w-[130px]">
+                              {repo.name}
                             </span>
-                          )}
-                          <span>{timeAgo(repo.updated_at)}</span>
-                        </div>
-                      </motion.div>
-                    ))}
+                            <div className="flex items-center gap-1.5">
+                              {repo.private && (
+                                <Lock size={10} className="text-foreground-muted" />
+                              )}
+                              {repo.language && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-foreground-muted font-medium">
+                                  {repo.language}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-foreground-muted line-clamp-2 min-h-[28px]">
+                            {repo.description || "No description provided."}
+                          </p>
+                          
+                          {/* Readiness Score Progress Bar */}
+                          <div className="mt-2.5 flex items-center justify-between">
+                            <span className="text-[10px] text-foreground-muted">Readiness:</span>
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1.5 w-12 bg-background-secondary rounded-full overflow-hidden border border-border/40">
+                                <div
+                                  className={`h-full rounded-full ${
+                                    readiness >= 90 ? "bg-success" : readiness >= 80 ? "bg-warning" : "bg-danger"
+                                  }`}
+                                  style={{ width: `${readiness}%` }}
+                                />
+                              </div>
+                              <span className={`text-[10px] font-bold ${
+                                readiness >= 90 ? "text-success" : readiness >= 80 ? "text-warning" : "text-danger"
+                              }`}>
+                                {readiness}%
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border/20 text-[9px] text-foreground-muted">
+                            <span className="flex items-center gap-0.5">
+                              <Star size={9} /> {repo.stargazers_count}
+                            </span>
+                            <span>{timeAgo(repo.updated_at)}</span>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
                   </div>
                   {hasMoreRepos && (
                     <div className="text-center pt-2">

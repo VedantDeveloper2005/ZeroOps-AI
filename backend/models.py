@@ -114,6 +114,8 @@ class User(Base):
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     ai_actions = relationship("AIAction", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    repositories = relationship("Repository", back_populates="user", cascade="all, delete-orphan")
+    activity_events = relationship("ActivityEvent", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -157,6 +159,8 @@ class Project(Base):
     deployments = relationship("Deployment", back_populates="project", cascade="all, delete-orphan", order_by="Deployment.started_at.desc()")
     ai_analyses = relationship("AIAnalysis", back_populates="project", cascade="all, delete-orphan")
     ai_actions = relationship("AIAction", back_populates="project", cascade="all, delete-orphan")
+    environments = relationship("Environment", back_populates="project", cascade="all, delete-orphan")
+    activity_events = relationship("ActivityEvent", back_populates="project", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_projects_user_id", "user_id"),
@@ -184,11 +188,14 @@ class Deployment(Base):
     deployed_by = Column(Text, default="AI Auto-Deploy")
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
-
+    failure_reason = Column(Text, nullable=True)
+    infrastructure_metadata = Column(JSON, nullable=True)
+ 
     # Relationships
     user = relationship("User", back_populates="deployments")
     project = relationship("Project", back_populates="deployments")
     logs = relationship("DeploymentLog", back_populates="deployment", cascade="all, delete-orphan", order_by="DeploymentLog.line_number")
+    metrics = relationship("DeploymentMetric", back_populates="deployment", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_deployments_user_id", "user_id"),
@@ -326,4 +333,119 @@ class UserSettings(Base):
 
     __table_args__ = (
         Index("ix_user_settings_user_id", "user_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# CONNECTED REPOSITORIES
+# ──────────────────────────────────────────────
+
+class Repository(Base):
+    __tablename__ = "repositories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    full_name = Column(Text, nullable=False)
+    html_url = Column(Text, nullable=True)
+    private = Column(Boolean, default=False)
+    language = Column(Text, nullable=True)
+    default_branch = Column(Text, default="main")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="repositories")
+
+    __table_args__ = (
+        Index("ix_repositories_user_id", "user_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# ENVIRONMENTS
+# ──────────────────────────────────────────────
+
+class Environment(Base):
+    __tablename__ = "environments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, default="production")  # production, staging, development
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    project = relationship("Project", back_populates="environments")
+    variables = relationship("EnvironmentVariable", back_populates="environment", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_environments_project_id", "project_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# ENVIRONMENT VARIABLES
+# ──────────────────────────────────────────────
+
+class EnvironmentVariable(Base):
+    __tablename__ = "environment_variables"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    environment_id = Column(UUID(as_uuid=True), ForeignKey("environments.id", ondelete="CASCADE"), nullable=False)
+    key = Column(String(255), nullable=False)
+    value = Column(Text, nullable=False)
+    is_secret = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    environment = relationship("Environment", back_populates="variables")
+
+    __table_args__ = (
+        Index("ix_environment_variables_environment_id", "environment_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT METRICS (Real telemetry history)
+# ──────────────────────────────────────────────
+
+class DeploymentMetric(Base):
+    __tablename__ = "deployment_metrics"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False)
+    cpu_utilization = Column(Float, default=0.0)
+    memory_utilization = Column(Float, default=0.0)
+    request_count = Column(Integer, default=0)
+    error_rate = Column(Float, default=0.0)
+    response_time_ms = Column(Integer, default=0)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    deployment = relationship("Deployment", back_populates="metrics")
+
+    __table_args__ = (
+        Index("ix_deployment_metrics_deployment_id", "deployment_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# ACTIVITY EVENTS
+# ──────────────────────────────────────────────
+
+class ActivityEvent(Base):
+    __tablename__ = "activity_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    action = Column(Text, nullable=False)
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="activity_events")
+    project = relationship("Project", back_populates="activity_events")
+
+    __table_args__ = (
+        Index("ix_activity_events_user_id", "user_id"),
     )
