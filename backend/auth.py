@@ -28,7 +28,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         plain_bytes = plain_password.encode("utf-8")
         hash_bytes = hashed_password.encode("utf-8")
         
-        logger.info(f"Verifying password. Stored Hash Length: {len(hashed_password)}. Prefix: {hashed_password[:10]}...")
+        logger.info(f"Verifying password. Stored Hash Length: {len(hashed_password)}.")
         result = bcrypt.checkpw(plain_bytes, hash_bytes)
         logger.info(f"Password verification status: {'SUCCESS' if result else 'FAILED'}")
         return result

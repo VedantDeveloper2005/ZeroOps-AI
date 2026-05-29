@@ -79,8 +79,9 @@ DOCKER_AVAILABLE = check_docker()
 K8S_AVAILABLE = check_kubernetes()
 
 # Database & Authentication configurations
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://zeroopsadmin:Ved%402005%23@zeroops-db-vedant.postgres.database.azure.com:5432/zeroops")
-JWT_SECRET = os.getenv("JWT_SECRET", "zeroops_super_secure_jwt_secret_2026")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+DEFAULT_JWT_SECRET = "zeroops_super_secure_jwt_secret_2026"
+JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080")) # 7 days
 
@@ -93,4 +94,8 @@ print(f"  CORS Origins: {', '.join(CORS_ORIGINS)}")
 print(f"  Workspace Directory: {WORKSPACE_DIR}")
 print(f"  Database Configured: {bool(DATABASE_URL)}")
 print(f"  JWT Secret Configured: {bool(JWT_SECRET)}")
+if JWT_SECRET == DEFAULT_JWT_SECRET:
+    print("  WARNING: Running with default JWT_SECRET. Ensure this is overridden in production.")
+if not DATABASE_URL:
+    print("  WARNING: DATABASE_URL is not set. Database storage features will be unavailable.")
 

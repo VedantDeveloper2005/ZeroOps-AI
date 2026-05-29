@@ -1473,12 +1473,31 @@ async def get_repo_metadata(
 # ──────────────────────────────────────────────
 
 @app.get("/api/monitoring/metrics")
-async def get_metrics(project_id: Optional[str] = None, current_user: models.User = Depends(auth.get_current_user)):
+async def get_metrics(
+    project_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    if project_id:
+        proj_result = await db.execute(
+            select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        )
+        if not proj_result.scalars().first():
+            raise HTTPException(status_code=404, detail="Project not found")
     return k8s.get_cluster_resource_metrics(project_id)
 
 
 @app.post("/api/secrets")
-async def add_secret(req: schemas.SecretCreateRequest, current_user: models.User = Depends(auth.get_current_user)):
+async def add_secret(
+    req: schemas.SecretCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == req.projectId, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     success = vault.set_project_secret(req.projectId, req.key, req.value)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save secret")
