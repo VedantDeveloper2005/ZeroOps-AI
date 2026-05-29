@@ -1080,9 +1080,11 @@ async def analyze_repo(
         deployment_strategy=analysis.get("deployment_strategy") or analysis.get("deployment_target"),
         build_commands=analysis.get("build_commands") or analysis.get("build_command"),
         start_commands=analysis.get("start_commands") or analysis.get("start_command"),
-        environment_variables=analysis.get("environment_variables") or analysis.get("required_env_vars", [])
+        environment_variables=analysis.get("environment_variables") or analysis.get("required_env_vars", []),
+        explanation=analysis.get("explanation")
     )
     db.add(db_analysis)
+
     
     # Store recommendation in DB (Phase 4)
     db_recommendation = models.DeploymentRecommendation(
@@ -1123,6 +1125,49 @@ async def analyze_repo(
     }
 
     return analysis
+
+
+@app.post("/api/ai/chat")
+async def ai_chat(
+    req: schemas.ChatRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Conversational AI DevOps Assistant chat endpoint."""
+    project_metadata = {}
+    if req.project_id:
+        proj_result = await db.execute(
+            select(models.Project).filter(models.Project.id == req.project_id, models.Project.user_id == current_user.id)
+        )
+        project = proj_result.scalars().first()
+        if project:
+            analysis_result = await db.execute(
+                select(models.AIAnalysis)
+                .filter(models.AIAnalysis.project_id == req.project_id)
+                .order_by(models.AIAnalysis.created_at.desc())
+                .limit(1)
+            )
+            analysis = analysis_result.scalars().first()
+            
+            project_metadata = {
+                "name": project.name,
+                "framework": project.framework,
+                "language": project.language,
+                "region": project.region,
+                "status": project.status,
+                "live_url": f"https://{project.name}.zeroops.dev"
+            }
+            if analysis:
+                project_metadata["runtime"] = analysis.runtime or "Node.js"
+                project_metadata["database"] = (analysis.database_dependencies[0] 
+                                                if (analysis.database_dependencies and len(analysis.database_dependencies) > 0 and analysis.database_dependencies[0] != "None")
+                                                else "PostgreSQL")
+
+    reply = ai.generate_chat_response(req.message, project_metadata)
+    return {"reply": reply}
+
+
+
 
 
 @app.get("/api/projects/{project_id}/recommendations", response_model=schemas.DeploymentRecommendationResponse)

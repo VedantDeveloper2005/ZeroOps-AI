@@ -320,6 +320,8 @@ class AIAnalysis(Base):
     build_commands = Column(Text, nullable=True)
     start_commands = Column(Text, nullable=True)
     environment_variables = Column(JSON, default=list)
+    explanation = Column(Text, nullable=True)
+
 
     # Relationships
     project = relationship("Project", back_populates="ai_analyses")

@@ -183,9 +183,16 @@ class AIAnalysisResponse(BaseModel):
     build_commands: Optional[str] = None
     start_commands: Optional[str] = None
     environment_variables: List[str] = []
+    explanation: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class ChatRequest(BaseModel):
+    message: str
+    project_id: Optional[uuid.UUID] = None
+
 
 
 # ──────────────────────────────────────────────

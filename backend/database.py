@@ -170,6 +170,8 @@ async def run_migrations():
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS build_commands TEXT",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS start_commands TEXT",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS environment_variables JSON DEFAULT '[]'",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS explanation TEXT",
+
         
         # Make project_id in ai_analyses nullable
         "ALTER TABLE ai_analyses ALTER COLUMN project_id DROP NOT NULL",

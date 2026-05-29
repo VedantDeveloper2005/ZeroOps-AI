@@ -132,6 +132,7 @@ export interface AIAnalysis {
   build_commands: string | null;
   start_commands: string | null;
   environment_variables: string[];
+  explanation?: string | null;
 }
 
 export interface DeploymentRecommendation {
@@ -331,6 +332,12 @@ export const api = {
 
   getAIAnalysisHistory: (projectId: string) =>
     request<AIAnalysis[]>(`/api/projects/${projectId}/analyses`),
+
+  sendChatRequest: (message: string, projectId?: string) =>
+    request<{ reply: string }>("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, project_id: projectId }),
+    }),
 
   // ── Dashboard ──
   getDashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),

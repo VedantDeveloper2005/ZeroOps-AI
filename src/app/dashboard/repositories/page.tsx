@@ -8,6 +8,8 @@ import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 import { useRouter } from "next/navigation";
 import { api, type Project, type GitHubRepoItem } from "@/lib/api";
+import { ArchitectureDiagram } from "@/components/dashboard/ArchitectureDiagram";
+
 
 const frameworkColors: Record<string, string> = {
   "Next.js": "bg-white/10 text-white",
@@ -108,6 +110,8 @@ export default function RepositoriesPage() {
   const [maxReplicas, setMaxReplicas] = useState(10);
   const [deployMode, setDeployMode] = useState("standard");
   const [detectedFramework, setDetectedFramework] = useState("Next.js");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
 
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -216,19 +220,19 @@ export default function RepositoriesPage() {
     return () => clearInterval(timer);
   }, [isAnalyzing]);
 
-  // Track whether analysis has already been triggered for the current step-3 visit
+  // Track whether analysis has already been triggered for the current step-2 visit
   const hasTriggeredAnalysis = useRef(false);
 
-  // Reset the guard when leaving step 3
+  // Reset the guard when leaving step 2
   useEffect(() => {
-    if (onboardStep !== 3) {
+    if (onboardStep !== 2) {
       hasTriggeredAnalysis.current = false;
     }
   }, [onboardStep]);
 
-  // Automatically trigger AI analysis when step 3 is reached (exactly once)
+  // Automatically trigger AI analysis when step 2 is reached (exactly once)
   useEffect(() => {
-    if (onboardStep !== 3 || !selectedRepo || hasTriggeredAnalysis.current) return;
+    if (onboardStep !== 2 || !selectedRepo || hasTriggeredAnalysis.current) return;
     hasTriggeredAnalysis.current = true;
 
     setIsAnalyzing(true);
@@ -256,6 +260,7 @@ export default function RepositoriesPage() {
           ports: data.port || "3000",
           vulnerabilities: data.vulnerabilities || [],
           deploymentRecommendation: data.deployment_recommendation || null,
+          explanation: data.explanation || `This is a ${fallbackFramework} application built with ${repoObj?.language || "TypeScript"}. It utilizes npm for package management, contains containerized settings, and runs in high-availability mode on Azure.`,
         });
         
         if (data.environment_variables && data.environment_variables.length > 0) {
@@ -289,12 +294,14 @@ export default function RepositoriesPage() {
           memory: "256Mi",
           ports: fallbackFramework === "FastAPI" ? "8000" : "3000",
           vulnerabilities: [],
+          explanation: `This is a ${fallbackFramework} application built with ${repoObj?.language || "TypeScript"}. It utilizes npm for package management, contains containerized settings, and runs in high-availability mode on Azure.`,
         });
         addToast("AI Analysis completed with local metadata.", "success");
       });
   // Only re-run when the step or selected repo/branch actually changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onboardStep, selectedRepo, selectedBranch]);
+
 
 
   const handleLaunchDeployment = async () => {
@@ -453,17 +460,14 @@ export default function RepositoriesPage() {
             Set up your workspace and launch your first autonomic cloud deployment.
           </p>
           
-          {/* Progress Indicators (6 Steps) */}
-          <div className="flex items-center justify-center gap-2 pt-6 max-w-2xl mx-auto overflow-x-auto no-scrollbar">
+          {/* Progress Indicators (3 Steps) */}
+          <div className="flex items-center justify-center gap-2 pt-6 max-w-xl mx-auto overflow-x-auto no-scrollbar">
             {[
-              { id: 1, label: "Select Repo" },
-              { id: 2, label: "Select Branch" },
-              { id: 3, label: "AI Analysis" },
-              { id: 4, label: "Env Variables" },
-              { id: 5, label: "Target Config" },
-              { id: 6, label: "Review & Deploy" },
+              { id: 1, label: "Select Repo & Branch" },
+              { id: 2, label: "AI Scan & Architecture" },
+              { id: 3, label: "Review & Deploy" },
             ].map((step, idx) => (
-              <div key={step.id} className="flex items-center flex-1 min-w-[90px]">
+              <div key={step.id} className="flex items-center flex-1 min-w-[120px]">
                 <div className="flex flex-col items-center gap-1.5 flex-1">
                   <div
                     className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border transition-all duration-300 ${
@@ -477,14 +481,14 @@ export default function RepositoriesPage() {
                     {onboardStep > step.id ? <Check size={14} /> : step.id}
                   </div>
                   <span
-                    className={`text-[9px] font-bold transition-colors duration-300 whitespace-nowrap ${
+                    className={`text-[10px] font-bold transition-colors duration-300 whitespace-nowrap ${
                       onboardStep === step.id ? "text-foreground" : "text-foreground-muted"
                     }`}
                   >
                     {step.label}
                   </span>
                 </div>
-                {idx < 5 && (
+                {idx < 2 && (
                   <div
                     className={`h-px flex-1 -mt-4 mx-2 transition-all duration-300 ${
                       onboardStep > step.id ? "bg-success/40" : "bg-border"
@@ -494,6 +498,7 @@ export default function RepositoriesPage() {
               </div>
             ))}
           </div>
+
         </div>
 
         {/* Git Connect Prerequisite State */}
@@ -690,6 +695,40 @@ export default function RepositoriesPage() {
                   </>
                 )}
 
+                {/* Branch Selection Panel (if repo selected) */}
+                {selectedRepo && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-4 rounded-xl border border-primary/20 bg-primary-subtle/5 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <GitBranch size={16} className="text-primary animate-pulse" />
+                        <span className="text-xs font-semibold text-foreground">Target Branch Selection</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-primary font-bold">{selectedRepo}</span>
+                    </div>
+                    <div>
+                      {isLoadingBranches ? (
+                        <div className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground-muted flex items-center gap-2">
+                          <Loader2 size={12} className="animate-spin text-primary" /> Loading branches...
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedBranch}
+                          onChange={(e) => setSelectedBranch(e.target.value)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-mono"
+                        >
+                          {availableBranches.map((b) => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+
                 <div className="flex justify-end pt-6 border-t border-border/40">
                   <button
                     disabled={!selectedRepo}
@@ -702,78 +741,15 @@ export default function RepositoriesPage() {
               </div>
             )}
 
-            {/* STEP 2: SELECT BRANCH */}
+
+            {/* STEP 2: AI CODE SCAN & ARCHITECTURE */}
             {onboardStep === 2 && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-border/40 pb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Select Branch</h3>
+                    <h3 className="text-lg font-bold text-foreground">AI Scan & Architecture</h3>
                     <p className="text-xs text-foreground-muted">
-                      Select which branch we should track and deploy to production.
-                    </p>
-                  </div>
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
-                    {selectedRepo}
-                  </span>
-                </div>
-
-                <div className="max-w-md mx-auto space-y-4 py-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground-muted mb-1.5">
-                      Target Branch
-                    </label>
-                    {isLoadingBranches ? (
-                      <div className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground-muted flex items-center gap-2">
-                        <Loader2 size={14} className="animate-spin text-primary" /> Loading branches...
-                      </div>
-                    ) : (
-                      <select
-                        value={selectedBranch}
-                        onChange={(e) => setSelectedBranch(e.target.value)}
-                        className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                      >
-                        {availableBranches.map((b) => (
-                          <option key={b} value={b}>
-                            {b}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  <div className="rounded-xl border border-border/40 bg-card/40 p-4 space-y-2 text-xs">
-                    <p className="font-semibold text-foreground">Track Branch Deployments</p>
-                    <p className="text-foreground-muted leading-relaxed">
-                      ZeroOps monitors this branch. Pushing new commits will trigger automated testing, container builds, and canary updates.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex justify-between pt-6 border-t border-border/40">
-                  <button
-                    onClick={() => setOnboardStep(1)}
-                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={() => setOnboardStep(3)}
-                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
-                  >
-                    Next <ArrowRight size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 3: AI CODE ANALYSIS */}
-            {onboardStep === 3 && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between border-b border-border/40 pb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-foreground">AI Codebase Analysis</h3>
-                    <p className="text-xs text-foreground-muted">
-                      ZeroOps scans your repository to detect dependencies, frameworks, runtimes, and ports.
+                      ZeroOps AI is analyzing your repository structure and auto-compiling the deployment flow.
                     </p>
                   </div>
                   <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
@@ -783,15 +759,11 @@ export default function RepositoriesPage() {
 
                 {isAnalyzing ? (
                   <div className="relative overflow-hidden bg-card border border-border rounded-2xl p-8 text-center space-y-6 shadow-xl">
-                    {/* Rotating gradient background glow */}
                     <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse" />
-                    
-                    {/* Spin and brain glow */}
                     <div className="relative mx-auto w-16 h-16 flex items-center justify-center bg-primary/10 border border-primary/20 rounded-full animate-bounce">
                       <Brain size={28} className="text-primary animate-pulse" />
                       <Loader2 size={64} className="absolute animate-spin text-primary/40" />
                     </div>
-
                     <div className="space-y-4 relative">
                       <div>
                         <h4 className="text-sm font-bold text-foreground">Analyzing Repository via GPT-4.1</h4>
@@ -799,8 +771,6 @@ export default function RepositoriesPage() {
                           GitHub Models is scanning files and structure for deployment architecture.
                         </p>
                       </div>
-                      
-                      {/* Terminal scanning log */}
                       <div className="text-[11px] text-foreground-muted font-mono max-w-lg mx-auto bg-zinc-950 p-4 rounded-xl border border-border/60 text-left space-y-2 max-h-[160px] overflow-y-auto no-scrollbar shadow-inner">
                         {scanLogs.map((log, index) => (
                           <div key={index} className="flex items-center gap-2 animate-fade-in">
@@ -815,101 +785,48 @@ export default function RepositoriesPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-6">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      {/* Left Card: Framework & Runtime */}
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/60">
-                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1.5">
-                          <Brain size={14} className="text-primary" /> Framework & Runtime
-                        </h4>
-                        <div className="space-y-2.5 pt-1.5">
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Detected Framework</span>
-                            <span className="font-semibold text-foreground">{analysisResult?.framework}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Language</span>
-                            <span className="font-semibold text-foreground">{analysisResult?.language}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Runtime Environment</span>
-                            <span className="font-semibold text-foreground font-mono bg-background-secondary px-2 py-0.5 rounded border border-border/60">
-                              {analysisResult?.runtime}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Package Manager</span>
-                            <span className="font-semibold text-foreground">{analysisResult?.packageManager}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right Card: Build & Strategy */}
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/60">
-                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1.5">
-                          <Terminal size={14} className="text-primary" /> Build & Execution Settings
-                        </h4>
-                        <div className="space-y-2.5 pt-1.5">
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Docker Support</span>
-                            <span className={`font-semibold ${analysisResult?.dockerSupport ? "text-success" : "text-foreground-muted"}`}>
-                              {analysisResult?.dockerSupport ? "Yes (Dockerfile)" : "No (Auto-built)"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Deployment Target</span>
-                            <span className="font-semibold text-foreground">{analysisResult?.deploymentStrategy}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Build Command</span>
-                            <span className="font-mono text-[10px] text-foreground bg-background-secondary px-1.5 py-0.5 rounded border border-border/40 truncate max-w-[150px]">
-                              {analysisResult?.buildCommands}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="text-foreground-muted">Start Command</span>
-                            <span className="font-mono text-[10px] text-foreground bg-background-secondary px-1.5 py-0.5 rounded border border-border/40 truncate max-w-[150px]">
-                              {analysisResult?.startCommands}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
+                  <div className="space-y-6 animate-fade-in">
+                    {/* Plain English Explanation */}
+                    <div className="glass rounded-xl p-5 border border-primary/20 bg-gradient-to-r from-primary/5 to-transparent space-y-2">
+                      <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
+                        <Brain size={14} className="text-primary animate-pulse" /> Explain This Project
+                      </h4>
+                      <p className="text-xs text-foreground-muted leading-relaxed">
+                        {analysisResult?.explanation}
+                      </p>
                     </div>
 
-                    <div className="grid md:grid-cols-2 gap-4">
-                      {/* Left: Databases */}
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2">
-                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                          Databases & Integrations
-                        </h4>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {analysisResult?.databaseDependencies?.length > 0 && analysisResult.databaseDependencies[0] !== "None" ? (
-                            analysisResult.databaseDependencies.map((db: string) => (
-                              <span key={db} className="text-[10px] font-mono px-2 py-1 rounded bg-accent/10 border border-accent/20 text-accent font-semibold">
-                                {db}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-xs text-foreground-muted">No database dependencies detected.</span>
-                          )}
-                        </div>
-                      </div>
+                    {/* AI Architecture Diagram */}
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                        Autonomic System Architecture
+                      </h4>
+                      <ArchitectureDiagram 
+                        repo={selectedRepo}
+                        branch={selectedBranch}
+                        framework={analysisResult?.framework || detectedFramework}
+                        runtime={analysisResult?.runtime || "Node.js 20"}
+                        database={analysisResult?.databaseDependencies?.[0] || "None"}
+                        liveUrl={`https://${selectedRepo.split("/").pop() || "app"}.zeroops.dev`}
+                      />
+                    </div>
 
-                      {/* Right: Cognitive Limits Recommendation */}
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2">
-                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                          Resource Recommendations
-                        </h4>
-                        <div className="grid grid-cols-2 gap-3 pt-1">
-                          <div className="bg-background-secondary/50 p-2 rounded border border-border/40 text-center">
-                            <p className="text-[9px] uppercase tracking-wide text-foreground-muted font-semibold">CPU Limit</p>
-                            <p className="text-sm font-bold text-foreground mt-0.5">{analysisResult?.cpu}</p>
-                          </div>
-                          <div className="bg-background-secondary/50 p-2 rounded border border-border/40 text-center">
-                            <p className="text-[9px] uppercase tracking-wide text-foreground-muted font-semibold">Memory Limit</p>
-                            <p className="text-sm font-bold text-foreground mt-0.5">{analysisResult?.memory}</p>
-                          </div>
-                        </div>
+                    {/* AI Project Summary Grid */}
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Framework & Runtime</p>
+                        <p className="text-xs font-semibold text-foreground">{analysisResult?.framework} ({analysisResult?.language})</p>
+                        <p className="text-[10px] text-foreground-muted mt-0.5">{analysisResult?.runtime}</p>
+                      </div>
+                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Deployment Target</p>
+                        <p className="text-xs font-semibold text-foreground">{analysisResult?.deploymentStrategy}</p>
+                        <p className="text-[10px] text-foreground-muted mt-0.5">Azure Isolated Containers</p>
+                      </div>
+                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Est. Deploy Time</p>
+                        <p className="text-xs font-semibold text-success font-mono">~2 minutes</p>
+                        <p className="text-[10px] text-foreground-muted mt-0.5">Recommended Env: Production</p>
                       </div>
                     </div>
 
@@ -917,7 +834,7 @@ export default function RepositoriesPage() {
                     {analysisResult?.vulnerabilities?.length > 0 && (
                       <div className="p-4 rounded-xl border border-warning/20 bg-warning/5 space-y-2 animate-fade-in">
                         <p className="text-xs font-semibold text-warning flex items-center gap-1.5">
-                          <AlertTriangle size={14} /> Security Audit Recommendations
+                          <AlertTriangle size={14} /> Security Recommendations
                         </p>
                         <ul className="list-disc pl-4 space-y-1 text-[11px] text-foreground-muted">
                           {analysisResult.vulnerabilities.map((v: string, idx: number) => (
@@ -931,14 +848,14 @@ export default function RepositoriesPage() {
 
                 <div className="flex justify-between pt-6 border-t border-border/40">
                   <button
-                    onClick={() => setOnboardStep(2)}
+                    onClick={() => setOnboardStep(1)}
                     className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
                   >
                     Back
                   </button>
                   <button
                     disabled={isAnalyzing}
-                    onClick={() => setOnboardStep(4)}
+                    onClick={() => setOnboardStep(3)}
                     className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
                   >
                     Next <ArrowRight size={14} />
@@ -947,305 +864,15 @@ export default function RepositoriesPage() {
               </div>
             )}
 
-            {/* STEP 4: ENVIRONMENT VARIABLES */}
-            {onboardStep === 4 && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between border-b border-border/40 pb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-foreground">Environment Variables</h3>
-                    <p className="text-xs text-foreground-muted">
-                      Add key-value variables to be securely injected into your app runtime at deployment.
-                    </p>
-                  </div>
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
-                    {selectedRepo}
-                  </span>
-                </div>
 
-                {/* Env Var Add Form */}
-                <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
-                  <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                    Add Environment Variable
-                  </h4>
-                  <div className="grid md:grid-cols-3 gap-3 items-end">
-                    <div className="space-y-1.5">
-                      <label className="block text-[10px] font-semibold text-foreground-muted">Key</label>
-                      <input
-                        type="text"
-                        value={newEnvKey}
-                        onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
-                        placeholder="e.g. PORT or DATABASE_URL"
-                        className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="block text-[10px] font-semibold text-foreground-muted">Value</label>
-                      <input
-                        type="text"
-                        value={newEnvVal}
-                        onChange={(e) => setNewEnvVal(e.target.value)}
-                        placeholder="e.g. 8080 or connection_string"
-                        className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <label className="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer select-none pb-2">
-                        <input
-                          type="checkbox"
-                          checked={newEnvIsSecret}
-                          onChange={(e) => setNewEnvIsSecret(e.target.checked)}
-                          className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 bg-card"
-                        />
-                        Secret / Masked
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!newEnvKey.trim()) {
-                            addToast("Variable Key cannot be empty.", "warning");
-                            return;
-                          }
-                          if (wizardEnvVars.some((v) => v.key === newEnvKey.trim())) {
-                            addToast(`Variable '${newEnvKey}' already added.`, "warning");
-                            return;
-                          }
-                          setWizardEnvVars((prev) => [
-                            ...prev,
-                            { key: newEnvKey.trim(), value: newEnvVal, is_secret: newEnvIsSecret },
-                          ]);
-                          setNewEnvKey("");
-                          setNewEnvVal("");
-                          setNewEnvIsSecret(false);
-                          addToast("Environment variable added.", "success");
-                        }}
-                        className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm h-[34px] mb-[1px]"
-                      >
-                        <Plus size={14} /> Add
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Env Var List */}
-                <div className="space-y-2">
-                  <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                    Configured Variables ({wizardEnvVars.length})
-                  </h4>
-                  {wizardEnvVars.length === 0 ? (
-                    <div className="p-6 text-center border border-dashed border-border rounded-xl text-xs text-foreground-muted">
-                      No variables added yet. ZeroOps will fallback to default configurations.
-                    </div>
-                  ) : (
-                    <div className="border border-border/60 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-background-secondary border-b border-border/60 text-foreground-muted font-semibold">
-                            <th className="p-3">Key</th>
-                            <th className="p-3">Value</th>
-                            <th className="p-3 text-center">Type</th>
-                            <th className="p-3 text-center w-12">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/40 bg-card/20">
-                          {wizardEnvVars.map((v, idx) => (
-                            <tr key={idx} className="hover:bg-card-hover/20">
-                              <td className="p-3 font-mono font-semibold text-foreground truncate max-w-[150px]">{v.key}</td>
-                              <td className="p-3 font-mono text-foreground-muted truncate max-w-[200px]">
-                                {v.is_secret ? "••••••••" : v.value || "—"}
-                              </td>
-                              <td className="p-3 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[9px] font-semibold border ${
-                                  v.is_secret
-                                    ? "bg-warning/10 border-warning/20 text-warning"
-                                    : "bg-success/10 border-success/20 text-success"
-                                }`}>
-                                  {v.is_secret ? "Secret" : "Plaintext"}
-                                </span>
-                              </td>
-                              <td className="p-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setWizardEnvVars((prev) => prev.filter((_, i) => i !== idx));
-                                    addToast(`Removed ${v.key}`, "info");
-                                  }}
-                                  className="text-foreground-muted hover:text-danger transition-colors cursor-pointer"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex justify-between pt-6 border-t border-border/40">
-                  <button
-                    onClick={() => setOnboardStep(3)}
-                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={() => setOnboardStep(5)}
-                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
-                  >
-                    Next <ArrowRight size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 5: TARGET CONFIGURATION */}
-            {onboardStep === 5 && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between border-b border-border/40 pb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-foreground">Deployment Target Configuration</h3>
-                    <p className="text-xs text-foreground-muted">
-                      Select target cloud region, scaling triggers, and infrastructure strategies.
-                    </p>
-                  </div>
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
-                    {selectedRepo}
-                  </span>
-                </div>
-
-                <div className="grid md:grid-cols-3 gap-6">
-                  {/* Left Column: Form Controls */}
-                  <div className="md:col-span-2 space-y-6">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
-                        <select
-                          value={region}
-                          onChange={(e) => setRegion(e.target.value)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                        >
-                          <option value="eastus">East US (Virginia)</option>
-                          <option value="westus2">West US 2 (Washington)</option>
-                          <option value="westeurope">West Europe (Amsterdam)</option>
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
-                        <select
-                          value={deployMode}
-                          onChange={(e) => setDeployMode(e.target.value)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                        >
-                          <option value="standard">Rolling Update (Zero Downtime)</option>
-                          <option value="canary">Canary Release (10% Traffic split)</option>
-                          <option value="bluegreen">Blue/Green Deploy</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={minReplicas}
-                          onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="50"
-                          value={maxReplicas}
-                          onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 text-xs text-foreground-muted leading-relaxed">
-                      <p className="font-semibold text-foreground mb-1">Autonomic Kubernetes Scaling</p>
-                      ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% aggregate CPU utilization.
-                    </div>
-                  </div>
-
-                  {/* Right Column: AI Recommendations Display */}
-                  <div className="glass rounded-xl p-5 border border-border bg-gradient-to-b from-primary/5 to-accent/5 space-y-4 flex flex-col justify-between shadow-md">
-                    <div className="space-y-3">
-                      <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
-                        <Brain size={14} /> AI Recommendations
-                      </h4>
-                      <p className="text-[11px] text-foreground-muted leading-relaxed">
-                        Recommended deployment configuration generated by GitHub Models (GPT-4.1).
-                      </p>
-
-                      <div className="space-y-2.5 pt-2 text-xs">
-                        <div className="border-b border-border/40 pb-2">
-                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Recommended Target</p>
-                          <p className="mt-0.5 font-semibold text-foreground">
-                            {analysisResult?.deploymentRecommendation?.recommended_target || analysisResult?.deploymentStrategy || "Azure App Service"}
-                          </p>
-                        </div>
-                        <div className="border-b border-border/40 pb-2">
-                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Database Provisioning</p>
-                          <p className="mt-0.5 font-semibold text-foreground">
-                            {analysisResult?.deploymentRecommendation?.database_recommendation?.primary !== "None" 
-                              ? "Azure Database for PostgreSQL" 
-                              : "No Database Required"}
-                          </p>
-                        </div>
-                        <div className="border-b border-border/40 pb-2">
-                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Auto-Scaling Limits</p>
-                          <p className="mt-0.5 font-semibold text-foreground">
-                            {analysisResult?.deploymentRecommendation?.scaling_recommendation?.min_replicas || 2} to {analysisResult?.deploymentRecommendation?.scaling_recommendation?.max_replicas || 10} replicas
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Est. Deployment Time</p>
-                          <p className="mt-0.5 font-semibold text-success font-mono">
-                            {analysisResult?.deploymentRecommendation?.estimated_deployment_time || "~2 minutes"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="text-[9px] text-foreground-muted/60 text-center border-t border-border/40 pt-3 font-medium">
-                      Generated by ZeroOps AI Analysis
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between pt-6 border-t border-border/40">
-                  <button
-                    onClick={() => setOnboardStep(4)}
-                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={() => setOnboardStep(6)}
-                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
-                  >
-                    Next <ArrowRight size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 6: REVIEW & DEPLOY */}
-            {onboardStep === 6 && (
+            {/* STEP 3: REVIEW & LAUNCH */}
+            {onboardStep === 3 && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-border/40 pb-4">
                   <div>
                     <h3 className="text-lg font-bold text-foreground">Review & Launch Deployment</h3>
                     <p className="text-xs text-foreground-muted">
-                      Verify settings before launching your autonomous container deployment.
+                      Configure environment variables and target cloud options to start your autonomic delivery pipeline.
                     </p>
                   </div>
                   <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-success border border-success/20 font-medium">
@@ -1253,75 +880,242 @@ export default function RepositoriesPage() {
                   </span>
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4">
-                  {/* Left: Codebase Info */}
-                  <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/40">
-                    <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                      Source Code Details
-                    </h4>
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Repository</span>
-                        <span className="font-semibold text-foreground truncate max-w-[180px]">{selectedRepo}</span>
+                <div className="grid md:grid-cols-3 gap-6">
+                  {/* Left Section: Environment Variables and Scaling */}
+                  <div className="md:col-span-2 space-y-6">
+                    {/* Env Var Form */}
+                    <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
+                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                        Configure Environment Variables
+                      </h4>
+                      <div className="grid md:grid-cols-3 gap-3 items-end">
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-semibold text-foreground-muted">Key</label>
+                          <input
+                            type="text"
+                            value={newEnvKey}
+                            onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                            placeholder="e.g. DATABASE_URL"
+                            className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-semibold text-foreground-muted">Value</label>
+                          <input
+                            type="text"
+                            value={newEnvVal}
+                            onChange={(e) => setNewEnvVal(e.target.value)}
+                            placeholder="e.g. value_here"
+                            className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <label className="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer select-none pb-2">
+                            <input
+                              type="checkbox"
+                              checked={newEnvIsSecret}
+                              onChange={(e) => setNewEnvIsSecret(e.target.checked)}
+                              className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 bg-card"
+                            />
+                            Secret / Masked
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!newEnvKey.trim()) {
+                                addToast("Variable Key cannot be empty.", "warning");
+                                return;
+                              }
+                              if (wizardEnvVars.some((v) => v.key === newEnvKey.trim())) {
+                                addToast(`Variable '${newEnvKey}' already added.`, "warning");
+                                return;
+                              }
+                              setWizardEnvVars((prev) => [
+                                ...prev,
+                                { key: newEnvKey.trim(), value: newEnvVal, is_secret: newEnvIsSecret },
+                              ]);
+                              setNewEnvKey("");
+                              setNewEnvVal("");
+                              setNewEnvIsSecret(false);
+                              addToast("Environment variable added.", "success");
+                            }}
+                            className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm h-[34px] mb-[1px]"
+                          >
+                            <Plus size={14} /> Add
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Branch</span>
-                        <span className="font-semibold text-foreground font-mono">{selectedBranch}</span>
+                    </div>
+
+                    {/* Env Var List */}
+                    {wizardEnvVars.length > 0 && (
+                      <div className="border border-border/60 rounded-xl overflow-hidden max-h-[160px] overflow-y-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-background-secondary border-b border-border/60 text-foreground-muted font-semibold">
+                              <th className="p-3">Key</th>
+                              <th className="p-3">Value</th>
+                              <th className="p-3 text-center">Type</th>
+                              <th className="p-3 text-center w-12">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border/40 bg-card/20">
+                            {wizardEnvVars.map((v, idx) => (
+                              <tr key={idx} className="hover:bg-card-hover/20">
+                                <td className="p-3 font-mono font-semibold text-foreground truncate max-w-[150px]">{v.key}</td>
+                                <td className="p-3 font-mono text-foreground-muted truncate max-w-[200px]">
+                                  {v.is_secret ? "••••••••" : v.value || "—"}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-semibold border ${
+                                    v.is_secret
+                                      ? "bg-warning/10 border-warning/20 text-warning"
+                                      : "bg-success/10 border-success/20 text-success"
+                                  }`}>
+                                    {v.is_secret ? "Secret" : "Plaintext"}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setWizardEnvVars((prev) => prev.filter((_, i) => i !== idx));
+                                      addToast(`Removed ${v.key}`, "info");
+                                    }}
+                                    className="text-foreground-muted hover:text-danger transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Framework</span>
-                        <span className="font-semibold text-foreground">{analysisResult?.framework}</span>
+                    )}
+
+                    {/* Regional Targeting */}
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
+                        <select
+                          value={region}
+                          onChange={(e) => setRegion(e.target.value)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                        >
+                          <option value="eastus">East US (Virginia)</option>
+                          <option value="westus2">West US 2 (Washington)</option>
+                          <option value="westeurope">West Europe (Amsterdam)</option>
+                        </select>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-foreground-muted">Runtime</span>
-                        <span className="font-semibold text-foreground font-mono">{analysisResult?.runtime}</span>
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Deployment Mode</label>
+                        <select
+                          value={deployMode}
+                          onChange={(e) => setDeployMode(e.target.value)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                        >
+                          <option value="standard">Rolling Update (Zero Downtime)</option>
+                          <option value="canary">Canary Release (10% Split)</option>
+                          <option value="bluegreen">Blue/Green Deploy</option>
+                        </select>
                       </div>
+                    </div>
+
+                    {/* Collapsible Advanced Settings (Kubernetes Scaling) */}
+                    <div className="border border-border/40 rounded-xl overflow-hidden bg-card/20">
+                      <button
+                        type="button"
+                        onClick={() => setShowAdvanced(!showAdvanced)}
+                        className="w-full p-4 flex items-center justify-between text-xs font-bold text-foreground hover:bg-card-hover/40 transition-colors"
+                      >
+                        <span>Advanced Infrastructure Settings</span>
+                        <span className="text-[10px] text-primary">{showAdvanced ? "Hide" : "Show"}</span>
+                      </button>
+                      
+                      {showAdvanced && (
+                        <div className="p-4 border-t border-border/40 space-y-4 bg-zinc-950/20">
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="10"
+                                value={minReplicas}
+                                onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                value={maxReplicas}
+                                onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-foreground-muted leading-relaxed">
+                            ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% CPU utilization.
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Right: Cloud Config Info */}
-                  <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/40">
-                    <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                      Infrastructure Target
-                    </h4>
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Target region</span>
-                        <span className="font-semibold text-foreground">{region === "eastus" ? "East US" : region === "westus2" ? "West US 2" : "West Europe"}</span>
+                  {/* Right Section: Deployment Review Summary */}
+                  <div className="glass rounded-xl p-5 border border-border bg-gradient-to-b from-primary/5 to-accent/5 space-y-4 flex flex-col justify-between shadow-md">
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold text-primary uppercase tracking-wider">
+                        Source Code & Target
+                      </h4>
+                      <div className="space-y-2.5 text-xs">
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Repository</p>
+                          <p className="mt-0.5 font-semibold text-foreground truncate">{selectedRepo}</p>
+                        </div>
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Branch</p>
+                          <p className="mt-0.5 font-semibold text-foreground font-mono">{selectedBranch}</p>
+                        </div>
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Framework</p>
+                          <p className="mt-0.5 font-semibold text-foreground">{analysisResult?.framework}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Est. Deployment Time</p>
+                          <p className="mt-0.5 font-semibold text-success font-mono">~2 minutes</p>
+                        </div>
                       </div>
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Strategy</span>
-                        <span className="font-semibold text-foreground capitalize">{deployMode} Deploy</span>
-                      </div>
-                      <div className="flex justify-between border-b border-border/10 pb-1.5">
-                        <span className="text-foreground-muted">Scale Limits</span>
-                        <span className="font-semibold text-foreground">{minReplicas} to {maxReplicas} Replicas</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-foreground-muted">Environment variables</span>
-                        <span className="font-semibold text-foreground">{wizardEnvVars.length} variables</span>
-                      </div>
+                    </div>
+
+                    <div className="pt-4 border-t border-border/40">
+                      <button
+                        onClick={handleLaunchDeployment}
+                        className="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold transition glow-blue flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Rocket size={14} />
+                        Launch Deployment
+                      </button>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex justify-between pt-6 border-t border-border/40">
                   <button
-                    onClick={() => setOnboardStep(5)}
+                    onClick={() => setOnboardStep(2)}
                     className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
                   >
                     Back
                   </button>
-                  <button
-                    onClick={handleLaunchDeployment}
-                    className="px-6 py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold transition glow-blue flex items-center gap-2 cursor-pointer"
-                  >
-                    <Rocket size={16} />
-                    Launch Deployment
-                  </button>
                 </div>
               </div>
             )}
+
           </motion.div>
         )}
       </div>

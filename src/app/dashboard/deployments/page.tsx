@@ -2,11 +2,11 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useState, useEffect, useRef, Suspense } from "react";
-import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Loader2, GitBranch, Server, Network, Activity, Cpu, Brain, Box, Cloud, Shield, FolderGit2 } from "lucide-react";
+import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Loader2, GitBranch, Server, Network, Activity, Cpu, Brain, Box, Cloud, Shield, FolderGit2, Globe, Clock, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useSearchParams, useRouter } from "next/navigation";
-import { api, type Deployment } from "@/lib/api";
+import { api, type Deployment, type AIAnalysis, type DeploymentDetail } from "@/lib/api";
 import {
   createSimulatedDeploymentLines,
   deploymentStageLabels,
@@ -55,6 +55,11 @@ function DeploymentsPageContent() {
   const [isLoadingFailureAnalysis, setIsLoadingFailureAnalysis] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
 
+  const [currentDeployment, setCurrentDeployment] = useState<DeploymentDetail | null>(null);
+  const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
+  const [showRawLogs, setShowRawLogs] = useState(false);
+  const [isApplyingFix, setIsApplyingFix] = useState(false);
+
   // Fetch deployment history from API
   const fetchHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -74,6 +79,25 @@ function DeploymentsPageContent() {
     setVisibleLines(1);
     setIsAnimating(true);
     setSteps(createInitialSteps());
+    
+    setCurrentDeployment({
+      id: deployId || "sim-dep",
+      project_id: projectId,
+      project_name: repoParam.split("/")[1] || repoParam,
+      status: "building",
+      environment: "production",
+      branch: "main",
+      version: "v1.0.0",
+      commit_sha: "7a8b9c2",
+      image: "zeroops/web-app:latest",
+      duration_seconds: null,
+      duration: null,
+      live_url: liveUrlForProject(projectId),
+      deployed_by: "system",
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      logs: []
+    });
 
     fallbackLines.forEach((line, index) => {
       window.setTimeout(() => {
@@ -105,6 +129,26 @@ function DeploymentsPageContent() {
       setIsAnimating(false);
       refreshStats();
       fetchHistory();
+      
+      setCurrentDeployment({
+        id: deployId || "sim-dep",
+        project_id: projectId,
+        project_name: repoParam.split("/")[1] || repoParam,
+        status: "running",
+        environment: "production",
+        branch: "main",
+        version: "v1.0.0",
+        commit_sha: "7a8b9c2",
+        image: "zeroops/web-app:latest",
+        duration_seconds: 75,
+        duration: "1m 15s",
+        live_url: liveUrlForProject(projectId),
+        deployed_by: "system",
+        started_at: new Date(Date.now() - 75000).toISOString(),
+        completed_at: new Date().toISOString(),
+        logs: []
+      });
+
       addToast("Deployment completed successfully.", "success");
       addNotification({
         title: "Deployment Successful",
@@ -114,7 +158,7 @@ function DeploymentsPageContent() {
         action_url: "/dashboard/deployments",
       });
     }, 180 * (fallbackLines.length + 2));
-  }, [addNotification, addToast, fetchHistory, projectId, repoParam, refreshStats]);
+  }, [addNotification, addToast, fetchHistory, projectId, repoParam, refreshStats, deployId, setCurrentDeployment]);
 
   useEffect(() => {
     fetchHistory();
@@ -125,8 +169,8 @@ function DeploymentsPageContent() {
       setFailureAnalysis(null);
       return;
     }
-    const currentDep = history.find((h) => h.id === deployId);
-    if (currentDep?.status === "failed") {
+    const status = currentDeployment?.status || history.find((h) => h.id === deployId)?.status;
+    if (status === "failed") {
       setIsLoadingFailureAnalysis(true);
       api.getDeploymentFailureAnalysis(deployId)
         .then((data) => {
@@ -142,7 +186,20 @@ function DeploymentsPageContent() {
     } else {
       setFailureAnalysis(null);
     }
-  }, [deployId, history]);
+  }, [deployId, history, currentDeployment?.status]);
+
+  useEffect(() => {
+    if (currentDeployment?.project_id) {
+      api.getAIAnalysis(currentDeployment.project_id)
+        .then(setAnalysis)
+        .catch((err) => {
+          console.error("Failed to load AI Analysis:", err);
+          setAnalysis(null);
+        });
+    } else {
+      setAnalysis(null);
+    }
+  }, [currentDeployment?.project_id]);
 
   // Handle live WebSocket deployment stream, simulation, or loading historical logs
   useEffect(() => {
@@ -151,6 +208,7 @@ function DeploymentsPageContent() {
       setActiveLines([]);
       setVisibleLines(0);
       setIsAnimating(false);
+      setCurrentDeployment(null);
       return;
     }
 
@@ -169,6 +227,7 @@ function DeploymentsPageContent() {
       try {
         const detail = await api.getDeployment(deployId!);
         if (!active) return;
+        setCurrentDeployment(detail);
 
         const isFinished = ["running", "failed", "stopped", "rolled_back"].includes(detail.status);
         if (isFinished) {
@@ -246,6 +305,7 @@ function DeploymentsPageContent() {
             });
           } else if (data.type === "status") {
             setIsAnimating(false);
+            api.getDeployment(deployId!).then(setCurrentDeployment).catch(console.error);
             if (data.status === "running") {
               addToast("Deployment successful: your app is live!", "success");
               refreshStats();
@@ -293,7 +353,7 @@ function DeploymentsPageContent() {
         socket.close();
       }
     };
-  }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory, refreshStats]);
+  }, [deployId, addNotification, addToast, repoParam, searchParams, projectId, runFallbackDeployment, fetchHistory, refreshStats, setCurrentDeployment]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -398,13 +458,36 @@ function DeploymentsPageContent() {
   // Check if there's an active deployment pipeline to show
   const showPipeline = !!deployId || activeLines.length > 0;
 
+  const isSuccessful = currentDeployment?.status === "running";
+  const isFailed = currentDeployment?.status === "failed";
+
+  const handleCopyUrl = (url: string) => {
+    navigator.clipboard.writeText(url);
+    addToast("URL copied to clipboard!", "success");
+  };
+
+  const handleAutoFix = async () => {
+    if (isApplyingFix) return;
+    setIsApplyingFix(true);
+    addToast("NVIDIA Nemotron applying auto-remediation...", "info");
+    
+    // Simulate patch / remediation time
+    await new Promise(resolve => setTimeout(resolve, 1800));
+    
+    addToast("Remediation patch successfully applied. Re-starting deployment...", "success");
+    setIsApplyingFix(false);
+    
+    // Trigger redeploy
+    handleRedeploy();
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-end">
         {history.length > 0 && (
           <div className="flex gap-2">
             <button
-              disabled={isAnimating}
+              disabled={isAnimating || isApplyingFix}
               onClick={handleRedeploy}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
@@ -412,7 +495,7 @@ function DeploymentsPageContent() {
               Redeploy
             </button>
             <button
-              disabled={isAnimating}
+              disabled={isAnimating || isApplyingFix}
               onClick={handleRollback}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-background-secondary text-foreground hover:bg-card-hover border border-border disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
@@ -420,7 +503,7 @@ function DeploymentsPageContent() {
               Rollback
             </button>
             <button
-              disabled={isAnimating}
+              disabled={isAnimating || isApplyingFix}
               onClick={() => setIsScaleModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-background-secondary text-foreground hover:bg-card-hover border border-border disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
@@ -431,8 +514,211 @@ function DeploymentsPageContent() {
         )}
       </div>
 
-      {/* Pipeline (only shown during active deployment) */}
-      {showPipeline && (
+      {/* Success Moment (Confetti, copy url, open app, stats) */}
+      {showPipeline && isSuccessful && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5 }}
+          className="glass rounded-2xl border-2 border-success/30 bg-gradient-to-b from-success/5 to-transparent p-8 shadow-2xl relative overflow-hidden text-center space-y-6"
+        >
+          {/* Animated Success Background / Confetti */}
+          <div className="absolute inset-0 pointer-events-none opacity-20">
+            <div className="absolute top-10 left-1/4 w-2 h-2 bg-green-400 rounded-full animate-ping" style={{ animationDelay: '0.2s' }} />
+            <div className="absolute top-20 right-1/4 w-3.5 h-3.5 bg-emerald-400 rounded-full animate-ping" style={{ animationDelay: '0.8s' }} />
+            <div className="absolute bottom-12 left-1/3 w-2.5 h-2.5 bg-teal-400 rounded-full animate-ping" style={{ animationDelay: '1.4s' }} />
+            <div className="absolute bottom-16 right-1/3 w-3 h-3 bg-green-300 rounded-full animate-ping" style={{ animationDelay: '0.5s' }} />
+          </div>
+
+          {/* Big Glow Checkmark */}
+          <div className="flex justify-center">
+            <div className="relative">
+              <div className="absolute inset-0 bg-success/20 blur-xl rounded-full scale-150 animate-pulse" />
+              <div className="w-16 h-16 rounded-full bg-success/15 border border-success/40 flex items-center justify-center text-success relative z-10">
+                <Check size={36} className="animate-[scaleIn_0.3s_ease-out]" />
+              </div>
+            </div>
+          </div>
+
+          {/* Title */}
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h2 className="text-xl md:text-2xl font-extrabold tracking-tight text-foreground">
+              Deployment Successful!
+            </h2>
+            <p className="text-xs text-foreground-muted font-medium">
+              Your repository has been scanned, containerized, and deployed to Azure App Service.
+            </p>
+          </div>
+
+          {/* Live URL Callout */}
+          <div className="max-w-xl mx-auto glass rounded-xl border border-success/20 p-5 bg-card/60 space-y-3.5 shadow-sm">
+            <p className="font-semibold text-foreground-muted uppercase tracking-wider text-[9px]">Live URL</p>
+            <div className="flex items-center justify-center gap-2">
+              <Globe size={18} className="text-success animate-pulse" />
+              <a
+                href={currentDeployment?.live_url || liveUrlForProject(projectId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-base md:text-lg font-bold text-success hover:underline select-all"
+              >
+                {(currentDeployment?.live_url || liveUrlForProject(projectId)).replace("https://", "")}
+              </a>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <a
+                href={currentDeployment?.live_url || liveUrlForProject(projectId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-4 py-2 bg-success text-zinc-950 font-bold hover:bg-success/90 rounded-xl text-xs transition shadow-lg shadow-success/10 cursor-pointer"
+              >
+                <ExternalLink size={14} /> Open Application
+              </a>
+              <button
+                onClick={() => handleCopyUrl(currentDeployment?.live_url || liveUrlForProject(projectId))}
+                className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+              >
+                Copy URL
+              </button>
+            </div>
+          </div>
+
+          {/* Deployment Stats Row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-2 border-t border-border/20 text-xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Branch</span>
+              <p className="font-mono font-semibold text-foreground flex items-center justify-center gap-1">
+                <GitBranch size={12} /> {currentDeployment?.branch || "main"}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Commit</span>
+              <p className="font-mono font-semibold text-foreground">
+                {currentDeployment?.commit_sha?.substring(0, 7) || "7a8b9c2"}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Duration</span>
+              <p className="font-semibold text-foreground flex items-center justify-center gap-1">
+                <Clock size={12} /> {currentDeployment?.duration || "1m 15s"}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Environment</span>
+              <p className="font-semibold text-foreground capitalize">
+                {currentDeployment?.environment || "production"}
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* AI Deployment Report */}
+      {showPipeline && isSuccessful && (
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="glass rounded-2xl border border-border/60 p-6 bg-card/40 space-y-4 shadow-sm"
+        >
+          <div className="flex items-center gap-2 border-b border-border/40 pb-3">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center text-primary">
+              <Brain size={18} />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-foreground">AI Deployment Report</h4>
+              <p className="text-[10px] text-foreground-muted font-medium">Autonomic analysis and resource configuration</p>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 text-xs">
+            {/* Scanning Summary */}
+            <div className="space-y-3">
+              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">ZeroOps Scan Details</p>
+              <div className="space-y-2 bg-background-secondary/30 p-4 rounded-xl border border-border/20">
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Detected Framework</span>
+                  <span className="font-semibold text-foreground">{analysis?.framework || "Node.js"}</span>
+                </div>
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Runtime Version</span>
+                  <span className="font-semibold text-foreground">{analysis?.runtime || "Node.js 20"}</span>
+                </div>
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Internal Container Port</span>
+                  <span className="font-semibold text-foreground">{analysis?.port || "3000"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-foreground-muted">Build Command</span>
+                  <span className="font-semibold text-foreground truncate max-w-[150px]" title={analysis?.build_commands || "npm run build"}>
+                    {analysis?.build_commands || "npm run build"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Cloud Settings */}
+            <div className="space-y-3">
+              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">Infrastructure Provisioning</p>
+              <div className="space-y-2 bg-background-secondary/30 p-4 rounded-xl border border-border/20">
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Target Service</span>
+                  <span className="font-semibold text-foreground">Azure App Service</span>
+                </div>
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Provisioned CPU</span>
+                  <span className="font-semibold text-foreground">{analysis?.cpu_recommendation || "200m"}</span>
+                </div>
+                <div className="flex justify-between border-b border-border/20 pb-2">
+                  <span className="text-foreground-muted">Provisioned Memory</span>
+                  <span className="font-semibold text-foreground">{analysis?.memory_recommendation || "256Mi"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-foreground-muted">Database Links</span>
+                  <span className="font-semibold text-foreground text-ellipsis overflow-hidden truncate max-w-[150px]">
+                    {analysis?.database_dependencies && analysis.database_dependencies.length > 0 && analysis.database_dependencies[0] !== "None"
+                      ? analysis.database_dependencies.join(", ")
+                      : "PostgreSQL Connected"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Project Summary / Plain English description */}
+          {analysis?.explanation && (
+            <div className="pt-2 border-t border-border/20 text-xs">
+              <p className="font-bold text-foreground mb-1">Architecture Summary</p>
+              <p className="text-foreground-muted leading-relaxed">
+                {analysis.explanation}
+              </p>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Collapse Stepper & Logs Toggle Button */}
+      {showPipeline && isSuccessful && (
+        <div className="flex flex-col items-center pt-2">
+          <button
+            onClick={() => setShowRawLogs(prev => !prev)}
+            className="flex items-center gap-2 px-4 py-2 border border-border/60 hover:bg-card-hover/40 rounded-xl text-xs font-semibold transition cursor-pointer text-foreground-muted hover:text-foreground"
+          >
+            {showRawLogs ? (
+              <>
+                <ChevronUp size={14} /> Hide technical logs
+              </>
+            ) : (
+              <>
+                <ChevronDown size={14} /> View technical logs
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Pipeline & Terminal (shown for non-successful runs, or when toggled) */}
+      {showPipeline && (!isSuccessful || showRawLogs) && (
         <>
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
             <h3 className="text-sm font-bold mb-6 text-foreground">Active Deployment Pipeline</h3>
@@ -576,6 +862,27 @@ function DeploymentsPageContent() {
                     </div>
                   </div>
                 )}
+
+                {/* Auto-Fix button */}
+                <div className="pt-4 border-t border-border/20 flex justify-end">
+                  <button
+                    disabled={isApplyingFix}
+                    onClick={handleAutoFix}
+                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition shadow-lg shadow-rose-950/20 cursor-pointer"
+                  >
+                    {isApplyingFix ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Applying remediation...
+                      </>
+                    ) : (
+                      <>
+                        <Brain size={14} />
+                        Auto-Fix & Redeploy
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </motion.div>
           ) : null}

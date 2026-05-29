@@ -8,6 +8,7 @@ import { AIActionFeed } from "@/components/dashboard/AIActionFeed";
 import { SubPageHeader } from "@/components/dashboard/SubPageHeader";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNotifications } from "@/lib/NotificationContext";
+import { FloatingAssistant } from "@/components/dashboard/FloatingAssistant";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -42,6 +43,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
       </div>
+      <FloatingAssistant />
     </div>
   );
 }
