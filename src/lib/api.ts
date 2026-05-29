@@ -121,6 +121,17 @@ export interface AIAnalysis {
   dockerfile: string | null;
   kubernetes_manifest: string | null;
   created_at: string | null;
+
+  // Extra AI analysis fields
+  runtime: string | null;
+  package_manager: string | null;
+  docker_support: boolean;
+  monorepo_structure: string | null;
+  database_dependencies: string[];
+  deployment_strategy: string | null;
+  build_commands: string | null;
+  start_commands: string | null;
+  environment_variables: string[];
 }
 
 export interface DashboardStats {
@@ -337,7 +348,7 @@ export const api = {
   getRepoMetadata: (repo: string) =>
     request<{ branches: string[] }>(`/api/github/repo-metadata?repo=${encodeURIComponent(repo)}`),
 
-  // ── Health ──
+  // ── Health & Diagnostics ──
   getHealth: () => request<{
     status: string;
     service: string;
@@ -346,6 +357,22 @@ export const api = {
     kubernetesAvailable: boolean;
     openAIConfigured: boolean;
   }>("/api/health"),
+
+  getHealthDatabase: () => request<{
+    status: string;
+    details: string;
+  }>("/api/health/database"),
+
+  getHealthGithub: () => request<{
+    status: string;
+    details: string;
+  }>("/api/health/github"),
+
+  getHealthDeployments: () => request<{
+    status: string;
+    total_deployments: number;
+    active_deployments_running: number;
+  }>("/api/health/deployments"),
 
   // ── Monitoring ──
   getMetrics: (projectId?: string) => {

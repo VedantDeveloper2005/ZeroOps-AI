@@ -13,13 +13,7 @@ interface Incident {
   status: "active" | "investigating" | "resolved";
   description: string;
 }
-
-const incidents: Incident[] = [
-  { id: "inc-001", title: "API Gateway High Latency", severity: "warning", affectedServices: ["api-gateway", "web-app"], startTime: "25 min ago", duration: "25m", status: "investigating", description: "P99 latency exceeded 500ms threshold on api-gateway" },
-  { id: "inc-002", title: "Payment Service OOMKill", severity: "resolved", affectedServices: ["payments-service"], startTime: "2 hours ago", duration: "12m", status: "resolved", description: "payments-service pod killed due to memory limit exceeded. AI auto-scaled memory limits." },
-  { id: "inc-003", title: "Database Connection Pool Exhaustion", severity: "resolved", affectedServices: ["auth-service", "api-gateway"], startTime: "1 day ago", duration: "8m", status: "resolved", description: "Connection pool maxed out during traffic spike. AI increased pool size and added connection recycling." },
-  { id: "inc-004", title: "SSL Certificate Expiry Warning", severity: "resolved", affectedServices: ["web-app"], startTime: "3 days ago", duration: "1m", status: "resolved", description: "SSL certificate approaching expiry. AI auto-renewed via Azure Key Vault." },
-];
+import { api } from "@/lib/api";
 import { AIThinkingIndicator } from "@/components/ui/AIThinkingIndicator";
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
@@ -50,18 +44,47 @@ const aiDiagnosisText = [
 
 export default function IncidentsPage() {
   const { addToast, hasDeployed } = useNotifications();
-
-  if (!hasDeployed) {
-    return (
-      <div className="space-y-6">
-        <LockedView featureName="Incident Management" />
-      </div>
-    );
-  }
-
-  const activeIncidents = incidents.filter(i => i.status !== "resolved");
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loading, setLoading] = useState(true);
   const [diagnosisLines, setDiagnosisLines] = useState(0);
   const [isReportOpen, setIsReportOpen] = useState(false);
+
+  useEffect(() => {
+    if (!hasDeployed) return;
+
+    async function loadIncidents() {
+      try {
+        const notifs = await api.getNotifications("incident");
+        const mapped = notifs.map((n: any) => {
+          let severity: "critical" | "warning" | "resolved" = "warning";
+          if (n.type === "critical") severity = "critical";
+          else if (n.type === "success" || n.read) severity = "resolved";
+
+          let status: "active" | "investigating" | "resolved" = "active";
+          if (n.read) status = "resolved";
+          else if (n.type === "warning") status = "investigating";
+
+          const date = new Date(n.created_at || Date.now());
+          return {
+            id: n.id,
+            title: n.title,
+            severity,
+            affectedServices: ["aks-cluster"],
+            startTime: date.toLocaleTimeString() + " " + date.toLocaleDateString(),
+            duration: "N/A",
+            status,
+            description: n.message
+          };
+        });
+        setIncidents(mapped);
+      } catch (err) {
+        console.error("Failed to load incidents", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadIncidents();
+  }, [hasDeployed]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -96,6 +119,25 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
     addToast("Post-mortem report copied to clipboard!", "success");
     setIsReportOpen(false);
   };
+
+  if (!hasDeployed) {
+    return (
+      <div className="space-y-6">
+        <LockedView featureName="Incident Management" />
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+        <RefreshCw className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-foreground-muted text-sm font-medium">Loading incidents...</p>
+      </div>
+    );
+  }
+
+  const activeIncidents = incidents.filter(i => i.status !== "resolved");
 
   return (
     <div className="space-y-6">
@@ -165,28 +207,36 @@ Autonomic healing tasks executed. Recovery validation in progress.`;
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
         <h3 className="text-sm font-bold text-foreground mb-4">Incident Event log</h3>
         <div className="space-y-3">
-          {incidents.map((incident, i) => {
-            const config = severityConfig[incident.severity] || severityConfig.resolved;
-            return (
-              <motion.div key={incident.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 + i * 0.1 }}
-                className={`rounded-xl p-4 border border-border border-l-4 ${config.border} bg-background-secondary`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${incident.severity === "critical" ? "bg-danger" : incident.severity === "warning" ? "bg-warning animate-pulse" : "bg-success"}`} />
-                    <h4 className="text-xs font-bold text-foreground">{incident.title}</h4>
-                    <span className={`text-[9px] uppercase px-2 py-0.5 rounded-full font-bold bg-card border border-border/80 ${config.color}`}>{incident.status}</span>
+          {incidents.length === 0 ? (
+            <div className="p-8 text-center space-y-2 bg-card/20 border border-border rounded-xl">
+              <CheckCircle size={32} className="text-success mx-auto" />
+              <p className="text-sm font-semibold text-foreground">All Systems Operational</p>
+              <p className="text-xs text-foreground-muted">No active outages or performance alerts detected.</p>
+            </div>
+          ) : (
+            incidents.map((incident, i) => {
+              const config = severityConfig[incident.severity] || severityConfig.resolved;
+              return (
+                <motion.div key={incident.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 + i * 0.1 }}
+                  className={`rounded-xl p-4 border border-border border-l-4 ${config.border} bg-background-secondary`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${incident.severity === "critical" ? "bg-danger" : incident.severity === "warning" ? "bg-warning animate-pulse" : "bg-success"}`} />
+                      <h4 className="text-xs font-bold text-foreground">{incident.title}</h4>
+                      <span className={`text-[9px] uppercase px-2 py-0.5 rounded-full font-bold bg-card border border-border/80 ${config.color}`}>{incident.status}</span>
+                    </div>
+                    <span className="text-[10px] text-foreground-muted font-mono font-semibold">{incident.startTime} • {incident.duration}</span>
                   </div>
-                  <span className="text-[10px] text-foreground-muted font-mono font-semibold">{incident.startTime} • {incident.duration}</span>
-                </div>
-                <p className="text-xs text-foreground-muted mb-3 leading-relaxed">{incident.description}</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {incident.affectedServices.map(s => (
-                    <span key={s} className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-card border border-border/60 text-foreground-muted font-mono">{s}</span>
-                  ))}
-                </div>
-              </motion.div>
-            );
-          })}
+                  <p className="text-xs text-foreground-muted mb-3 leading-relaxed">{incident.description}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {incident.affectedServices.map(s => (
+                      <span key={s} className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-card border border-border/60 text-foreground-muted font-mono">{s}</span>
+                    ))}
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
         </div>
       </motion.div>
 

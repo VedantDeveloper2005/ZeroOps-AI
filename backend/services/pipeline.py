@@ -98,6 +98,15 @@ class PipelineLogger:
             print(f"Error flushing logs to DB: {e}")
 
 
+# Task Dispatcher for Background Job Architecture
+# In production, this can be swapped with a Celery task call or Azure Queue message.
+def enqueue_deployment(deploy_id: str, repo_name: str, branch: str, background_tasks):
+    """Enqueues deployment tasks to run asynchronously in the background."""
+    # For MVP: Enqueue using FastAPI's background tasks
+    # For Production: celery_app.send_task("run_deployment_pipeline", args=[deploy_id, repo_name, branch])
+    background_tasks.add_task(run_deployment_pipeline, deploy_id, repo_name, branch)
+
+
 async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
     """Runs the full 10-stage deployment pipeline in an async background task."""
     print(f"Starting database-backed pipeline deployment {deploy_id} for {repo_name} (branch: {branch})")
@@ -181,6 +190,17 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
                 vulnerabilities=metadata.get("vulnerabilities", []),
                 dockerfile=metadata.get("dockerfile"),
                 kubernetes_manifest=metadata.get("kubernetes_manifest"),
+                
+                # Save new AI scanner fields
+                runtime=metadata.get("runtime"),
+                package_manager=metadata.get("package_manager"),
+                docker_support=metadata.get("docker_support", False),
+                monorepo_structure=metadata.get("monorepo_structure"),
+                database_dependencies=metadata.get("database_dependencies", []),
+                deployment_strategy=metadata.get("deployment_strategy"),
+                build_commands=metadata.get("build_commands"),
+                start_commands=metadata.get("start_commands"),
+                environment_variables=metadata.get("environment_variables", [])
             )
             db.add(analysis)
             
@@ -323,6 +343,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             # Create real deployment metrics
             db.add(models.DeploymentMetric(
                 deployment_id=deployment.id,
+                project_id=deployment.project_id,
                 cpu_utilization=15.4,
                 memory_utilization=64.2,
                 request_count=1240,

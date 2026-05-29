@@ -101,6 +101,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     plan = Column(Text, default="starter")
     api_key = Column(Text, nullable=True, unique=True)
+    refresh_token = Column(Text, nullable=True)
 
     # GitHub OAuth fields
     github_id = Column(Text, nullable=True, unique=True, index=True)
@@ -304,6 +305,17 @@ class AIAnalysis(Base):
     kubernetes_manifest = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Real AI Analysis fields
+    runtime = Column(Text, nullable=True)
+    package_manager = Column(Text, nullable=True)
+    docker_support = Column(Boolean, default=False)
+    monorepo_structure = Column(Text, nullable=True)
+    database_dependencies = Column(JSON, default=list)
+    deployment_strategy = Column(Text, nullable=True)
+    build_commands = Column(Text, nullable=True)
+    start_commands = Column(Text, nullable=True)
+    environment_variables = Column(JSON, default=list)
+
     # Relationships
     project = relationship("Project", back_populates="ai_analyses")
 
@@ -414,6 +426,7 @@ class DeploymentMetric(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     cpu_utilization = Column(Float, default=0.0)
     memory_utilization = Column(Float, default=0.0)
     request_count = Column(Integer, default=0)
@@ -426,6 +439,7 @@ class DeploymentMetric(Base):
 
     __table_args__ = (
         Index("ix_deployment_metrics_deployment_id", "deployment_id"),
+        Index("ix_deployment_metrics_project_id", "project_id"),
     )
 
 

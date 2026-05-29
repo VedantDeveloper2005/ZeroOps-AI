@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
-import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell } from "lucide-react";
+import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell, Activity, Loader2 } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { api } from "@/lib/api";
 
@@ -11,6 +11,36 @@ export default function SettingsPage() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  
+  const [sysHealth, setSysHealth] = useState<any>(null);
+  const [dbHealth, setDbHealth] = useState<any>(null);
+  const [ghHealth, setGhHealth] = useState<any>(null);
+  const [depHealth, setDepHealth] = useState<any>(null);
+  const [loadingHealth, setLoadingHealth] = useState(true);
+
+  const refreshHealthChecks = async () => {
+    setLoadingHealth(true);
+    try {
+      const [sys, db, gh, dep] = await Promise.allSettled([
+        api.getHealth(),
+        api.getHealthDatabase(),
+        api.getHealthGithub(),
+        api.getHealthDeployments(),
+      ]);
+      if (sys.status === "fulfilled") setSysHealth(sys.value);
+      if (db.status === "fulfilled") setDbHealth(db.value);
+      if (gh.status === "fulfilled") setGhHealth(gh.value);
+      if (dep.status === "fulfilled") setDepHealth(dep.value);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshHealthChecks();
+  }, []);
   
   const [settings, setSettings] = useState({
     predictiveScaling: true,
@@ -242,6 +272,57 @@ export default function SettingsPage() {
               className="px-4 py-2 bg-warning hover:bg-warning/85 text-black rounded-lg text-xs font-bold transition cursor-pointer shadow-sm"
             >
               Reset Onboarding State
+            </button>
+          </motion.div>
+
+          {/* Admin Diagnostics & Health Checks */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+            className="bg-card border border-border rounded-xl p-6 shadow-sm"
+          >
+            <h3 className="font-bold text-base mb-2 flex items-center gap-2 text-foreground">
+              <Activity className="text-primary" size={18} />
+              Admin Diagnostics & Health Checks
+            </h3>
+            <p className="text-xs text-foreground-muted mb-6">
+              Live status ping checks for external APIs, PostgreSQL connection pool, and deployment pipeline.
+            </p>
+
+            <div className="space-y-3">
+              {[
+                { name: "System Core", status: sysHealth?.status === "healthy" ? "healthy" : "unhealthy", details: `Env: ${sysHealth?.environment || "production"}`, loading: loadingHealth },
+                { name: "Database Service", status: dbHealth?.status === "healthy" ? "healthy" : "unhealthy", details: dbHealth?.details || "Not reachable", loading: loadingHealth },
+                { name: "GitHub Link", status: ghHealth?.status === "healthy" ? "healthy" : "unhealthy", details: ghHealth?.details || "Not reachable", loading: loadingHealth },
+                { name: "Deployments Engine", status: depHealth?.status === "healthy" ? "healthy" : "unhealthy", details: `Total runs: ${depHealth?.total_deployments ?? 0} (${depHealth?.active_deployments_running ?? 0} active)`, loading: loadingHealth },
+              ].map((service) => (
+                <div key={service.name} className="flex items-center justify-between p-3 rounded-lg bg-background-secondary/40 border border-border/40">
+                  <div>
+                    <p className="text-xs font-bold text-foreground">{service.name}</p>
+                    <p className="text-[10px] text-foreground-muted">{service.details}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {service.loading ? (
+                      <Loader2 size={12} className="animate-spin text-foreground-muted" />
+                    ) : (
+                      <>
+                        <div className={`w-2.5 h-2.5 rounded-full ${service.status === "healthy" ? "bg-success animate-pulse" : "bg-danger"}`} />
+                        <span className={`text-[10px] font-bold ${service.status === "healthy" ? "text-success" : "text-danger"}`}>
+                          {service.status === "healthy" ? "Online" : "Offline"}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <button
+              onClick={refreshHealthChecks}
+              className="mt-4 px-4 py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition cursor-pointer shadow-sm"
+            >
+              Refresh Diagnostics
             </button>
           </motion.div>
         </div>

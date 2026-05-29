@@ -44,8 +44,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Derive hasDeployed from actual DB state
-  const hasDeployed = dashboardStats?.has_deployed ?? false;
+  // Derive hasDeployed from actual DB state (true if user has at least one connected project)
+  const hasDeployed = projects.length > 0;
 
   // ── Fetch from API on mount ──
   useEffect(() => {

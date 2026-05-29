@@ -45,30 +45,57 @@ from fastapi.responses import JSONResponse
 
 # Lightweight in-memory rate limiter for production security
 RATE_LIMIT_WINDOW = 60  # 1 minute window
-RATE_LIMIT_MAX_REQUESTS = 100  # Max 100 requests per minute per IP
-
 request_counts = defaultdict(list)
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Exclude health checks, schema/docs and static assets
-    if request.url.path in ["/api/health", "/health", "/docs", "/openapi.json", "/favicon.ico"]:
+    path = request.url.path
+    
+    # Exclude all health checks and docs/static files
+    if (
+        path.startswith("/health") or 
+        path.startswith("/api/health") or 
+        path in ["/docs", "/openapi.json", "/favicon.ico"]
+    ):
         return await call_next(request)
         
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     
-    # Filter request timestamps inside the active window
-    timestamps = [t for t in request_counts[client_ip] if now - t < RATE_LIMIT_WINDOW]
-    request_counts[client_ip] = timestamps
+    # Resolve rate limit category
+    if path == "/api/auth/login":
+        category = "login"
+        limit = 10
+    elif path == "/api/auth/signup":
+        category = "signup"
+        limit = 5
+    elif path.startswith("/api/auth/github"):
+        category = "github"
+        limit = 20
+    else:
+        category = "default"
+        limit = 100
+
+    key = (client_ip, category)
     
-    if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+    # Filter request timestamps inside the active window
+    timestamps = [t for t in request_counts[key] if now - t < RATE_LIMIT_WINDOW]
+    request_counts[key] = timestamps
+    
+    if len(timestamps) >= limit:
+        # Prevent browser CORS errors on 429 blocks
+        origin = request.headers.get("origin")
+        headers = {}
+        if origin and origin in config.CORS_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
         return JSONResponse(
             status_code=429,
-            content={"detail": "Rate limit exceeded. Maximum 100 requests per minute allowed."}
+            content={"detail": f"Rate limit exceeded. Maximum {limit} requests per minute allowed for this endpoint."},
+            headers=headers
         )
         
-    request_counts[client_ip].append(now)
+    request_counts[key].append(now)
     return await call_next(request)
 
 
@@ -167,11 +194,19 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         logger.error(f"Signup DB insert error: {e}")
         raise HTTPException(status_code=500, detail="Failed to register user.")
 
-    token = auth.create_access_token(data={"sub": str(new_user.id)})
+    access_token = auth.create_access_token(data={"sub": str(new_user.id)})
+    refresh_token = auth.create_refresh_token(data={"sub": str(new_user.id)})
+    new_user.refresh_token = refresh_token
+    db.add(new_user)
+    await db.commit()
+    
     is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=token, httponly=True,
-                        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                        samesite="lax", secure=is_prod)
+    response.set_cookie(key="session_token", value=access_token, httponly=True,
+                        max_age=15 * 60,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
+                        max_age=7 * 24 * 3600,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
     logger.info(f"Signup success: {email}")
     return map_user_response(new_user)
 
@@ -194,11 +229,19 @@ async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = D
     if not auth.verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=400, detail="Invalid email or password.")
 
-    token = auth.create_access_token(data={"sub": str(user.id)})
+    access_token = auth.create_access_token(data={"sub": str(user.id)})
+    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
+    user.refresh_token = refresh_token
+    db.add(user)
+    await db.commit()
+    
     is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=token, httponly=True,
-                        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                        samesite="lax", secure=is_prod)
+    response.set_cookie(key="session_token", value=access_token, httponly=True,
+                        max_age=15 * 60,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
+                        max_age=7 * 24 * 3600,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
     logger.info(f"Login success: {email}")
     return map_user_response(user)
 
@@ -210,36 +253,19 @@ async def get_me(current_user: models.User = Depends(auth.get_current_user)):
 
 @app.post("/api/auth/logout")
 async def logout(
-    request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
 ):
-    token = request.cookies.get("session_token")
-    if not token:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ")[1]
-
-    if token:
-        try:
-            from datetime import timedelta
-            from jose import jwt
-            payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
-            exp_timestamp = payload.get("exp")
-            if exp_timestamp:
-                expires_at = datetime.utcfromtimestamp(exp_timestamp)
-            else:
-                expires_at = datetime.utcnow() + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
-                
-            revoked_token = models.RevokedToken(token=token, expires_at=expires_at)
-            db.add(revoked_token)
-            await db.commit()
-            logger.info(f"Token blacklisted successfully on logout.")
-        except Exception as e:
-            logger.warning(f"Failed to blacklist token on logout (it may already be expired or invalid): {e}")
+    if current_user:
+        current_user.refresh_token = None
+        db.add(current_user)
+        await db.commit()
+        logger.info(f"Session revoked and refresh token invalidated for user: {current_user.id}")
 
     is_prod = config.APP_ENV == "production"
-    response.delete_cookie(key="session_token", samesite="lax", secure=is_prod, httponly=True)
+    response.delete_cookie(key="session_token", samesite="none" if is_prod else "lax", secure=is_prod, httponly=True)
+    response.delete_cookie(key="refresh_token", samesite="none" if is_prod else "lax", secure=is_prod, httponly=True)
     return {"status": "success", "message": "Logged out successfully."}
 
 
@@ -285,11 +311,19 @@ async def oauth_authenticate(req: schemas.OAuthRequest, response: Response, db: 
         logger.error(f"OAuth error: {e}")
         raise HTTPException(status_code=500, detail="Database failure during authentication.")
 
-    token = auth.create_access_token(data={"sub": str(user.id)})
+    access_token = auth.create_access_token(data={"sub": str(user.id)})
+    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
+    user.refresh_token = refresh_token
+    db.add(user)
+    await db.commit()
+    
     is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=token, httponly=True,
-                        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                        samesite="lax", secure=is_prod)
+    response.set_cookie(key="session_token", value=access_token, httponly=True,
+                        max_age=15 * 60,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
+                        max_age=7 * 24 * 3600,
+                        samesite="none" if is_prod else "lax", secure=is_prod)
     return map_user_response(user)
 
 
@@ -725,10 +759,9 @@ async def start_deploy(
     await db.commit()
     await db.refresh(deployment)
 
-    # Run pipeline in background
-    background_tasks.add_task(
-        pipeline.run_deployment_pipeline,
-        str(deployment.id), project.full_name, req.branch
+    # Run pipeline in background via enqueuer dispatcher abstraction
+    pipeline.enqueue_deployment(
+        str(deployment.id), project.full_name, req.branch, background_tasks
     )
 
     return {
@@ -961,7 +994,18 @@ async def get_ai_analysis(
         vulnerabilities=analysis.vulnerabilities or [],
         dockerfile=analysis.dockerfile,
         kubernetes_manifest=analysis.kubernetes_manifest,
-        created_at=format_dt(analysis.created_at)
+        created_at=format_dt(analysis.created_at),
+        
+        # New AI analysis fields
+        runtime=analysis.runtime,
+        package_manager=analysis.package_manager,
+        docker_support=analysis.docker_support or False,
+        monorepo_structure=analysis.monorepo_structure,
+        database_dependencies=analysis.database_dependencies or [],
+        deployment_strategy=analysis.deployment_strategy,
+        build_commands=analysis.build_commands,
+        start_commands=analysis.start_commands,
+        environment_variables=analysis.environment_variables or []
     )
 
 
@@ -1010,7 +1054,18 @@ async def analyze_repo(
             dependencies=analysis.get("dependencies", []),
             vulnerabilities=analysis.get("vulnerabilities", []),
             dockerfile=analysis.get("dockerfile"),
-            kubernetes_manifest=analysis.get("kubernetes_manifest")
+            kubernetes_manifest=analysis.get("kubernetes_manifest"),
+            
+            # Save new scanner columns
+            runtime=analysis.get("runtime"),
+            package_manager=analysis.get("package_manager"),
+            docker_support=analysis.get("docker_support", False),
+            monorepo_structure=analysis.get("monorepo_structure"),
+            database_dependencies=analysis.get("database_dependencies", []),
+            deployment_strategy=analysis.get("deployment_strategy"),
+            build_commands=analysis.get("build_commands"),
+            start_commands=analysis.get("start_commands"),
+            environment_variables=analysis.get("environment_variables", [])
         )
         db.add(db_analysis)
         await db.commit()
@@ -1415,20 +1470,32 @@ async def github_oauth_callback(
         logger.error(f"GitHub OAuth database error: {e}")
         return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=server_error")
 
-    # Generate JWT session token
-    token = auth.create_access_token(data={"sub": str(user.id)})
+    # Generate JWT access token and refresh token
+    access_token = auth.create_access_token(data={"sub": str(user.id)})
+    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
+    user.refresh_token = refresh_token
+    db.add(user)
+    await db.commit()
 
     # Create redirect response with session cookie and clean up state cookie
-    redirect_url = f"{frontend_url}/auth/github/callback?token={token}"
+    redirect_url = f"{frontend_url}/auth/github/callback?token={access_token}"
     redirect_response = get_redirect_and_clean_state(redirect_url)
 
-    # Secure cross-domain session token cookie handling
+    # Secure cross-domain token cookies handling
     is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https") or ("localhost" not in frontend_url)
     redirect_response.set_cookie(
         key="session_token",
-        value=token,
+        value=access_token,
         httponly=True,
-        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        max_age=15 * 60,
+        samesite="none" if is_prod_cookie else "lax",
+        secure=True if is_prod_cookie else False,
+    )
+    redirect_response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=7 * 24 * 3600,
         samesite="none" if is_prod_cookie else "lax",
         secure=True if is_prod_cookie else False,
     )
@@ -1686,19 +1753,63 @@ async def regenerate_api_key(db: AsyncSession = Depends(get_db), current_user: m
 # ──────────────────────────────────────────────
 
 @app.get("/api/health")
-async def api_health():
+@app.get("/health")
+async def health_check():
     return {
-        "status": "ok",
+        "status": "healthy",
         "service": "zeroops-backend",
         "environment": config.APP_ENV,
         "dockerAvailable": config.DOCKER_AVAILABLE,
         "kubernetesAvailable": config.K8S_AVAILABLE,
         "openAIConfigured": bool(config.OPENAI_API_KEY),
+        "timestamp": datetime.utcnow().isoformat()
     }
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+@app.get("/api/health/database")
+@app.get("/health/database")
+async def health_database(db: AsyncSession = Depends(get_db)):
+    try:
+        from sqlalchemy import text
+        await db.execute(text("SELECT 1"))
+        return {"status": "healthy", "details": "connected to PostgreSQL"}
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Database connection error: {str(e)}")
+
+@app.get("/api/health/github")
+@app.get("/health/github")
+async def health_github():
+    try:
+        import requests
+        res = requests.get("https://api.github.com", timeout=2)
+        if res.status_code == 200:
+            return {"status": "healthy", "details": "GitHub API is reachable"}
+        else:
+            return {"status": "warning", "details": f"GitHub returned status code {res.status_code}"}
+    except Exception as e:
+        logger.error(f"GitHub health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"GitHub API is unreachable: {str(e)}")
+
+@app.get("/api/health/deployments")
+@app.get("/health/deployments")
+async def health_deployments(db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(select(func.count(models.Deployment.id)))
+        total_count = result.scalar() or 0
+        
+        active_result = await db.execute(
+            select(func.count(models.Deployment.id)).filter(models.Deployment.status == "building")
+        )
+        active_count = active_result.scalar() or 0
+        
+        return {
+            "status": "healthy",
+            "total_deployments": total_count,
+            "active_deployments_running": active_count
+        }
+    except Exception as e:
+        logger.error(f"Deployments health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Deployments engine query error: {str(e)}")
 
 @app.get("/healthz")
 async def healthz():

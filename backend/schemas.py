@@ -172,6 +172,17 @@ class AIAnalysisResponse(BaseModel):
     dockerfile: Optional[str] = None
     kubernetes_manifest: Optional[str] = None
     created_at: Optional[str] = None
+    
+    # New AI analysis fields
+    runtime: Optional[str] = None
+    package_manager: Optional[str] = None
+    docker_support: bool = False
+    monorepo_structure: Optional[str] = None
+    database_dependencies: List[str] = []
+    deployment_strategy: Optional[str] = None
+    build_commands: Optional[str] = None
+    start_commands: Optional[str] = None
+    environment_variables: List[str] = []
 
     class Config:
         from_attributes = True

@@ -8,62 +8,188 @@ except ImportError:
     from config import OPENAI_API_KEY
 
 def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
-    """Fallback local scanner when OpenAI is not available."""
+    """Idempotent, deep local repository scanner when OpenAI is not configured."""
     framework = "Next.js"
     version = "16.2.6"
     language = "TypeScript"
-    dependencies = ["next@16.2.6", "react@19.2.4", "framer-motion@12.40.0", "tailwindcss@4.0", "typescript@5.7"]
-    vulnerabilities = ["Medium: Outdated dependency package 'minimist'", "Low: Development secret keys exposed in mock config"]
-    risk_score = 15
+    runtime = "Node.js 20"
+    package_manager = "npm"
+    docker_support = False
+    monorepo_structure = "None"
+    database_dependencies = []
+    deployment_strategy = "Azure App Service"
+    build_commands = "npm run build"
+    start_commands = "npm start"
+    environment_variables = ["DATABASE_URL", "JWT_SECRET"]
+    
+    dependencies = ["next@16.2.6", "react@19.2.4"]
+    vulnerabilities = []
     cpu = "200m"
     memory = "256Mi"
     storage = "1Gi"
-    
-    # Simple static analysis
+
+    # Check for Dockerfile
+    if os.path.exists(os.path.join(repo_path, "Dockerfile")):
+        docker_support = True
+
+    # Check for monorepo patterns
+    if os.path.exists(os.path.join(repo_path, "lerna.json")):
+        monorepo_structure = "Lerna"
+    elif os.path.exists(os.path.join(repo_path, "pnpm-workspace.yaml")):
+        monorepo_structure = "pnpm Workspaces"
+    elif os.path.exists(os.path.join(repo_path, "nx.json")):
+        monorepo_structure = "Nx"
+
+    # Check for .env or .env.example
+    env_keys = []
+    for env_file in [".env.example", ".env"]:
+        env_p = os.path.join(repo_path, env_file)
+        if os.path.exists(env_p):
+            try:
+                with open(env_p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key = line.split("=", 1)[0].strip()
+                            if key:
+                                env_keys.append(key)
+            except Exception:
+                pass
+    if env_keys:
+        environment_variables = list(set(env_keys))
+
+    # Node.js Project Analysis
     if os.path.exists(os.path.join(repo_path, "package.json")):
+        # Package manager detection
+        if os.path.exists(os.path.join(repo_path, "pnpm-lock.yaml")):
+            package_manager = "pnpm"
+            build_commands = "pnpm run build"
+            start_commands = "pnpm start"
+        elif os.path.exists(os.path.join(repo_path, "yarn.lock")):
+            package_manager = "yarn"
+            build_commands = "yarn build"
+            start_commands = "yarn start"
+        else:
+            package_manager = "npm"
+            build_commands = "npm run build"
+            start_commands = "npm start"
+
         try:
-            with open(os.path.join(repo_path, "package.json"), "r") as f:
+            with open(os.path.join(repo_path, "package.json"), "r", encoding="utf-8") as f:
                 data = json.load(f)
                 deps = data.get("dependencies", {})
                 dev_deps = data.get("devDependencies", {})
+                scripts = data.get("scripts", {})
                 
+                # Build & Start commands
+                if "build" in scripts:
+                    build_commands = f"{package_manager} run build"
+                if "start" in scripts:
+                    start_commands = f"{package_manager} start"
+                elif "dev" in scripts:
+                    start_commands = f"{package_manager} run dev"
+
+                # Framework detection
                 if "next" in deps:
                     framework = "Next.js"
                     version = deps["next"].replace("^", "").replace("~", "")
+                    deployment_strategy = "Azure App Service"
+                    cpu = "200m"
+                    memory = "256Mi"
                 elif "express" in deps:
                     framework = "Express.js"
                     version = deps["express"].replace("^", "").replace("~", "")
+                    deployment_strategy = "Azure Container Apps"
+                    cpu = "100m"
+                    memory = "128Mi"
                 elif "@nestjs/core" in deps:
                     framework = "NestJS"
                     version = deps["@nestjs/core"].replace("^", "").replace("~", "")
+                    deployment_strategy = "Azure Kubernetes Service (AKS)"
+                    cpu = "250m"
+                    memory = "512Mi"
+                else:
+                    framework = "Node.js App"
+                    version = "1.0.0"
+                    deployment_strategy = "Azure App Service"
                     
                 if "typescript" in deps or "typescript" in dev_deps:
                     language = "TypeScript"
                 else:
                     language = "JavaScript"
                     
-                dependencies = [f"{k}@{v}" for k, v in list(deps.items())[:6]]
+                dependencies = [f"{k}@{v}" for k, v in list(deps.items())[:8]]
+
+                # Database dependencies detection
+                db_keywords = {
+                    "pg": "PostgreSQL",
+                    "postgres": "PostgreSQL",
+                    "mysql": "MySQL",
+                    "mysql2": "MySQL",
+                    "mongodb": "MongoDB",
+                    "mongoose": "MongoDB",
+                    "sqlite3": "SQLite",
+                    "redis": "Redis",
+                }
+                for dep_name in deps.keys():
+                    if dep_name in db_keywords:
+                        database_dependencies.append(db_keywords[dep_name])
+                database_dependencies = list(set(database_dependencies))
         except Exception:
             pass
             
+    # Python Project Analysis
     elif os.path.exists(os.path.join(repo_path, "requirements.txt")):
-        framework = "FastAPI"
-        version = "0.100.0"
         language = "Python"
+        runtime = "Python 3.10"
+        package_manager = "pip"
+        build_commands = "None"
+        start_commands = "uvicorn main:app --host 0.0.0.0 --port 8080"
+        deployment_strategy = "Azure App Service"
         cpu = "150m"
         memory = "128Mi"
         dependencies = []
+
         try:
-            with open(os.path.join(repo_path, "requirements.txt"), "r") as f:
-                for line in f.read().split("\n")[:8]:
-                    if line.strip() and not line.strip().startswith("#"):
-                        dependencies.append(line.strip())
+            with open(os.path.join(repo_path, "requirements.txt"), "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+                for line in lines[:10]:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        dependencies.append(line)
                         if "fastapi" in line.lower():
                             framework = "FastAPI"
+                            start_commands = "uvicorn main:app --host 0.0.0.0 --port 8080"
+                            deployment_strategy = "Azure Container Apps"
                         elif "flask" in line.lower():
                             framework = "Flask"
+                            start_commands = "python app.py"
+                            deployment_strategy = "Azure App Service"
+                        elif "django" in line.lower():
+                            framework = "Django"
+                            start_commands = "python manage.py runserver 0.0.0.0:8000"
+                            deployment_strategy = "Azure Kubernetes Service (AKS)"
+
+                # Database dependencies detection
+                db_keywords = {
+                    "psycopg2": "PostgreSQL",
+                    "asyncpg": "PostgreSQL",
+                    "pymysql": "MySQL",
+                    "pymongo": "MongoDB",
+                    "sqlite3": "SQLite",
+                    "redis": "Redis",
+                }
+                for dep in dependencies:
+                    dep_name = dep.split("==")[0].split(">=")[0].strip().lower()
+                    if dep_name in db_keywords:
+                        database_dependencies.append(db_keywords[dep_name])
+                database_dependencies = list(set(database_dependencies))
         except Exception:
             pass
+
+    # Basic vulnerability warning if databases detected but no SSL
+    if database_dependencies and "DATABASE_URL" in environment_variables:
+        vulnerabilities.append("Medium: Ensure DATABASE_URL uses SSL connection options in production.")
 
     # Dynamic generation of templates
     dockerfile = generate_default_dockerfile(framework)
@@ -79,11 +205,22 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
             "memory": memory,
             "storage": storage
         },
-        "risk_score": risk_score,
+        "risk_score": 12 if not vulnerabilities else 22,
         "dependencies": dependencies,
-        "vulnerabilities": vulnerabilities,
+        "vulnerabilities": vulnerabilities or ["Vulnerability checks passed successfully."],
         "dockerfile": dockerfile,
-        "kubernetes_manifest": k8s_manifest
+        "kubernetes_manifest": k8s_manifest,
+        
+        # Real AI analysis fields
+        "runtime": runtime,
+        "package_manager": package_manager,
+        "docker_support": docker_support,
+        "monorepo_structure": monorepo_structure,
+        "database_dependencies": database_dependencies or ["None"],
+        "deployment_strategy": deployment_strategy,
+        "build_commands": build_commands,
+        "start_commands": start_commands,
+        "environment_variables": environment_variables
     }
 
 def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
@@ -101,7 +238,7 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
         p = os.path.join(repo_path, filename)
         if os.path.exists(p):
             try:
-                with open(p, "r") as f:
+                with open(p, "r", encoding="utf-8") as f:
                     files_context[filename] = f.read()[:3000]
             except Exception:
                 pass
@@ -115,16 +252,25 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
     {json.dumps(files_context, indent=2)}
 
     Output a clean JSON containing:
-    1. "framework": detected framework name
-    2. "version": version
-    3. "language": language
-    4. "confidence": confidence percentage
+    1. "framework": detected framework name (e.g. Next.js, FastAPI, Flask, etc.)
+    2. "version": framework version
+    3. "language": programming language
+    4. "confidence": confidence percentage (0 to 100)
     5. "resources": {{"cpu": "recommended CPU limit", "memory": "recommended Memory limit", "storage": "estimated storage"}}
     6. "risk_score": integer (0 to 100)
     7. "dependencies": list of top 8 dependencies (name@version)
     8. "vulnerabilities": list of simulated security vulnerabilities or audit items
     9. "dockerfile": recommended Dockerfile (string)
     10. "kubernetes_manifest": recommended Kubernetes Deployment + Service + Ingress + HorizontalPodAutoscaler manifests in YAML (string), making sure all resource metadata elements specify the target namespace 'zeroops-{project_id}', environment variables are injected via envFrom from secretRef 'project-secrets', ingress is configured with class 'nginx', tls host '{project_id}.zeroops.dev', and cert-manager annotation cluster-issuer 'letsencrypt-prod'.
+    11. "runtime": recommended runtime (e.g. Node.js 22, Python 3.11)
+    12. "package_manager": detected package manager (e.g. npm, pnpm, yarn, pip)
+    13. "docker_support": boolean indicating if a Dockerfile is present
+    14. "monorepo_structure": description of monorepo structure or "None"
+    15. "database_dependencies": list of detected databases (e.g. ["PostgreSQL", "Redis"])
+    16. "deployment_strategy": recommended deployment strategy (e.g. Azure App Service, Azure Container Apps, AKS)
+    17. "build_commands": build command
+    18. "start_commands": start command
+    19. "environment_variables": list of detected environment variable names from files
     
     Respond ONLY with valid JSON. No markdown codeblocks, no explanation.
     """

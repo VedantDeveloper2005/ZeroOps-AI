@@ -72,7 +72,16 @@ spec:
         image: acr.azurecr.io/${name}:latest
         ports:
         - containerPort: 3000`,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    runtime: "Node.js 22",
+    package_manager: "npm",
+    docker_support: false,
+    monorepo_structure: "None",
+    database_dependencies: [],
+    deployment_strategy: "Azure App Service",
+    build_commands: "npm run build",
+    start_commands: "npm start",
+    environment_variables: []
   };
 };
 
@@ -147,7 +156,16 @@ export default function AIAnalysisPage() {
           vulnerabilities: (data.vulnerabilities as string[]) || ["Vulnerability checks passed."],
           dockerfile: (data.dockerfile as string) || null,
           kubernetes_manifest: (data.kubernetes_manifest as string) || null,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          runtime: (data.runtime as string) || "Node.js 22",
+          package_manager: (data.package_manager as string) || "npm",
+          docker_support: (data.docker_support as boolean) || false,
+          monorepo_structure: (data.monorepo_structure as string) || "None",
+          database_dependencies: (data.database_dependencies as string[]) || [],
+          deployment_strategy: (data.deployment_strategy as string) || "Azure App Service",
+          build_commands: (data.build_commands as string) || "npm run build",
+          start_commands: (data.start_commands as string) || "npm start",
+          environment_variables: (data.environment_variables as string[]) || []
         });
       }
       addToast(`AI analysis complete for ${repo}.`, "success");
@@ -277,6 +295,105 @@ export default function AIAnalysisPage() {
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="col-span-2 flex flex-col items-center justify-center rounded-xl p-5 bg-card border border-border shadow-sm sm:col-span-1">
               <GaugeChart value={analysis.risk_score} label="Risk Score" size={100} color="hsl(142, 60%, 40%)" />
               <span className="mt-2 text-xs font-semibold text-success">Demo Safe</span>
+            </motion.div>
+          </div>
+
+          {/* Build and Infrastructure Details */}
+          <div className="grid gap-4 md:grid-cols-2">
+            {/* Build & Container Settings */}
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4"
+            >
+              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+                <Cpu size={16} className="text-primary" /> Container & Build Parameters
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div className="bg-background-secondary/40 p-3 rounded border border-border/40">
+                  <p className="text-[10px] uppercase font-bold text-foreground-muted">Runtime Environment</p>
+                  <p className="mt-1 font-semibold text-foreground font-mono">{analysis.runtime || "Node.js 20"}</p>
+                </div>
+                <div className="bg-background-secondary/40 p-3 rounded border border-border/40">
+                  <p className="text-[10px] uppercase font-bold text-foreground-muted">Package Manager</p>
+                  <p className="mt-1 font-semibold text-foreground font-mono">{analysis.package_manager || "npm"}</p>
+                </div>
+                <div className="bg-background-secondary/40 p-3 rounded border border-border/40">
+                  <p className="text-[10px] uppercase font-bold text-foreground-muted">Docker Support</p>
+                  <p className={`mt-1 font-semibold ${analysis.docker_support ? "text-success" : "text-foreground-muted"}`}>
+                    {analysis.docker_support ? "Yes (Dockerfile)" : "No (Auto-built)"}
+                  </p>
+                </div>
+                <div className="bg-background-secondary/40 p-3 rounded border border-border/40">
+                  <p className="text-[10px] uppercase font-bold text-foreground-muted">Monorepo Workspace</p>
+                  <p className="mt-1 font-semibold text-foreground truncate">{analysis.monorepo_structure || "None"}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1 text-xs">
+                <div className="flex justify-between items-center border-b border-border/10 pb-2">
+                  <span className="text-foreground-muted">Build Command</span>
+                  <code className="bg-background-secondary px-2 py-0.5 rounded border border-border/60 text-[10px] font-mono text-foreground font-semibold">
+                    {analysis.build_commands || "npm run build"}
+                  </code>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-foreground-muted">Start Command</span>
+                  <code className="bg-background-secondary px-2 py-0.5 rounded border border-border/60 text-[10px] font-mono text-foreground font-semibold">
+                    {analysis.start_commands || "npm start"}
+                  </code>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Infrastructure & Environment variables */}
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.12 }}
+              className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4"
+            >
+              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+                <Database size={16} className="text-accent" /> Infrastructure & Environment
+              </h3>
+              
+              <div className="space-y-3.5 text-xs">
+                <div className="flex justify-between items-center border-b border-border/10 pb-2.5">
+                  <span className="text-foreground-muted">Deployment Target</span>
+                  <span className="font-semibold text-foreground">{analysis.deployment_strategy || "Azure App Service"}</span>
+                </div>
+                
+                <div className="border-b border-border/10 pb-3">
+                  <span className="text-foreground-muted block mb-1.5">Database Dependencies</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {analysis.database_dependencies && analysis.database_dependencies.length > 0 && analysis.database_dependencies[0] !== "None" ? (
+                      analysis.database_dependencies.map((db: string) => (
+                        <span key={db} className="text-[10px] font-mono px-2 py-0.5 rounded bg-primary-subtle border border-primary text-primary font-bold">
+                          {db}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-foreground-muted text-[11px]">None detected</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-foreground-muted block mb-1.5">Detected Environment Variables</span>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto no-scrollbar">
+                    {analysis.environment_variables && analysis.environment_variables.length > 0 ? (
+                      analysis.environment_variables.map((env: string) => (
+                        <span key={env} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-background-secondary border border-border/60 text-foreground font-medium">
+                          {env}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-foreground-muted text-[11px]">None detected (.env is clean)</span>
+                    )}
+                  </div>
+                </div>
+              </div>
             </motion.div>
           </div>
 

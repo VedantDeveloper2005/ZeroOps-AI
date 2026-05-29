@@ -153,8 +153,34 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_access_token_encrypted TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS failure_reason TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS infrastructure_metadata JSON",
+        
+        # Deployment Metrics project_id column
+        "ALTER TABLE deployment_metrics ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE",
+
+        # AI Analysis extra fields columns
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS runtime TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS package_manager TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS docker_support BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS monorepo_structure TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS database_dependencies JSON DEFAULT '[]'",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS deployment_strategy TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS build_commands TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS start_commands TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS environment_variables JSON DEFAULT '[]'",
+
+        # Indexes
+        "CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)",
+        "CREATE INDEX IF NOT EXISTS ix_repositories_user_id ON repositories(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_user_id ON projects(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_deployments_project_id ON deployments(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_logs_deployment_id ON deployment_logs(deployment_id)",
+        "CREATE INDEX IF NOT EXISTS ix_environments_project_id ON environments(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_metrics_project_id ON deployment_metrics(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ai_analyses_project_id ON ai_analyses(project_id)",
+
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_users_github_id_unique') THEN
@@ -167,7 +193,7 @@ async def run_migrations():
         async with async_engine.begin() as conn:
             for stmt in migration_statements:
                 await conn.execute(text(stmt))
-        logger.info("Schema migrations completed successfully (GitHub OAuth columns).")
+        logger.info("Schema migrations completed successfully (GitHub OAuth columns, AI analysis fields, and indexes).")
     except Exception as e:
         logger.warning(f"Schema migration encountered an issue (may be non-critical): {e}")
 

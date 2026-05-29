@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink } from "lucide-react";
+import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink, Trash2, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useState, useEffect, useCallback } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -95,6 +95,12 @@ export default function RepositoriesPage() {
   const [availableBranches, setAvailableBranches] = useState<string[]>(["main"]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
 
+  // Env variables wizard state
+  const [wizardEnvVars, setWizardEnvVars] = useState<{ key: string; value: string; is_secret: boolean }[]>([]);
+  const [newEnvKey, setNewEnvKey] = useState("");
+  const [newEnvVal, setNewEnvVal] = useState("");
+  const [newEnvIsSecret, setNewEnvIsSecret] = useState(false);
+
   // Deployment config states
   const [region, setRegion] = useState("eastus");
   const [minReplicas, setMinReplicas] = useState(2);
@@ -108,16 +114,10 @@ export default function RepositoriesPage() {
   const [framework, setFramework] = useState("Next.js");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Check if user logged in via GitHub (auto-skip step 1)
+  // Check if user logged in via GitHub
   const isGitHubConnected = user?.github_connected === true;
 
-  useEffect(() => {
-    if (isGitHubConnected && !hasDeployed) {
-      setOnboardStep(2);
-      loadRepos();
-    }
-  }, [isGitHubConnected, hasDeployed]);
-
+  // Load repositories on mount or search
   const loadRepos = useCallback(async (searchQ?: string, page = 1) => {
     if (page === 1) {
       setIsLoadingRepos(true);
@@ -152,7 +152,7 @@ export default function RepositoriesPage() {
       setIsLoadingRepos(false);
       setIsLoadingMore(false);
     }
-  }, [selectedRepo]);
+  }, [selectedRepo, addToast]);
 
   // Debounced search
   useEffect(() => {
@@ -161,7 +161,7 @@ export default function RepositoriesPage() {
       loadRepos(repoSearchQuery, 1);
     }, 400);
     return () => clearTimeout(timer);
-  }, [repoSearchQuery, isGitHubConnected]);
+  }, [repoSearchQuery, isGitHubConnected, loadRepos]);
 
   // Load branches when a repo is selected
   useEffect(() => {
@@ -179,19 +179,111 @@ export default function RepositoriesPage() {
       .finally(() => setIsLoadingBranches(false));
   }, [selectedRepo, isGitHubConnected]);
 
+  // Auto load repos on mount
+  useEffect(() => {
+    if (isGitHubConnected && !hasDeployed) {
+      loadRepos();
+    }
+  }, [isGitHubConnected, hasDeployed, loadRepos]);
+
+  // Automatically trigger AI analysis when step 3 is reached
+  useEffect(() => {
+    if (onboardStep === 3 && selectedRepo) {
+      setIsAnalyzing(true);
+      const selectedRepoObj = gitRepos.find((r) => r.full_name === selectedRepo);
+      api.analyzeRepo(selectedRepo, selectedBranch)
+        .then((data: any) => {
+          setIsAnalyzing(false);
+          setAnalysisResult({
+            framework: data.framework || detectedFramework,
+            language: data.language || selectedRepoObj?.language || "TypeScript",
+            runtime: data.runtime || "Node.js 20",
+            packageManager: data.package_manager || "npm",
+            dockerSupport: data.docker_support ?? false,
+            monorepoStructure: data.monorepo_structure || "None",
+            databaseDependencies: data.database_dependencies || [],
+            deploymentStrategy: data.deployment_strategy || "Azure App Service",
+            buildCommands: data.build_commands || "npm run build",
+            startCommands: data.start_commands || "npm start",
+            environmentVariables: data.environment_variables || [],
+            riskScore: data.risk_score ?? 18,
+            cpu: data.resources?.cpu || "200m",
+            memory: data.resources?.memory || "256Mi",
+            ports: data.port || "3000",
+            vulnerabilities: data.vulnerabilities || [],
+          });
+          
+          if (data.environment_variables && data.environment_variables.length > 0) {
+            setWizardEnvVars((prev) => {
+              if (prev.length > 0) return prev;
+              return data.environment_variables.map((v: string) => ({
+                key: v,
+                value: "",
+                is_secret: v.toLowerCase().includes("secret") || v.toLowerCase().includes("key") || v.toLowerCase().includes("password") || v.toLowerCase().includes("token"),
+              }));
+            });
+          }
+          addToast("AI Analysis complete!", "success");
+        })
+        .catch(() => {
+          setIsAnalyzing(false);
+          setAnalysisResult({
+            framework: detectedFramework,
+            language: selectedRepoObj?.language || "TypeScript",
+            runtime: "Node.js 20",
+            packageManager: "npm",
+            dockerSupport: false,
+            monorepoStructure: "None",
+            databaseDependencies: [],
+            deploymentStrategy: "Azure App Service",
+            buildCommands: "npm run build",
+            startCommands: "npm start",
+            environmentVariables: [],
+            riskScore: 18,
+            cpu: "200m",
+            memory: "256Mi",
+            ports: detectedFramework === "FastAPI" ? "8000" : "3000",
+            vulnerabilities: [],
+          });
+          addToast("AI Analysis completed with local metadata.", "success");
+        });
+    }
+  }, [onboardStep, selectedRepo, selectedBranch, detectedFramework, gitRepos, addToast]);
+
   const handleLaunchDeployment = async () => {
     addToast(`Launching deployment for ${selectedRepo}...`, "info");
     try {
+      const selectedRepoObj = gitRepos.find((r) => r.full_name === selectedRepo);
       const proj = await api.createProject({
         name: selectedRepo.split("/").pop() || selectedRepo,
         full_name: selectedRepo,
         repo_url: `https://github.com/${selectedRepo}`,
         framework: detectedFramework,
-        language: gitRepos.find((r) => r.full_name === selectedRepo)?.language || "TypeScript",
+        language: selectedRepoObj?.language || "TypeScript",
         branch: selectedBranch,
         region: region,
       });
 
+      // Add environment variables
+      if (wizardEnvVars.length > 0) {
+        await Promise.all(
+          wizardEnvVars.map(async (v) => {
+            if (v.key.trim() && v.value.trim()) {
+              try {
+                await api.addEnvVar(proj.id, {
+                  key: v.key.trim(),
+                  value: v.value.trim(),
+                  is_secret: v.is_secret,
+                });
+              } catch (err) {
+                console.error(`Failed to save env var ${v.key}:`, err);
+              }
+            }
+          })
+        );
+      }
+
+      // Start deployment
       const deployRes = await api.startDeployment({
         project_id: proj.id,
         branch: selectedBranch,
@@ -306,24 +398,30 @@ export default function RepositoriesPage() {
     return (
       <div className="space-y-6 max-w-4xl mx-auto">
         {/* Onboarding Wizard Header */}
-        <div className="text-center space-y-2 mb-8">
-          <h1 className="text-3xl font-extrabold text-foreground tracking-tight">Onboarding Wizard</h1>
-          <p className="text-sm text-foreground-muted">Set up your workspace and launch your first autonomic cloud deployment.</p>
-
-          {/* Progress Indicators */}
-          <div className="flex items-center justify-center gap-2 pt-4 max-w-lg mx-auto">
+        <div className="text-center space-y-2 mb-8 animate-fade-in">
+          <h1 className="text-3xl font-extrabold text-foreground tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-foreground to-foreground-muted">
+            Onboarding Wizard
+          </h1>
+          <p className="text-sm text-foreground-muted">
+            Set up your workspace and launch your first autonomic cloud deployment.
+          </p>
+          
+          {/* Progress Indicators (6 Steps) */}
+          <div className="flex items-center justify-center gap-2 pt-6 max-w-2xl mx-auto overflow-x-auto no-scrollbar">
             {[
-              { id: 1, label: "Git Link" },
-              { id: 2, label: "Select Repo" },
-              { id: 3, label: "AI Scan" },
-              { id: 4, label: "Configure" },
+              { id: 1, label: "Select Repo" },
+              { id: 2, label: "Select Branch" },
+              { id: 3, label: "AI Analysis" },
+              { id: 4, label: "Env Variables" },
+              { id: 5, label: "Target Config" },
+              { id: 6, label: "Review & Deploy" },
             ].map((step, idx) => (
-              <div key={step.id} className="flex items-center flex-1">
+              <div key={step.id} className="flex items-center flex-1 min-w-[90px]">
                 <div className="flex flex-col items-center gap-1.5 flex-1">
                   <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border ${
+                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border transition-all duration-300 ${
                       onboardStep === step.id
-                        ? "bg-primary border-primary text-white glow-blue"
+                        ? "bg-primary border-primary text-white glow-blue scale-110"
                         : onboardStep > step.id
                         ? "bg-success/20 border-success text-success"
                         : "bg-card border-border text-foreground-muted"
@@ -332,16 +430,18 @@ export default function RepositoriesPage() {
                     {onboardStep > step.id ? <Check size={14} /> : step.id}
                   </div>
                   <span
-                    className={`text-[10px] font-semibold ${
+                    className={`text-[9px] font-bold transition-colors duration-300 whitespace-nowrap ${
                       onboardStep === step.id ? "text-foreground" : "text-foreground-muted"
                     }`}
                   >
                     {step.label}
                   </span>
                 </div>
-                {idx < 3 && (
+                {idx < 5 && (
                   <div
-                    className={`h-px flex-1 -mt-4 ${onboardStep > step.id ? "bg-success/40" : "bg-border"}`}
+                    className={`h-px flex-1 -mt-4 mx-2 transition-all duration-300 ${
+                      onboardStep > step.id ? "bg-success/40" : "bg-border"
+                    }`}
                   />
                 )}
               </div>
@@ -349,91 +449,70 @@ export default function RepositoriesPage() {
           </div>
         </div>
 
-        {/* Wizard Steps */}
-        <motion.div
-          key={onboardStep}
-          initial={{ opacity: 0, x: 10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -10 }}
-          transition={{ duration: 0.3 }}
-          className="glass rounded-2xl border border-border/40 p-6 md:p-8 shadow-2xl space-y-6"
-        >
-          {/* STEP 1: CONNECT GIT PROVIDER */}
-          {onboardStep === 1 && (
-            <div className="space-y-6 text-center py-4">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-lg glow-blue">
-                <GitBranch size={28} className="text-white" />
-              </div>
-              <div className="space-y-2 max-w-md mx-auto">
-                <h3 className="text-xl font-bold text-foreground">Connect GitHub Account</h3>
-                <p className="text-sm text-foreground-muted">
-                  Authorize ZeroOps to access your repositories. We&apos;ll securely store your credentials server-side.
-                </p>
-              </div>
+        {/* Git Connect Prerequisite State */}
+        {!isGitHubConnected ? (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="glass rounded-2xl border border-border/40 p-8 text-center shadow-2xl max-w-md mx-auto space-y-6"
+          >
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-lg glow-blue">
+              <GithubIcon size={28} className="text-white" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-foreground">Connect GitHub Account</h3>
+              <p className="text-sm text-foreground-muted">
+                ZeroOps needs access to your GitHub account to retrieve your repositories and branches.
+              </p>
+            </div>
 
-              <div className="max-w-xs mx-auto pt-4">
-                {isGitHubConnected ? (
-                  <div className="space-y-3 p-4 rounded-xl bg-success/10 border border-success/30 text-center">
-                    <Check size={24} className="text-success mx-auto" />
-                    <p className="text-sm font-semibold text-foreground">Connected to GitHub</p>
-                    <p className="text-xs text-foreground-muted font-mono font-semibold">
-                      @{user?.github_username}
+            <div className="pt-2">
+              {isConnectingGit ? (
+                <div className="space-y-3 p-4 rounded-xl bg-card border border-border text-center">
+                  <Loader2 size={24} className="animate-spin text-primary mx-auto" />
+                  <p className="text-xs font-mono text-foreground-muted">Redirecting to GitHub...</p>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setIsConnectingGit(true);
+                    loginWithGitHub();
+                  }}
+                  className="w-full py-3 bg-primary text-white hover:bg-primary-hover font-semibold rounded-xl text-sm transition-all duration-200 glow-blue cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <GithubIcon size={18} />
+                  Connect GitHub
+                </button>
+              )}
+            </div>
+          </motion.div>
+        ) : (
+          /* Wizard Steps Container */
+          <motion.div
+            key={onboardStep}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.25 }}
+            className="glass rounded-2xl border border-border/40 p-6 md:p-8 shadow-2xl space-y-6"
+          >
+            {/* STEP 1: SELECT REPOSITORY */}
+            {onboardStep === 1 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Select Repository</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Select the project codebase you wish to configure and deploy.
                     </p>
                   </div>
-                ) : isConnectingGit ? (
-                  <div className="space-y-3 p-4 rounded-xl bg-card border border-border text-center">
-                    <Loader2 size={24} className="animate-spin text-primary mx-auto" />
-                    <p className="text-xs font-mono text-foreground-muted">Redirecting to GitHub...</p>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setIsConnectingGit(true);
-                      loginWithGitHub();
-                    }}
-                    className="w-full py-3 bg-primary text-white hover:bg-primary-hover font-semibold rounded-xl text-sm transition glow-blue cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    <GithubIcon size={18} />
-                    Continue with GitHub
-                  </button>
-                )}
-              </div>
-
-              <div className="flex justify-end pt-6 border-t border-border/40">
-                <button
-                  disabled={!isGitHubConnected}
-                  onClick={() => {
-                    setOnboardStep(2);
-                    loadRepos();
-                  }}
-                  className="px-5 py-2.5 bg-primary disabled:opacity-50 text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer"
-                >
-                  Continue
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* STEP 2: SELECT REPOSITORY */}
-          {onboardStep === 2 && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-bold text-foreground">Select Repository & Branch</h3>
-                  <p className="text-xs text-foreground-muted">
-                    Choose the repository you wish to deploy onto Kubernetes.
-                  </p>
-                </div>
-                {isGitHubConnected && (
                   <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-success border border-success/20 font-medium">
                     @{user?.github_username}
                   </span>
-                )}
-              </div>
+                </div>
 
-              {/* Search repos */}
-              <div className="flex gap-3">
-                <div className="flex-1 glass-subtle rounded-xl px-4 py-2.5 flex items-center gap-2">
+                {/* Search repos */}
+                <div className="flex-1 bg-background-secondary border border-border/80 rounded-xl px-4 py-2.5 flex items-center gap-2">
                   <Search size={16} className="text-foreground-muted" />
                   <input
                     type="text"
@@ -443,379 +522,690 @@ export default function RepositoriesPage() {
                     className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full"
                   />
                 </div>
-              </div>
 
-              {isLoadingRepos ? (
-                <div className="grid md:grid-cols-3 gap-3">
-                  {[1, 2, 3, 4, 5, 6].map((i) => (
-                    <div key={i} className="p-4 rounded-xl border border-border bg-card/40 space-y-3 animate-pulse">
-                      <div className="flex items-center justify-between">
-                        <div className="h-4 bg-background-secondary rounded w-24" />
-                        <div className="h-4 bg-background-secondary rounded-full w-12" />
+                {isLoadingRepos ? (
+                  <div className="grid md:grid-cols-3 gap-3">
+                    {[1, 2, 3, 4, 5, 6].map((i) => (
+                      <div key={i} className="p-4 rounded-xl border border-border bg-card/40 space-y-3 animate-pulse">
+                        <div className="flex items-center justify-between">
+                          <div className="h-4 bg-background-secondary rounded w-24" />
+                          <div className="h-4 bg-background-secondary rounded-full w-12" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="h-3 bg-background-secondary rounded w-full" />
+                          <div className="h-3 bg-background-secondary rounded w-2/3" />
+                        </div>
+                        <div className="flex items-center justify-between pt-2">
+                          <div className="h-3 bg-background-secondary rounded w-10" />
+                          <div className="h-3 bg-background-secondary rounded w-14" />
+                        </div>
                       </div>
-                      <div className="space-y-1.5">
-                        <div className="h-3 bg-background-secondary rounded w-full" />
-                        <div className="h-3 bg-background-secondary rounded w-2/3" />
-                      </div>
-                      <div className="flex items-center justify-between pt-2">
-                        <div className="h-3 bg-background-secondary rounded w-10" />
-                        <div className="h-3 bg-background-secondary rounded w-14" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : gitRepos.length === 0 ? (
-                <div className="p-8 text-center space-y-2 bg-card/20 border border-border/60 rounded-xl">
-                  <GitBranch size={32} className="text-foreground-muted mx-auto" />
-                  <p className="text-sm text-foreground-muted">No repositories found.</p>
-                  {repoSearchQuery && (
-                    <button
-                      onClick={() => setRepoSearchQuery("")}
-                      className="text-xs text-primary hover:underline cursor-pointer"
-                    >
-                      Clear search
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="grid md:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1">
-                    {gitRepos.map((repo) => {
-                      const readiness = calculateReadinessScore(repo);
-                      return (
-                        <motion.div
-                          key={repo.id}
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          onClick={() => {
-                            setSelectedRepo(repo.full_name);
-                            setDetectedFramework(detectFramework(repo.language));
-                          }}
-                          className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
-                            selectedRepo === repo.full_name
-                              ? "bg-primary-subtle/20 border-primary shadow-lg"
-                              : "bg-card border-border hover:bg-card-hover hover:border-border/80"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
-                            <span className="font-semibold text-xs text-foreground truncate max-w-[130px]">
-                              {repo.name}
-                            </span>
-                            <div className="flex items-center gap-1.5">
-                              {repo.private && (
-                                <Lock size={10} className="text-foreground-muted" />
-                              )}
-                              {repo.language && (
-                                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-foreground-muted font-medium">
-                                  {repo.language}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <p className="text-[11px] text-foreground-muted line-clamp-2 min-h-[28px]">
-                            {repo.description || "No description provided."}
-                          </p>
-                          
-                          {/* Readiness Score Progress Bar */}
-                          <div className="mt-2.5 flex items-center justify-between">
-                            <span className="text-[10px] text-foreground-muted">Readiness:</span>
-                            <div className="flex items-center gap-1.5">
-                              <div className="h-1.5 w-12 bg-background-secondary rounded-full overflow-hidden border border-border/40">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    readiness >= 90 ? "bg-success" : readiness >= 80 ? "bg-warning" : "bg-danger"
-                                  }`}
-                                  style={{ width: `${readiness}%` }}
-                                />
-                              </div>
-                              <span className={`text-[10px] font-bold ${
-                                readiness >= 90 ? "text-success" : readiness >= 80 ? "text-warning" : "text-danger"
-                              }`}>
-                                {readiness}%
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border/20 text-[9px] text-foreground-muted">
-                            <span className="flex items-center gap-0.5">
-                              <Star size={9} /> {repo.stargazers_count}
-                            </span>
-                            <span>{timeAgo(repo.updated_at)}</span>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
+                    ))}
                   </div>
-                  {hasMoreRepos && (
-                    <div className="text-center pt-2">
+                ) : gitRepos.length === 0 ? (
+                  <div className="p-8 text-center space-y-2 bg-card/20 border border-border/60 rounded-xl">
+                    <GitBranch size={32} className="text-foreground-muted mx-auto" />
+                    <p className="text-sm text-foreground-muted">No repositories found.</p>
+                    {repoSearchQuery && (
                       <button
-                        onClick={() => loadRepos(repoSearchQuery, repoPage + 1)}
-                        disabled={isLoadingMore}
-                        className="text-xs text-primary hover:underline cursor-pointer disabled:opacity-50"
+                        onClick={() => setRepoSearchQuery("")}
+                        className="text-xs text-primary hover:underline cursor-pointer"
                       >
-                        {isLoadingMore ? (
-                          <span className="flex items-center gap-1.5">
-                            <Loader2 size={12} className="animate-spin" /> Loading more...
-                          </span>
-                        ) : (
-                          "Load more repositories"
-                        )}
+                        Clear search
                       </button>
-                    </div>
-                  )}
-                </>
-              )}
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid md:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1">
+                      {gitRepos.map((repo) => {
+                        const readiness = calculateReadinessScore(repo);
+                        return (
+                          <motion.div
+                            key={repo.id}
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            onClick={() => {
+                              setSelectedRepo(repo.full_name);
+                              setDetectedFramework(detectFramework(repo.language));
+                            }}
+                            className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
+                              selectedRepo === repo.full_name
+                                ? "bg-primary-subtle/20 border-primary shadow-lg scale-[1.01] bg-gradient-to-b from-card to-primary-subtle/5"
+                                : "bg-card border-border hover:bg-card-hover hover:border-border/80"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
+                              <span className="font-semibold text-xs text-foreground truncate max-w-[130px]">
+                                {repo.name}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                {repo.private && (
+                                  <Lock size={10} className="text-foreground-muted" />
+                                )}
+                                {repo.language && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-foreground-muted font-medium">
+                                    {repo.language}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <p className="text-[11px] text-foreground-muted line-clamp-2 min-h-[28px]">
+                              {repo.description || "No description provided."}
+                            </p>
 
-              <div className="grid md:grid-cols-2 gap-4 pt-2">
-                <div>
-                  <label className="block text-xs font-semibold text-foreground-muted mb-1.5">
-                    Tracking Branch
-                  </label>
-                  {isLoadingBranches ? (
-                    <div className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground-muted flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin" /> Loading branches...
+                            <div className="mt-2.5 flex items-center justify-between">
+                              <span className="text-[10px] text-foreground-muted">Readiness:</span>
+                              <div className="flex items-center gap-1.5">
+                                <div className="h-1.5 w-12 bg-background-secondary rounded-full overflow-hidden border border-border/40">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      readiness >= 90 ? "bg-success" : readiness >= 80 ? "bg-warning" : "bg-danger"
+                                    }`}
+                                    style={{ width: `${readiness}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[10px] font-bold ${
+                                  readiness >= 90 ? "text-success" : readiness >= 80 ? "text-warning" : "text-danger"
+                                }`}>
+                                  {readiness}%
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border/20 text-[9px] text-foreground-muted">
+                              <span className="flex items-center gap-0.5">
+                                <Star size={9} /> {repo.stargazers_count}
+                              </span>
+                              <span>{timeAgo(repo.updated_at)}</span>
+                            </div>
+                          </motion.div>
+                        );
+                      })}
                     </div>
-                  ) : (
-                    <select
-                      value={selectedBranch}
-                      onChange={(e) => setSelectedBranch(e.target.value)}
-                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                    >
-                      {availableBranches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-foreground-muted mb-1.5">
-                    Git Provider
-                  </label>
-                  <input
-                    type="text"
-                    value={`GitHub (@${user?.github_username || "connected"})`}
-                    disabled
-                    className="w-full bg-card border border-border/40 rounded-lg px-3 py-2 text-sm text-foreground-muted focus:outline-none"
-                  />
+                    {hasMoreRepos && (
+                      <div className="text-center pt-2">
+                        <button
+                          onClick={() => loadRepos(repoSearchQuery, repoPage + 1)}
+                          disabled={isLoadingMore}
+                          className="text-xs text-primary hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          {isLoadingMore ? (
+                            <span className="flex items-center gap-1.5 justify-center">
+                              <Loader2 size={12} className="animate-spin" /> Loading more...
+                            </span>
+                          ) : (
+                            "Load more repositories"
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div className="flex justify-end pt-6 border-t border-border/40">
+                  <button
+                    disabled={!selectedRepo}
+                    onClick={() => setOnboardStep(2)}
+                    className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
+                  >
+                    Next <ArrowRight size={14} />
+                  </button>
                 </div>
               </div>
+            )}
 
-              <div className="flex justify-between pt-6 border-t border-border/40">
-                <button
-                  onClick={() => setOnboardStep(1)}
-                  className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                >
-                  Back
-                </button>
-                <button
-                  disabled={!selectedRepo}
-                  onClick={() => {
-                    setOnboardStep(3);
-                    setIsAnalyzing(true);
-                    // Run real AI analysis if possible, else fallback
-                    const selectedRepoObj = gitRepos.find((r) => r.full_name === selectedRepo);
-                    api
-                      .analyzeRepo(selectedRepo, selectedBranch)
-                      .then((data: any) => {
-                        setIsAnalyzing(false);
-                        setAnalysisResult({
-                          framework: data.framework || detectedFramework,
-                          language: data.language || selectedRepoObj?.language || "TypeScript",
-                          riskScore: data.risk_score ?? 18,
-                          cpu: data.resources?.cpu || "200m",
-                          memory: data.resources?.memory || "256Mi",
-                          ports: data.port || (detectedFramework === "FastAPI" ? "8000" : "3000"),
-                          vulnerabilities: data.vulnerabilities?.length || 0,
-                        });
-                        addToast("AI Analysis complete!", "success");
-                      })
-                      .catch(() => {
-                        setIsAnalyzing(false);
-                        setAnalysisResult({
-                          framework: detectedFramework,
-                          language: selectedRepoObj?.language || "TypeScript",
-                          riskScore: 18,
-                          cpu: "200m",
-                          memory: "256Mi",
-                          ports: detectedFramework === "FastAPI" ? "8000" : "3000",
-                          vulnerabilities: 0,
-                        });
-                        addToast("AI Analysis complete!", "success");
-                      });
-                  }}
-                  className="px-5 py-2.5 bg-primary disabled:opacity-50 text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer"
-                >
-                  Analyze Codebase
-                </button>
-              </div>
-            </div>
-          )}
+            {/* STEP 2: SELECT BRANCH */}
+            {onboardStep === 2 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Select Branch</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Select which branch we should track and deploy to production.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
+                    {selectedRepo}
+                  </span>
+                </div>
 
-          {/* STEP 3: AI CODE ANALYSIS */}
-          {onboardStep === 3 && (
-            <div className="space-y-6">
-              <h3 className="text-lg font-bold text-foreground">AI Cognitive Analysis</h3>
-              <p className="text-xs text-foreground-muted -mt-4">
-                Our scanner verifies Docker container targets, audits libraries, and generates optimal cluster settings.
-              </p>
+                <div className="max-w-md mx-auto space-y-4 py-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground-muted mb-1.5">
+                      Target Branch
+                    </label>
+                    {isLoadingBranches ? (
+                      <div className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground-muted flex items-center gap-2">
+                        <Loader2 size={14} className="animate-spin text-primary" /> Loading branches...
+                      </div>
+                    ) : (
+                      <select
+                        value={selectedBranch}
+                        onChange={(e) => setSelectedBranch(e.target.value)}
+                        className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                      >
+                        {availableBranches.map((b) => (
+                          <option key={b} value={b}>
+                            {b}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
 
-              {isAnalyzing ? (
-                <div className="space-y-4 p-8 text-center bg-card border border-border rounded-2xl">
-                  <Loader2 size={32} className="animate-spin text-primary mx-auto" />
-                  <div className="space-y-1.5">
-                    <p className="text-sm font-semibold text-foreground">Analyzing repository files...</p>
-                    <p className="text-xs text-foreground-muted font-mono max-w-sm mx-auto">
-                      Running package vulnerability check • Isolating framework dependencies • Mapping ports
+                  <div className="rounded-xl border border-border/40 bg-card/40 p-4 space-y-2 text-xs">
+                    <p className="font-semibold text-foreground">Track Branch Deployments</p>
+                    <p className="text-foreground-muted leading-relaxed">
+                      ZeroOps monitors this branch. Pushing new commits will trigger automated testing, container builds, and canary updates.
                     </p>
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-6">
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="glass rounded-xl p-5 border border-border/60 space-y-3">
-                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                        Framework & Runtime
-                      </h4>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Detected Framework</span>
+
+                <div className="flex justify-between pt-6 border-t border-border/40">
+                  <button
+                    onClick={() => setOnboardStep(1)}
+                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => setOnboardStep(3)}
+                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
+                  >
+                    Next <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: AI CODE ANALYSIS */}
+            {onboardStep === 3 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">AI Codebase Analysis</h3>
+                    <p className="text-xs text-foreground-muted">
+                      ZeroOps scans your repository to detect dependencies, frameworks, runtimes, and ports.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
+                    {selectedRepo} @ {selectedBranch}
+                  </span>
+                </div>
+
+                {isAnalyzing ? (
+                  <div className="space-y-5 p-8 text-center bg-card border border-border rounded-2xl animate-pulse">
+                    <Loader2 size={36} className="animate-spin text-primary mx-auto" />
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold text-foreground">Scanning repository contents...</p>
+                      <div className="text-xs text-foreground-muted font-mono max-w-md mx-auto space-y-1 bg-background-secondary p-3 rounded-lg border border-border/40">
+                        <div className="flex justify-between"><span>Cloning codebase...</span><span className="text-success">Done</span></div>
+                        <div className="flex justify-between"><span>Detecting runtime and framework...</span><span className="text-primary animate-pulse font-semibold">Running</span></div>
+                        <div className="flex justify-between"><span>Mapping config & database dependencies...</span><span className="text-foreground-muted font-light">Pending</span></div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {/* Left Card: Framework & Runtime */}
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/60">
+                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1.5">
+                          <Brain size={14} className="text-primary" /> Framework & Runtime
+                        </h4>
+                        <div className="space-y-2.5 pt-1.5">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Detected Framework</span>
+                            <span className="font-semibold text-foreground">{analysisResult?.framework}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Language</span>
+                            <span className="font-semibold text-foreground">{analysisResult?.language}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Runtime Environment</span>
+                            <span className="font-semibold text-foreground font-mono bg-background-secondary px-2 py-0.5 rounded border border-border/60">
+                              {analysisResult?.runtime}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Package Manager</span>
+                            <span className="font-semibold text-foreground">{analysisResult?.packageManager}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Card: Build & Strategy */}
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/60">
+                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1.5">
+                          <Terminal size={14} className="text-primary" /> Build & Execution Settings
+                        </h4>
+                        <div className="space-y-2.5 pt-1.5">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Docker Support</span>
+                            <span className={`font-semibold ${analysisResult?.dockerSupport ? "text-success" : "text-foreground-muted"}`}>
+                              {analysisResult?.dockerSupport ? "Yes (Dockerfile)" : "No (Auto-built)"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Deployment Target</span>
+                            <span className="font-semibold text-foreground">{analysisResult?.deploymentStrategy}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Build Command</span>
+                            <span className="font-mono text-[10px] text-foreground bg-background-secondary px-1.5 py-0.5 rounded border border-border/40 truncate max-w-[150px]">
+                              {analysisResult?.buildCommands}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-foreground-muted">Start Command</span>
+                            <span className="font-mono text-[10px] text-foreground bg-background-secondary px-1.5 py-0.5 rounded border border-border/40 truncate max-w-[150px]">
+                              {analysisResult?.startCommands}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {/* Left: Databases */}
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2">
+                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                          Databases & Integrations
+                        </h4>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {analysisResult?.databaseDependencies?.length > 0 && analysisResult.databaseDependencies[0] !== "None" ? (
+                            analysisResult.databaseDependencies.map((db: string) => (
+                              <span key={db} className="text-[10px] font-mono px-2 py-1 rounded bg-accent/10 border border-accent/20 text-accent font-semibold">
+                                {db}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-foreground-muted">No database dependencies detected.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Cognitive Limits Recommendation */}
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2">
+                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                          Resource Recommendations
+                        </h4>
+                        <div className="grid grid-cols-2 gap-3 pt-1">
+                          <div className="bg-background-secondary/50 p-2 rounded border border-border/40 text-center">
+                            <p className="text-[9px] uppercase tracking-wide text-foreground-muted font-semibold">CPU Limit</p>
+                            <p className="text-sm font-bold text-foreground mt-0.5">{analysisResult?.cpu}</p>
+                          </div>
+                          <div className="bg-background-secondary/50 p-2 rounded border border-border/40 text-center">
+                            <p className="text-[9px] uppercase tracking-wide text-foreground-muted font-semibold">Memory Limit</p>
+                            <p className="text-sm font-bold text-foreground mt-0.5">{analysisResult?.memory}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Vulnerabilities warnings */}
+                    {analysisResult?.vulnerabilities?.length > 0 && (
+                      <div className="p-4 rounded-xl border border-warning/20 bg-warning/5 space-y-2 animate-fade-in">
+                        <p className="text-xs font-semibold text-warning flex items-center gap-1.5">
+                          <AlertTriangle size={14} /> Security Audit Recommendations
+                        </p>
+                        <ul className="list-disc pl-4 space-y-1 text-[11px] text-foreground-muted">
+                          {analysisResult.vulnerabilities.map((v: string, idx: number) => (
+                            <li key={idx}>{v}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex justify-between pt-6 border-t border-border/40">
+                  <button
+                    onClick={() => setOnboardStep(2)}
+                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    disabled={isAnalyzing}
+                    onClick={() => setOnboardStep(4)}
+                    className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
+                  >
+                    Next <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 4: ENVIRONMENT VARIABLES */}
+            {onboardStep === 4 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Environment Variables</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Add key-value variables to be securely injected into your app runtime at deployment.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
+                    {selectedRepo}
+                  </span>
+                </div>
+
+                {/* Env Var Add Form */}
+                <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
+                  <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                    Add Environment Variable
+                  </h4>
+                  <div className="grid md:grid-cols-3 gap-3 items-end">
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-semibold text-foreground-muted">Key</label>
+                      <input
+                        type="text"
+                        value={newEnvKey}
+                        onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                        placeholder="e.g. PORT or DATABASE_URL"
+                        className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-semibold text-foreground-muted">Value</label>
+                      <input
+                        type="text"
+                        value={newEnvVal}
+                        onChange={(e) => setNewEnvVal(e.target.value)}
+                        placeholder="e.g. 8080 or connection_string"
+                        className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer select-none pb-2">
+                        <input
+                          type="checkbox"
+                          checked={newEnvIsSecret}
+                          onChange={(e) => setNewEnvIsSecret(e.target.checked)}
+                          className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 bg-card"
+                        />
+                        Secret / Masked
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newEnvKey.trim()) {
+                            addToast("Variable Key cannot be empty.", "warning");
+                            return;
+                          }
+                          if (wizardEnvVars.some((v) => v.key === newEnvKey.trim())) {
+                            addToast(`Variable '${newEnvKey}' already added.`, "warning");
+                            return;
+                          }
+                          setWizardEnvVars((prev) => [
+                            ...prev,
+                            { key: newEnvKey.trim(), value: newEnvVal, is_secret: newEnvIsSecret },
+                          ]);
+                          setNewEnvKey("");
+                          setNewEnvVal("");
+                          setNewEnvIsSecret(false);
+                          addToast("Environment variable added.", "success");
+                        }}
+                        className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm h-[34px] mb-[1px]"
+                      >
+                        <Plus size={14} /> Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Env Var List */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                    Configured Variables ({wizardEnvVars.length})
+                  </h4>
+                  {wizardEnvVars.length === 0 ? (
+                    <div className="p-6 text-center border border-dashed border-border rounded-xl text-xs text-foreground-muted">
+                      No variables added yet. ZeroOps will fallback to default configurations.
+                    </div>
+                  ) : (
+                    <div className="border border-border/60 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-background-secondary border-b border-border/60 text-foreground-muted font-semibold">
+                            <th className="p-3">Key</th>
+                            <th className="p-3">Value</th>
+                            <th className="p-3 text-center">Type</th>
+                            <th className="p-3 text-center w-12">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/40 bg-card/20">
+                          {wizardEnvVars.map((v, idx) => (
+                            <tr key={idx} className="hover:bg-card-hover/20">
+                              <td className="p-3 font-mono font-semibold text-foreground truncate max-w-[150px]">{v.key}</td>
+                              <td className="p-3 font-mono text-foreground-muted truncate max-w-[200px]">
+                                {v.is_secret ? "••••••••" : v.value || "—"}
+                              </td>
+                              <td className="p-3 text-center">
+                                <span className={`px-2 py-0.5 rounded text-[9px] font-semibold border ${
+                                  v.is_secret
+                                    ? "bg-warning/10 border-warning/20 text-warning"
+                                    : "bg-success/10 border-success/20 text-success"
+                                }`}>
+                                  {v.is_secret ? "Secret" : "Plaintext"}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setWizardEnvVars((prev) => prev.filter((_, i) => i !== idx));
+                                    addToast(`Removed ${v.key}`, "info");
+                                  }}
+                                  className="text-foreground-muted hover:text-danger transition-colors cursor-pointer"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-between pt-6 border-t border-border/40">
+                  <button
+                    onClick={() => setOnboardStep(3)}
+                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => setOnboardStep(5)}
+                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
+                  >
+                    Next <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 5: TARGET CONFIGURATION */}
+            {onboardStep === 5 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Deployment Target Configuration</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Select target cloud region, scaling triggers, and infrastructure strategies.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
+                    {selectedRepo}
+                  </span>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
+                    <select
+                      value={region}
+                      onChange={(e) => setRegion(e.target.value)}
+                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                    >
+                      <option value="eastus">East US (Virginia)</option>
+                      <option value="westus2">West US 2 (Washington)</option>
+                      <option value="westeurope">West Europe (Amsterdam)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
+                    <select
+                      value={deployMode}
+                      onChange={(e) => setDeployMode(e.target.value)}
+                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                    >
+                      <option value="standard">Rolling Update (Zero Downtime)</option>
+                      <option value="canary">Canary Release (10% Traffic split)</option>
+                      <option value="bluegreen">Blue/Green Deploy</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={minReplicas}
+                      onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
+                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={maxReplicas}
+                      onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
+                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 text-xs text-foreground-muted leading-relaxed">
+                  <p className="font-semibold text-foreground mb-1">Autonomic Kubernetes Scaling</p>
+                  ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% aggregate CPU utilization.
+                </div>
+
+                <div className="flex justify-between pt-6 border-t border-border/40">
+                  <button
+                    onClick={() => setOnboardStep(4)}
+                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => setOnboardStep(6)}
+                    className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
+                  >
+                    Next <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 6: REVIEW & DEPLOY */}
+            {onboardStep === 6 && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-border/40 pb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Review & Launch Deployment</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Verify settings before launching your autonomous container deployment.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-success border border-success/20 font-medium">
+                    Ready to Deploy
+                  </span>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {/* Left: Codebase Info */}
+                  <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/40">
+                    <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                      Source Code Details
+                    </h4>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Repository</span>
+                        <span className="font-semibold text-foreground truncate max-w-[180px]">{selectedRepo}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Branch</span>
+                        <span className="font-semibold text-foreground font-mono">{selectedBranch}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Framework</span>
                         <span className="font-semibold text-foreground">{analysisResult?.framework}</span>
                       </div>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Primary Language</span>
-                        <span className="font-semibold text-foreground">{analysisResult?.language}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Target Port</span>
-                        <span className="font-semibold text-foreground font-mono bg-card px-2 py-0.5 rounded border border-border/60">
-                          {analysisResult?.ports}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="glass rounded-xl p-5 border border-border/60 space-y-3">
-                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                        Cognitive Resource Limits
-                      </h4>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Recommended CPU</span>
-                        <span className="font-semibold text-foreground">{analysisResult?.cpu}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Recommended RAM</span>
-                        <span className="font-semibold text-foreground">{analysisResult?.memory}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-foreground-muted">Security Vulnerabilities</span>
-                        <span
-                          className={`font-semibold ${
-                            analysisResult?.vulnerabilities > 0 ? "text-danger" : "text-success"
-                          }`}
-                        >
-                          {analysisResult?.vulnerabilities > 0
-                            ? `${analysisResult.vulnerabilities} found`
-                            : "None detected"}
-                        </span>
+                      <div className="flex justify-between">
+                        <span className="text-foreground-muted">Runtime</span>
+                        <span className="font-semibold text-foreground font-mono">{analysisResult?.runtime}</span>
                       </div>
                     </div>
                   </div>
-                  <div className="flex justify-between pt-6 border-t border-border/40">
-                    <button
-                      onClick={() => setOnboardStep(2)}
-                      className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                    >
-                      Back
-                    </button>
-                    <button
-                      onClick={() => setOnboardStep(4)}
-                      className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer"
-                    >
-                      Configure Target
-                    </button>
+
+                  {/* Right: Cloud Config Info */}
+                  <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-gradient-to-b from-card to-card/40">
+                    <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                      Infrastructure Target
+                    </h4>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Target region</span>
+                        <span className="font-semibold text-foreground">{region === "eastus" ? "East US" : region === "westus2" ? "West US 2" : "West Europe"}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Strategy</span>
+                        <span className="font-semibold text-foreground capitalize">{deployMode} Deploy</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/10 pb-1.5">
+                        <span className="text-foreground-muted">Scale Limits</span>
+                        <span className="font-semibold text-foreground">{minReplicas} to {maxReplicas} Replicas</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-foreground-muted">Environment variables</span>
+                        <span className="font-semibold text-foreground">{wizardEnvVars.length} variables</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
 
-          {/* STEP 4: CONFIGURE TARGET */}
-          {onboardStep === 4 && (
-            <div className="space-y-6">
-              <h3 className="text-lg font-bold text-foreground">Cluster Deployment Configuration</h3>
-              <p className="text-xs text-foreground-muted -mt-4">
-                Define resource scale ceilings, environment properties, and target region endpoints.
-              </p>
-
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
-                  <select
-                    value={region}
-                    onChange={(e) => setRegion(e.target.value)}
-                    className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                <div className="flex justify-between pt-6 border-t border-border/40">
+                  <button
+                    onClick={() => setOnboardStep(5)}
+                    className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
                   >
-                    <option value="eastus">East US (Virginia)</option>
-                    <option value="westus2">West US 2 (Washington)</option>
-                    <option value="westeurope">West Europe (Amsterdam)</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
-                  <select
-                    value={deployMode}
-                    onChange={(e) => setDeployMode(e.target.value)}
-                    className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                    Back
+                  </button>
+                  <button
+                    onClick={handleLaunchDeployment}
+                    className="px-6 py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold transition glow-blue flex items-center gap-2 cursor-pointer"
                   >
-                    <option value="standard">Rolling Update (Zero Downtime)</option>
-                    <option value="canary">Canary Release (10% Traffic split)</option>
-                    <option value="bluegreen">Blue/Green Deploy</option>
-                  </select>
+                    <Rocket size={16} />
+                    Launch Deployment
+                  </button>
                 </div>
               </div>
-
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={minReplicas}
-                    onChange={(e) => setMinReplicas(parseInt(e.target.value) || 2)}
-                    className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
-                  <input
-                    type="number"
-                    min="2"
-                    max="50"
-                    value={maxReplicas}
-                    onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
-                    className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-between pt-6 border-t border-border/40">
-                <button
-                  onClick={() => setOnboardStep(3)}
-                  className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={handleLaunchDeployment}
-                  className="px-6 py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold transition glow-blue flex items-center gap-2 cursor-pointer"
-                >
-                  <Rocket size={16} />
-                  Launch Deployment
-                </button>
-              </div>
-            </div>
-          )}
-        </motion.div>
+            )}
+          </motion.div>
+        )}
       </div>
     );
   }
@@ -1023,9 +1413,9 @@ export default function RepositoriesPage() {
 
 
 // GitHub Icon SVG component
-function GithubIcon({ size = 18 }: { size?: number }) {
+function GithubIcon({ size = 18, className }: { size?: number; className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" className={className}>
       <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
     </svg>
   );
