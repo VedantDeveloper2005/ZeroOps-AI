@@ -100,6 +100,7 @@ class User(Base):
     avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     plan = Column(Text, default="starter")
+    api_key = Column(Text, nullable=True, unique=True)
 
     # GitHub OAuth fields
     github_id = Column(Text, nullable=True, unique=True, index=True)

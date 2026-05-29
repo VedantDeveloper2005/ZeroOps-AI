@@ -10,7 +10,7 @@ export default function SettingsPage() {
   const { addToast, addNotification, resetOnboarding } = useNotifications();
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [apiKey, setApiKey] = useState("zo_live_84b72fd91c28c83e1a0b5a37f59b6c2d1e");
+  const [apiKey, setApiKey] = useState("");
   
   const [settings, setSettings] = useState({
     predictiveScaling: true,
@@ -92,23 +92,35 @@ export default function SettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const regenerateApiKey = () => {
-    const chars = "abcdef0123456789";
-    let tokenSuffix = "";
-    for (let i = 0; i < 32; i++) {
-      tokenSuffix += chars[Math.floor(Math.random() * chars.length)];
+  const regenerateApiKey = async () => {
+    try {
+      const data = await api.regenerateApiKey();
+      setApiKey(data.apiKey);
+      addToast("Regenerated CLI access token.", "success");
+      addNotification({
+        title: "Security Token Rotated",
+        message: "A new CLI access token has been generated. Old tokens are now revoked.",
+        type: "warning",
+        category: "security",
+        action_url: null
+      });
+} catch (err) {
+      addToast("Failed to regenerate access key", "error");
     }
-    const newToken = `zo_live_${tokenSuffix}`;
-    setApiKey(newToken);
-    addToast("Regenerated CLI access token.", "success");
-    addNotification({
-      title: "Security Token Rotated",
-      message: "A new CLI access token has been generated. Old tokens are now revoked.",
-      type: "warning",
-      category: "security",
-      action_url: null
-    });
   };
+
+  useEffect(() => {
+    async function loadApiKey() {
+      try {
+        const data = await api.getApiKey();
+        setApiKey(data.apiKey);
+      } catch (err) {
+        console.error("Failed to load API key", err);
+        setApiKey("");
+      }
+    }
+    loadApiKey();
+  }, []);
 
   return (
     <div className="space-y-6">

@@ -1473,12 +1473,12 @@ async def get_repo_metadata(
 # ──────────────────────────────────────────────
 
 @app.get("/api/monitoring/metrics")
-async def get_metrics(project_id: Optional[str] = None):
+async def get_metrics(project_id: Optional[str] = None, current_user: models.User = Depends(auth.get_current_user)):
     return k8s.get_cluster_resource_metrics(project_id)
 
 
 @app.post("/api/secrets")
-async def add_secret(req: schemas.SecretCreateRequest):
+async def add_secret(req: schemas.SecretCreateRequest, current_user: models.User = Depends(auth.get_current_user)):
     success = vault.set_project_secret(req.projectId, req.key, req.value)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save secret")
@@ -1486,13 +1486,23 @@ async def add_secret(req: schemas.SecretCreateRequest):
 
 
 @app.get("/api/secrets/{project_id}")
-async def list_secrets(project_id: str):
+async def list_secrets(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     secrets = vault.get_project_secrets(project_id)
     return [{"key": k, "value": "********"} for k in secrets.keys()]
 
 
 @app.delete("/api/secrets/{project_id}/{key}")
-async def delete_secret(project_id: str, key: str):
+async def delete_secret(project_id: str, key: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     success = vault.delete_project_secret(project_id, key)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete secret")
@@ -1500,7 +1510,12 @@ async def delete_secret(project_id: str, key: str):
 
 
 @app.post("/api/autoscaling/configure")
-async def configure_autoscaling(req: schemas.HPAConfigureRequest):
+async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == req.projectId, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     ns_name = f"zeroops-{req.projectId}"
     name = req.projectId
     hpa_manifest = f"""apiVersion: autoscaling/v2
@@ -1533,12 +1548,22 @@ spec:
 
 
 @app.get("/api/autoscaling/{project_id}")
-async def get_autoscaling_status(project_id: str):
+async def get_autoscaling_status(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     return k8s.get_hpa_status(project_id)
 
 
 @app.get("/api/security/status/{project_id}")
-async def get_security_status(project_id: str):
+async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
     secrets = vault.get_project_secrets(project_id)
     secrets_count = len(secrets)
     score = 96 if secrets_count > 0 else 92
@@ -1548,6 +1573,32 @@ async def get_security_status(project_id: str):
         "soc2Status": "Compliant", "threatLevel": "Low",
         "namespaceIsolated": True, "rbacEnabled": True
     }
+
+
+# ──────────────────────────────────────────────
+# API KEY MANAGEMENT (per-user)
+# ──────────────────────────────────────────────
+
+def _generate_api_key() -> str:
+    import secrets
+    return f"zo_{secrets.token_urlsafe(32)}"
+
+@app.get("/api/settings/api-key")
+async def get_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    if not current_user.api_key:
+        current_user.api_key = _generate_api_key()
+        db.add(current_user)
+        await db.commit()
+        await db.refresh(current_user)
+    return {"apiKey": current_user.api_key or ""}
+
+@app.post("/api/settings/api-key/regenerate")
+async def regenerate_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    current_user.api_key = _generate_api_key()
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+    return {"apiKey": current_user.api_key}
 
 
 # ──────────────────────────────────────────────

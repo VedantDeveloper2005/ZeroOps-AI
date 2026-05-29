@@ -206,6 +206,18 @@ export interface TelemetryMetric {
   request_count: number;
 }
 
+export interface SecurityStatus {
+  securityScore: number;
+  firewallStatus: string;
+  httpsStatus: string;
+  secretsManaged: number;
+  vulnerabilities: number;
+  soc2Status: string;
+  threatLevel: string;
+  namespaceIsolated: boolean;
+  rbacEnabled: boolean;
+}
+
 // ──────────────────────────────────────────────
 // API CLIENT
 // ──────────────────────────────────────────────
@@ -356,7 +368,7 @@ export const api = {
 
   // ── Security ──
   getSecurityStatus: (projectId: string) =>
-    request<Record<string, unknown>>(`/api/security/status/${projectId}`),
+    request<SecurityStatus>(`/api/security/status/${projectId}`),
 
   // ── Autoscaling ──
   getAutoscalingStatus: (projectId: string) =>
@@ -371,6 +383,13 @@ export const api = {
     request<void>("/api/autoscaling/configure", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  // ── API Key ──
+  getApiKey: () => request<{ apiKey: string }>("/api/settings/api-key"),
+  regenerateApiKey: () =>
+    request<{ apiKey: string }>("/api/settings/api-key/regenerate", {
+      method: "POST",
     }),
 
   // ── Project Metrics & Env Vars ──
