@@ -90,6 +90,21 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials or token expired.",
         )
+
+    # Check if token is blacklisted (logged out)
+    try:
+        from backend import models
+    except ImportError:
+        import models
+        
+    revoked_result = await db.execute(
+        select(models.RevokedToken).filter(models.RevokedToken.token == token)
+    )
+    if revoked_result.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has expired or was logged out.",
+        )
         
     # Query database for user
     try:

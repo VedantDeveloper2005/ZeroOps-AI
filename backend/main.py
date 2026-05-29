@@ -39,6 +39,39 @@ app.add_middleware(
 )
 
 
+import time
+from collections import defaultdict
+from fastapi.responses import JSONResponse
+
+# Lightweight in-memory rate limiter for production security
+RATE_LIMIT_WINDOW = 60  # 1 minute window
+RATE_LIMIT_MAX_REQUESTS = 100  # Max 100 requests per minute per IP
+
+request_counts = defaultdict(list)
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Exclude health checks, schema/docs and static assets
+    if request.url.path in ["/api/health", "/health", "/docs", "/openapi.json", "/favicon.ico"]:
+        return await call_next(request)
+        
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    
+    # Filter request timestamps inside the active window
+    timestamps = [t for t in request_counts[client_ip] if now - t < RATE_LIMIT_WINDOW]
+    request_counts[client_ip] = timestamps
+    
+    if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Maximum 100 requests per minute allowed."}
+        )
+        
+    request_counts[client_ip].append(now)
+    return await call_next(request)
+
+
 # ──────────────────────────────────────────────
 # STARTUP
 # ──────────────────────────────────────────────
@@ -176,7 +209,35 @@ async def get_me(current_user: models.User = Depends(auth.get_current_user)):
 
 
 @app.post("/api/auth/logout")
-async def logout(response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db)
+):
+    token = request.cookies.get("session_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ")[1]
+
+    if token:
+        try:
+            from datetime import timedelta
+            from jose import jwt
+            payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+            exp_timestamp = payload.get("exp")
+            if exp_timestamp:
+                expires_at = datetime.utcfromtimestamp(exp_timestamp)
+            else:
+                expires_at = datetime.utcnow() + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
+                
+            revoked_token = models.RevokedToken(token=token, expires_at=expires_at)
+            db.add(revoked_token)
+            await db.commit()
+            logger.info(f"Token blacklisted successfully on logout.")
+        except Exception as e:
+            logger.warning(f"Failed to blacklist token on logout (it may already be expired or invalid): {e}")
+
     is_prod = config.APP_ENV == "production"
     response.delete_cookie(key="session_token", samesite="lax", secure=is_prod, httponly=True)
     return {"status": "success", "message": "Logged out successfully."}
