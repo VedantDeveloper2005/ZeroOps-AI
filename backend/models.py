@@ -118,6 +118,8 @@ class User(Base):
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     repositories = relationship("Repository", back_populates="user", cascade="all, delete-orphan")
     activity_events = relationship("ActivityEvent", back_populates="user", cascade="all, delete-orphan")
+    deployment_recommendations = relationship("DeploymentRecommendation", back_populates="user", cascade="all, delete-orphan")
+    failure_analyses = relationship("FailureAnalysis", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -163,6 +165,8 @@ class Project(Base):
     ai_actions = relationship("AIAction", back_populates="project", cascade="all, delete-orphan")
     environments = relationship("Environment", back_populates="project", cascade="all, delete-orphan")
     activity_events = relationship("ActivityEvent", back_populates="project", cascade="all, delete-orphan")
+    deployment_recommendations = relationship("DeploymentRecommendation", back_populates="project", cascade="all, delete-orphan")
+    failure_analyses = relationship("FailureAnalysis", back_populates="project", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_projects_user_id", "user_id"),
@@ -198,6 +202,7 @@ class Deployment(Base):
     project = relationship("Project", back_populates="deployments")
     logs = relationship("DeploymentLog", back_populates="deployment", cascade="all, delete-orphan", order_by="DeploymentLog.line_number")
     metrics = relationship("DeploymentMetric", back_populates="deployment", cascade="all, delete-orphan")
+    failure_analysis = relationship("FailureAnalysis", back_populates="deployment", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_deployments_user_id", "user_id"),
@@ -289,7 +294,7 @@ class AIAnalysis(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     framework = Column(Text, nullable=True)
     framework_version = Column(Text, nullable=True)
     language = Column(Text, nullable=True)
@@ -477,3 +482,62 @@ class RevokedToken(Base):
     token = Column(Text, nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT RECOMMENDATIONS
+# ──────────────────────────────────────────────
+
+class DeploymentRecommendation(Base):
+    __tablename__ = "deployment_recommendations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    repository_full_name = Column(Text, nullable=False)
+    recommended_target = Column(Text, nullable=True)
+    azure_configuration = Column(JSON, default=dict)
+    environment_variables = Column(JSON, default=list)
+    scaling_recommendation = Column(JSON, default=dict)
+    database_recommendation = Column(JSON, default=dict)
+    estimated_deployment_time = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="deployment_recommendations")
+    project = relationship("Project", back_populates="deployment_recommendations")
+
+    __table_args__ = (
+        Index("ix_deployment_recommendations_user_id", "user_id"),
+        Index("ix_deployment_recommendations_project_id", "project_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT FAILURE ANALYSIS
+# ──────────────────────────────────────────────
+
+class FailureAnalysis(Base):
+    __tablename__ = "failure_analyses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False, unique=True)
+    failure_summary = Column(Text, nullable=False)
+    root_cause = Column(Text, nullable=False)
+    severity = Column(Text, nullable=False)
+    recommended_fix = Column(Text, nullable=False)
+    step_by_step_resolution = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="failure_analyses")
+    project = relationship("Project", back_populates="failure_analyses")
+    deployment = relationship("Deployment", back_populates="failure_analysis")
+
+    __table_args__ = (
+        Index("ix_failure_analyses_user_id", "user_id"),
+        Index("ix_failure_analyses_project_id", "project_id"),
+        Index("ix_failure_analyses_deployment_id", "deployment_id"),
+    )

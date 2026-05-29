@@ -94,6 +94,7 @@ export default function RepositoriesPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [availableBranches, setAvailableBranches] = useState<string[]>(["main"]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
+  const [scanLogs, setScanLogs] = useState<string[]>([]);
 
   // Env variables wizard state
   const [wizardEnvVars, setWizardEnvVars] = useState<{ key: string; value: string; is_secret: boolean }[]>([]);
@@ -186,6 +187,35 @@ export default function RepositoriesPage() {
     }
   }, [isGitHubConnected, hasDeployed, loadRepos]);
 
+  // Repository scanning progressive logs
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setScanLogs([]);
+      return;
+    }
+    const logs = [
+      "📡 Establishing secure connection to GitHub API...",
+      "📂 Cloning repository tree structure...",
+      "🔍 Scanning package definitions (package.json, requirements.txt, pyproject.toml)...",
+      "🤖 Constructing codebase metadata payload...",
+      "🚀 Querying GitHub Models (GPT-4.1) inference endpoint...",
+      "✅ Mapping detected dependencies and database targets...",
+      "📄 Generating optimized Dockerfile and Kubernetes manifests...",
+      "🔒 Running repository risk and vulnerability checks..."
+    ];
+    let idx = 0;
+    setScanLogs([logs[0]]);
+    const timer = setInterval(() => {
+      idx++;
+      if (idx < logs.length) {
+        setScanLogs((prev) => [...prev, logs[idx]]);
+      } else {
+        clearInterval(timer);
+      }
+    }, 1200);
+    return () => clearInterval(timer);
+  }, [isAnalyzing]);
+
   // Automatically trigger AI analysis when step 3 is reached
   useEffect(() => {
     if (onboardStep === 3 && selectedRepo) {
@@ -211,6 +241,7 @@ export default function RepositoriesPage() {
             memory: data.resources?.memory || "256Mi",
             ports: data.port || "3000",
             vulnerabilities: data.vulnerabilities || [],
+            deploymentRecommendation: data.deployment_recommendation || null,
           });
           
           if (data.environment_variables && data.environment_variables.length > 0) {
@@ -735,14 +766,35 @@ export default function RepositoriesPage() {
                 </div>
 
                 {isAnalyzing ? (
-                  <div className="space-y-5 p-8 text-center bg-card border border-border rounded-2xl animate-pulse">
-                    <Loader2 size={36} className="animate-spin text-primary mx-auto" />
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold text-foreground">Scanning repository contents...</p>
-                      <div className="text-xs text-foreground-muted font-mono max-w-md mx-auto space-y-1 bg-background-secondary p-3 rounded-lg border border-border/40">
-                        <div className="flex justify-between"><span>Cloning codebase...</span><span className="text-success">Done</span></div>
-                        <div className="flex justify-between"><span>Detecting runtime and framework...</span><span className="text-primary animate-pulse font-semibold">Running</span></div>
-                        <div className="flex justify-between"><span>Mapping config & database dependencies...</span><span className="text-foreground-muted font-light">Pending</span></div>
+                  <div className="relative overflow-hidden bg-card border border-border rounded-2xl p-8 text-center space-y-6 shadow-xl">
+                    {/* Rotating gradient background glow */}
+                    <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse" />
+                    
+                    {/* Spin and brain glow */}
+                    <div className="relative mx-auto w-16 h-16 flex items-center justify-center bg-primary/10 border border-primary/20 rounded-full animate-bounce">
+                      <Brain size={28} className="text-primary animate-pulse" />
+                      <Loader2 size={64} className="absolute animate-spin text-primary/40" />
+                    </div>
+
+                    <div className="space-y-4 relative">
+                      <div>
+                        <h4 className="text-sm font-bold text-foreground">Analyzing Repository via GPT-4.1</h4>
+                        <p className="text-xs text-foreground-muted">
+                          GitHub Models is scanning files and structure for deployment architecture.
+                        </p>
+                      </div>
+                      
+                      {/* Terminal scanning log */}
+                      <div className="text-[11px] text-foreground-muted font-mono max-w-lg mx-auto bg-zinc-950 p-4 rounded-xl border border-border/60 text-left space-y-2 max-h-[160px] overflow-y-auto no-scrollbar shadow-inner">
+                        {scanLogs.map((log, index) => (
+                          <div key={index} className="flex items-center gap-2 animate-fade-in">
+                            <span className="text-primary select-none font-bold">›</span>
+                            <span>{log}</span>
+                            {index === scanLogs.length - 1 && (
+                              <span className="w-1.5 h-3 bg-primary animate-ping" />
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -1046,61 +1098,111 @@ export default function RepositoriesPage() {
                   </span>
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
-                    <select
-                      value={region}
-                      onChange={(e) => setRegion(e.target.value)}
-                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                    >
-                      <option value="eastus">East US (Virginia)</option>
-                      <option value="westus2">West US 2 (Washington)</option>
-                      <option value="westeurope">West Europe (Amsterdam)</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
-                    <select
-                      value={deployMode}
-                      onChange={(e) => setDeployMode(e.target.value)}
-                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                    >
-                      <option value="standard">Rolling Update (Zero Downtime)</option>
-                      <option value="canary">Canary Release (10% Traffic split)</option>
-                      <option value="bluegreen">Blue/Green Deploy</option>
-                    </select>
-                  </div>
-                </div>
+                <div className="grid md:grid-cols-3 gap-6">
+                  {/* Left Column: Form Controls */}
+                  <div className="md:col-span-2 space-y-6">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
+                        <select
+                          value={region}
+                          onChange={(e) => setRegion(e.target.value)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                        >
+                          <option value="eastus">East US (Virginia)</option>
+                          <option value="westus2">West US 2 (Washington)</option>
+                          <option value="westeurope">West Europe (Amsterdam)</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
+                        <select
+                          value={deployMode}
+                          onChange={(e) => setDeployMode(e.target.value)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                        >
+                          <option value="standard">Rolling Update (Zero Downtime)</option>
+                          <option value="canary">Canary Release (10% Traffic split)</option>
+                          <option value="bluegreen">Blue/Green Deploy</option>
+                        </select>
+                      </div>
+                    </div>
 
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={minReplicas}
-                      onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
-                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="50"
-                      value={maxReplicas}
-                      onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
-                      className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                    />
-                  </div>
-                </div>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={minReplicas}
+                          onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={maxReplicas}
+                          onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
 
-                <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 text-xs text-foreground-muted leading-relaxed">
-                  <p className="font-semibold text-foreground mb-1">Autonomic Kubernetes Scaling</p>
-                  ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% aggregate CPU utilization.
+                    <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 text-xs text-foreground-muted leading-relaxed">
+                      <p className="font-semibold text-foreground mb-1">Autonomic Kubernetes Scaling</p>
+                      ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% aggregate CPU utilization.
+                    </div>
+                  </div>
+
+                  {/* Right Column: AI Recommendations Display */}
+                  <div className="glass rounded-xl p-5 border border-border bg-gradient-to-b from-primary/5 to-accent/5 space-y-4 flex flex-col justify-between shadow-md">
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
+                        <Brain size={14} /> AI Recommendations
+                      </h4>
+                      <p className="text-[11px] text-foreground-muted leading-relaxed">
+                        Recommended deployment configuration generated by GitHub Models (GPT-4.1).
+                      </p>
+
+                      <div className="space-y-2.5 pt-2 text-xs">
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Recommended Target</p>
+                          <p className="mt-0.5 font-semibold text-foreground">
+                            {analysisResult?.deploymentRecommendation?.recommended_target || analysisResult?.deploymentStrategy || "Azure App Service"}
+                          </p>
+                        </div>
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Database Provisioning</p>
+                          <p className="mt-0.5 font-semibold text-foreground">
+                            {analysisResult?.deploymentRecommendation?.database_recommendation?.primary !== "None" 
+                              ? "Azure Database for PostgreSQL" 
+                              : "No Database Required"}
+                          </p>
+                        </div>
+                        <div className="border-b border-border/40 pb-2">
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Auto-Scaling Limits</p>
+                          <p className="mt-0.5 font-semibold text-foreground">
+                            {analysisResult?.deploymentRecommendation?.scaling_recommendation?.min_replicas || 2} to {analysisResult?.deploymentRecommendation?.scaling_recommendation?.max_replicas || 10} replicas
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Est. Deployment Time</p>
+                          <p className="mt-0.5 font-semibold text-success font-mono">
+                            {analysisResult?.deploymentRecommendation?.estimated_deployment_time || "~2 minutes"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-[9px] text-foreground-muted/60 text-center border-t border-border/40 pt-3 font-medium">
+                      Generated by ZeroOps AI Analysis
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex justify-between pt-6 border-t border-border/40">

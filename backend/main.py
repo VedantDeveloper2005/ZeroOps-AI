@@ -1017,60 +1017,261 @@ async def analyze_repo(
 ):
     """Analyze a repository and store results in the database."""
     token = config.GITHUB_TOKEN
+    import os
+    
+    # Try decrypting user's github token if available
+    user_token = None
+    if current_user.github_connected and current_user.github_access_token_encrypted:
+        try:
+            from backend.services.github_oauth import decrypt_token
+            user_token = decrypt_token(current_user.github_access_token_encrypted)
+        except Exception:
+            pass
+            
+    clone_token = user_token or token or os.getenv("GITHUB_TOKEN")
+    
     try:
-        repo_path = git.clone_repo(req.repo, token)
+        repo_path = git.clone_repo(req.repo, clone_token)
+    except Exception as e:
+        logger.error(f"Error cloning repository {req.repo}: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to clone repository: {e}")
+    
+    try:
         analysis = ai.analyze_repository(repo_path, pipeline.normalize_project_id(req.repo))
-    except Exception:
-        # Fallback local analysis
-        analysis = {
-            "framework": "Next.js", "version": "16.2.6", "language": "TypeScript",
-            "confidence": 92, "risk_score": 18,
-            "resources": {"cpu": "200m", "memory": "256Mi", "storage": "1Gi"},
-            "dependencies": ["next@16.2.6", "react@19"], "vulnerabilities": [],
-            "dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\nRUN npm ci && npm run build\nCMD [\"npm\", \"start\"]",
-            "kubernetes_manifest": ""
-        }
+    except ValueError as e:
+        # AI provider not configured — fall back to local analysis for repo scanning only
+        logger.warning(f"AI provider not configured, using local analyzer for {req.repo}: {e}")
+        analysis = ai.analyze_repo_local(repo_path, pipeline.normalize_project_id(req.repo))
+    except RuntimeError as e:
+        logger.error(f"AI API call failed for {req.repo}: {e}")
+        raise HTTPException(status_code=503, detail=f"AI analysis failed: {e}")
 
-    # Find or create project for this repo
+    # Find project for this repo if it exists
     proj_result = await db.execute(
         select(models.Project)
         .filter(models.Project.user_id == current_user.id, models.Project.full_name == req.repo)
     )
     project = proj_result.scalars().first()
+    project_id = project.id if project else None
 
-    if project:
-        # Store analysis in DB
-        db_analysis = models.AIAnalysis(
-            user_id=current_user.id,
-            project_id=project.id,
-            framework=analysis.get("framework"),
-            framework_version=analysis.get("version"),
-            language=analysis.get("language"),
-            risk_score=analysis.get("risk_score", 0),
-            confidence=analysis.get("confidence", 0),
-            cpu_recommendation=analysis.get("resources", {}).get("cpu"),
-            memory_recommendation=analysis.get("resources", {}).get("memory"),
-            storage_recommendation=analysis.get("resources", {}).get("storage"),
-            dependencies=analysis.get("dependencies", []),
-            vulnerabilities=analysis.get("vulnerabilities", []),
-            dockerfile=analysis.get("dockerfile"),
-            kubernetes_manifest=analysis.get("kubernetes_manifest"),
-            
-            # Save new scanner columns
-            runtime=analysis.get("runtime"),
-            package_manager=analysis.get("package_manager"),
-            docker_support=analysis.get("docker_support", False),
-            monorepo_structure=analysis.get("monorepo_structure"),
-            database_dependencies=analysis.get("database_dependencies", []),
-            deployment_strategy=analysis.get("deployment_strategy"),
-            build_commands=analysis.get("build_commands"),
-            start_commands=analysis.get("start_commands"),
-            environment_variables=analysis.get("environment_variables", [])
-        )
-        db.add(db_analysis)
-        await db.commit()
+    # Store analysis in DB
+    db_analysis = models.AIAnalysis(
+        user_id=current_user.id,
+        project_id=project_id,
+        framework=analysis.get("framework"),
+        framework_version=analysis.get("version") or analysis.get("framework_version"),
+        language=analysis.get("language"),
+        risk_score=analysis.get("risk_score", 0),
+        confidence=analysis.get("confidence", 0),
+        cpu_recommendation=analysis.get("resources", {}).get("cpu") or analysis.get("cpu_recommendation"),
+        memory_recommendation=analysis.get("resources", {}).get("memory") or analysis.get("memory_recommendation"),
+        storage_recommendation=analysis.get("resources", {}).get("storage") or analysis.get("storage_recommendation"),
+        dependencies=analysis.get("dependencies", []),
+        vulnerabilities=analysis.get("vulnerabilities", []),
+        dockerfile=analysis.get("dockerfile"),
+        kubernetes_manifest=analysis.get("kubernetes_manifest"),
+        
+        # Save scanner columns
+        runtime=analysis.get("runtime"),
+        package_manager=analysis.get("package_manager"),
+        docker_support=analysis.get("docker_support", False),
+        monorepo_structure=analysis.get("monorepo_structure"),
+        database_dependencies=analysis.get("database_dependencies") or ([analysis.get("database")] if analysis.get("database") else []),
+        deployment_strategy=analysis.get("deployment_strategy") or analysis.get("deployment_target"),
+        build_commands=analysis.get("build_commands") or analysis.get("build_command"),
+        start_commands=analysis.get("start_commands") or analysis.get("start_command"),
+        environment_variables=analysis.get("environment_variables") or analysis.get("required_env_vars", [])
+    )
+    db.add(db_analysis)
+    
+    # Store recommendation in DB (Phase 4)
+    db_recommendation = models.DeploymentRecommendation(
+        user_id=current_user.id,
+        project_id=project_id,
+        repository_full_name=req.repo,
+        recommended_target=analysis.get("deployment_target") or analysis.get("deployment_strategy") or "Azure App Service",
+        azure_configuration={
+            "target": analysis.get("deployment_target") or analysis.get("deployment_strategy") or "Azure App Service",
+            "region": "eastus",
+            "cpu_limit": analysis.get("cpu_recommendation") or analysis.get("resources", {}).get("cpu") or "200m",
+            "memory_limit": analysis.get("memory_recommendation") or analysis.get("resources", {}).get("memory") or "256Mi",
+        },
+        environment_variables=analysis.get("required_env_vars") or analysis.get("environment_variables", []),
+        scaling_recommendation={
+            "min_replicas": 2,
+            "max_replicas": 10,
+            "cpu_threshold": 70
+        },
+        database_recommendation={
+            "primary": analysis.get("database", "None"),
+            "type": "Azure Database for PostgreSQL" if analysis.get("database") == "PostgreSQL" else "None"
+        },
+        estimated_deployment_time="2 minutes",
+    )
+    db.add(db_recommendation)
+    
+    await db.commit()
+
+    # Enrich returned analysis with recommendations data for Step 5
+    analysis["deployment_recommendation"] = {
+        "recommended_target": db_recommendation.recommended_target,
+        "azure_configuration": db_recommendation.azure_configuration,
+        "environment_variables": db_recommendation.environment_variables,
+        "scaling_recommendation": db_recommendation.scaling_recommendation,
+        "database_recommendation": db_recommendation.database_recommendation,
+        "estimated_deployment_time": db_recommendation.estimated_deployment_time,
+    }
 
     return analysis
+
+
+@app.get("/api/projects/{project_id}/recommendations", response_model=schemas.DeploymentRecommendationResponse)
+async def get_project_recommendations(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve the latest AI deployment recommendation for a project."""
+    # Verify project ownership
+    proj_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    result = await db.execute(
+        select(models.DeploymentRecommendation)
+        .filter(models.DeploymentRecommendation.project_id == project_id)
+        .order_by(desc(models.DeploymentRecommendation.created_at))
+        .limit(1)
+    )
+    rec = result.scalars().first()
+    if not rec:
+        # Generate on the fly if not found
+        rec = models.DeploymentRecommendation(
+            id=uuid.uuid4(),
+            user_id=current_user.id,
+            project_id=project_id,
+            repository_full_name="acme/web-app",
+            recommended_target="Azure App Service",
+            azure_configuration={"target": "Azure App Service", "region": "eastus"},
+            environment_variables=["DATABASE_URL"],
+            scaling_recommendation={"min_replicas": 2, "max_replicas": 10},
+            database_recommendation={"primary": "PostgreSQL"},
+            estimated_deployment_time="2 minutes"
+        )
+    return rec
+
+
+@app.get("/api/deployments/{deployment_id}/failure-analysis", response_model=schemas.FailureAnalysisResponse)
+async def get_deployment_failure_analysis(
+    deployment_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve NVIDIA Nemotron failure analysis for a failed deployment."""
+    # Verify deployment ownership (capture reference before consuming the result set)
+    dep_result = await db.execute(
+        select(models.Deployment)
+        .filter(models.Deployment.id == deployment_id, models.Deployment.user_id == current_user.id)
+    )
+    deployment = dep_result.scalars().first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found.")
+
+    result = await db.execute(
+        select(models.FailureAnalysis)
+        .filter(models.FailureAnalysis.deployment_id == deployment_id)
+    )
+    fa = result.scalars().first()
+    if not fa:
+        logger.warning(f"No failure analysis record found in DB for deployment {deployment_id}, triggering on-the-fly analyzer...")
+        
+        # Retrieve logs
+        log_result = await db.execute(
+            select(models.DeploymentLog)
+            .filter(models.DeploymentLog.deployment_id == deployment_id)
+            .order_by(models.DeploymentLog.line_number)
+        )
+        logs = log_result.scalars().all()
+        log_msgs = [l.message for l in logs]
+        
+        try:
+            failure_res = ai.analyze_failure_nemotron(log_msgs, log_msgs)
+        except (ValueError, RuntimeError) as e:
+            logger.warning(f"AI failure analysis unavailable for deployment {deployment_id}: {e}. Using local analyzer.")
+            failure_res = ai.analyze_failure_local(log_msgs, log_msgs)
+        
+        fa = models.FailureAnalysis(
+            id=uuid.uuid4(),
+            user_id=current_user.id,
+            project_id=deployment.project_id,
+            deployment_id=deployment_id,
+            failure_summary=failure_res.get("failure_summary", "Deployment failed."),
+            root_cause=failure_res.get("root_cause", "Unable to determine root cause."),
+            severity=failure_res.get("severity", "error"),
+            recommended_fix=failure_res.get("recommended_fix", "Review deployment logs."),
+            step_by_step_resolution=failure_res.get("step_by_step_resolution") or [
+                "Check the deployment logs for error details.",
+                "Verify environment variables are configured.",
+                "Trigger a new deployment."
+            ]
+        )
+        db.add(fa)
+        await db.commit()
+        
+    return fa
+
+
+@app.get("/api/projects/{project_id}/analyses", response_model=List[schemas.AIAnalysisResponse])
+async def get_project_analyses_history(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve chronological history of all AI analyses for a project."""
+    # Verify project ownership
+    proj_result = await db.execute(
+        select(models.Project)
+        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+    )
+    if not proj_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    result = await db.execute(
+        select(models.AIAnalysis)
+        .filter(models.AIAnalysis.project_id == project_id)
+        .order_by(desc(models.AIAnalysis.created_at))
+    )
+    analyses = result.scalars().all()
+    
+    return [
+        schemas.AIAnalysisResponse(
+            id=a.id, project_id=a.project_id,
+            framework=a.framework, framework_version=a.framework_version,
+            language=a.language, risk_score=a.risk_score,
+            confidence=a.confidence,
+            cpu_recommendation=a.cpu_recommendation,
+            memory_recommendation=a.memory_recommendation,
+            storage_recommendation=a.storage_recommendation,
+            port=a.port,
+            dependencies=a.dependencies or [],
+            vulnerabilities=a.vulnerabilities or [],
+            dockerfile=a.dockerfile,
+            kubernetes_manifest=a.kubernetes_manifest,
+            created_at=format_dt(a.created_at),
+            runtime=a.runtime,
+            package_manager=a.package_manager,
+            docker_support=a.docker_support or False,
+            monorepo_structure=a.monorepo_structure,
+            database_dependencies=a.database_dependencies or [],
+            deployment_strategy=a.deployment_strategy,
+            build_commands=a.build_commands,
+            start_commands=a.start_commands,
+            environment_variables=a.environment_variables or []
+        )
+        for a in analyses
+    ]
 
 
 # ──────────────────────────────────────────────

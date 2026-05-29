@@ -170,6 +170,9 @@ async def run_migrations():
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS build_commands TEXT",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS start_commands TEXT",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS environment_variables JSON DEFAULT '[]'",
+        
+        # Make project_id in ai_analyses nullable
+        "ALTER TABLE ai_analyses ALTER COLUMN project_id DROP NOT NULL",
 
         # Indexes
         "CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)",
@@ -180,6 +183,13 @@ async def run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_environments_project_id ON environments(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_deployment_metrics_project_id ON deployment_metrics(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_ai_analyses_project_id ON ai_analyses(project_id)",
+        
+        # New tables' indexes
+        "CREATE INDEX IF NOT EXISTS ix_deployment_recommendations_user_id ON deployment_recommendations(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_recommendations_project_id ON deployment_recommendations(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_failure_analyses_user_id ON failure_analyses(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_failure_analyses_project_id ON failure_analyses(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_failure_analyses_deployment_id ON failure_analyses(deployment_id)",
 
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN

@@ -106,7 +106,7 @@ export interface AIAction {
 
 export interface AIAnalysis {
   id: string;
-  project_id: string;
+  project_id: string | null;
   framework: string | null;
   framework_version: string | null;
   language: string | null;
@@ -132,6 +132,31 @@ export interface AIAnalysis {
   build_commands: string | null;
   start_commands: string | null;
   environment_variables: string[];
+}
+
+export interface DeploymentRecommendation {
+  id: string;
+  project_id: string | null;
+  repository_full_name: string;
+  recommended_target: string | null;
+  azure_configuration: Record<string, any>;
+  environment_variables: string[];
+  scaling_recommendation: Record<string, any>;
+  database_recommendation: Record<string, any>;
+  estimated_deployment_time: string | null;
+  created_at: string | null;
+}
+
+export interface FailureAnalysis {
+  id: string;
+  project_id: string;
+  deployment_id: string;
+  failure_summary: string;
+  root_cause: string;
+  severity: string;
+  recommended_fix: string;
+  step_by_step_resolution: string[];
+  created_at: string | null;
 }
 
 export interface DashboardStats {
@@ -304,6 +329,9 @@ export const api = {
       body: JSON.stringify({ repo, branch }),
     }),
 
+  getAIAnalysisHistory: (projectId: string) =>
+    request<AIAnalysis[]>(`/api/projects/${projectId}/analyses`),
+
   // ── Dashboard ──
   getDashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),
 
@@ -436,4 +464,11 @@ export const api = {
     request<void>(`/api/projects/${projectId}/variables/${varId}`, {
       method: "DELETE",
     }),
+
+  // ── AI Recommendations & Failures ──
+  getProjectRecommendations: (projectId: string) =>
+    request<DeploymentRecommendation>(`/api/projects/${projectId}/recommendations`),
+
+  getDeploymentFailureAnalysis: (deploymentId: string) =>
+    request<FailureAnalysis>(`/api/deployments/${deploymentId}/failure-analysis`),
 };

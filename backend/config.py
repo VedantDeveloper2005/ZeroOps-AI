@@ -45,6 +45,16 @@ ALLOW_CREDENTIALS = True
 # OpenAI API config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
+# GitHub Models API config
+GITHUB_MODELS_API_KEY = os.getenv("GITHUB_MODELS_API_KEY", "")
+GITHUB_MODELS_ENDPOINT = os.getenv("GITHUB_MODELS_ENDPOINT", "https://models.inference.ai.azure.com")
+GITHUB_MODELS_MODEL = os.getenv("GITHUB_MODELS_MODEL", "gpt-4o")
+
+# NVIDIA API config
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+NVIDIA_ENDPOINT = os.getenv("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1")
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+
 # GitHub API config
 # Users can supply a fallback GitHub Personal Access Token (PAT) for listing real private/public repos
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")

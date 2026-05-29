@@ -169,7 +169,12 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             await p_logger.log("▸ AI analyzing repository structure...", "info")
             await asyncio.sleep(1.0)
             
-            metadata = ai.analyze_repository(repo_path, project_id)
+            try:
+                metadata = ai.analyze_repository(repo_path, project_id)
+                await p_logger.log("  ◆ AI-powered analysis complete", "success")
+            except (ValueError, RuntimeError) as ai_err:
+                await p_logger.log(f"  ⚠ AI provider unavailable: {ai_err}. Using local analyzer.", "warning")
+                metadata = ai.analyze_repo_local(repo_path, project_id)
             await p_logger.log(f"  ◆ Framework detected: {metadata.get('framework')} ({metadata.get('version')})", "info")
             await p_logger.log(f"  ◆ Core language: {metadata.get('language')}", "info")
             await p_logger.log(f"  ◆ Recommended limits: {metadata['resources']['cpu']} CPU, {metadata['resources']['memory']} RAM", "info")
@@ -394,6 +399,33 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
                     type="critical",
                     category="deployment"
                 ))
+                
+                # Trigger NVIDIA Nemotron failure analysis
+                try:
+                    log_messages = [log_data["message"] for log_data in p_logger.log_buffer]
+                    try:
+                        failure_analysis_res = ai.analyze_failure_nemotron(
+                            logs=log_messages,
+                            build_logs=log_messages,
+                            events=[f"Deployment {deploy_id} state transition to failed."]
+                        )
+                    except (ValueError, RuntimeError) as ai_err:
+                        print(f"AI failure analysis unavailable: {ai_err}. Using local analyzer.")
+                        failure_analysis_res = ai.analyze_failure_local(log_messages, log_messages)
+                    
+                    db_failure_analysis = models.FailureAnalysis(
+                        user_id=deployment.user_id,
+                        project_id=deployment.project_id,
+                        deployment_id=deployment.id,
+                        failure_summary=failure_analysis_res.get("failure_summary", "Unknown failure."),
+                        root_cause=failure_analysis_res.get("root_cause", "No root cause found."),
+                        severity=failure_analysis_res.get("severity", "error"),
+                        recommended_fix=failure_analysis_res.get("recommended_fix", "No fix recommended."),
+                        step_by_step_resolution=failure_analysis_res.get("step_by_step_resolution", [])
+                    )
+                    db.add(db_failure_analysis)
+                except Exception as analysis_err:
+                    print(f"Failed to generate failure analysis: {analysis_err}")
                 
                 await db.commit()
                 

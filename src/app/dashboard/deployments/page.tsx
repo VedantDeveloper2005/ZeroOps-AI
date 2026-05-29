@@ -51,6 +51,8 @@ function DeploymentsPageContent() {
   const [scaleCount, setScaleCount] = useState(4);
   const [isAnimating, setIsAnimating] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [failureAnalysis, setFailureAnalysis] = useState<any>(null);
+  const [isLoadingFailureAnalysis, setIsLoadingFailureAnalysis] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
 
   // Fetch deployment history from API
@@ -117,6 +119,30 @@ function DeploymentsPageContent() {
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
+
+  useEffect(() => {
+    if (!deployId) {
+      setFailureAnalysis(null);
+      return;
+    }
+    const currentDep = history.find((h) => h.id === deployId);
+    if (currentDep?.status === "failed") {
+      setIsLoadingFailureAnalysis(true);
+      api.getDeploymentFailureAnalysis(deployId)
+        .then((data) => {
+          setFailureAnalysis(data);
+        })
+        .catch((err) => {
+          console.error("Failed to load failure analysis:", err);
+          setFailureAnalysis(null);
+        })
+        .finally(() => {
+          setIsLoadingFailureAnalysis(false);
+        });
+    } else {
+      setFailureAnalysis(null);
+    }
+  }, [deployId, history]);
 
   // Handle live WebSocket deployment stream, simulation, or loading historical logs
   useEffect(() => {
@@ -476,6 +502,83 @@ function DeploymentsPageContent() {
               {visibleLines < activeLines.length && <span className="inline-block w-2 h-4 bg-primary animate-pulse" />}
             </div>
           </motion.div>
+
+          {/* NVIDIA Nemotron Failure Analysis Card */}
+          {isLoadingFailureAnalysis ? (
+            <div className="flex items-center justify-center p-8 bg-card border border-border rounded-xl shadow-sm">
+              <Loader2 className="animate-spin text-primary mr-2" size={16} />
+              <span className="text-xs text-foreground-muted">Querying NVIDIA Nemotron for failure root cause...</span>
+            </div>
+          ) : failureAnalysis ? (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass rounded-xl border border-rose-500/20 bg-gradient-to-b from-rose-500/5 to-transparent p-6 shadow-md space-y-4"
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center justify-between border-b border-border/40 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500">
+                    <Brain size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5">
+                      NVIDIA Nemotron failure analysis
+                    </h4>
+                    <p className="text-[10px] text-foreground-muted">Autonomous Root Cause Detection Engine</p>
+                  </div>
+                </div>
+                <span className={`self-start sm:self-auto text-[10px] font-mono uppercase tracking-wider font-bold px-2 py-0.5 rounded border ${
+                  failureAnalysis.severity === "critical" 
+                    ? "bg-red-500/15 border-red-500/30 text-red-400"
+                    : failureAnalysis.severity === "warning"
+                    ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
+                    : "bg-rose-500/15 border-rose-500/30 text-rose-400"
+                }`}>
+                  {failureAnalysis.severity || "error"}
+                </span>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <p className="font-bold text-foreground mb-1.5">Failure Summary</p>
+                  <p className="text-foreground-muted bg-background-secondary/40 border border-border/40 p-3 rounded-lg leading-relaxed">
+                    {failureAnalysis.failure_summary}
+                  </p>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <p className="font-bold text-foreground">Root Cause Analysis</p>
+                    <p className="text-foreground-muted leading-relaxed">
+                      {failureAnalysis.root_cause}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-bold text-foreground">Recommended Fix</p>
+                    <p className="text-foreground-muted leading-relaxed">
+                      {failureAnalysis.recommended_fix}
+                    </p>
+                  </div>
+                </div>
+
+                {failureAnalysis.step_by_step_resolution && failureAnalysis.step_by_step_resolution.length > 0 && (
+                  <div className="pt-2">
+                    <p className="font-bold text-foreground mb-2">Step-by-Step Resolution</p>
+                    <div className="space-y-2">
+                      {failureAnalysis.step_by_step_resolution.map((step: string, idx: number) => (
+                        <div key={idx} className="flex gap-3 items-start bg-background-secondary/20 border border-border/20 p-2.5 rounded-lg">
+                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-[10px] font-bold text-rose-400 border border-rose-500/20">
+                            {idx + 1}
+                          </span>
+                          <span className="text-foreground-muted leading-relaxed">{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          ) : null}
         </>
       )}
 

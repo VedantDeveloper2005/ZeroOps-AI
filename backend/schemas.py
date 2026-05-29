@@ -157,7 +157,7 @@ class AIActionResponse(BaseModel):
 
 class AIAnalysisResponse(BaseModel):
     id: uuid.UUID
-    project_id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
     framework: Optional[str] = None
     framework_version: Optional[str] = None
     language: Optional[str] = None
@@ -183,6 +183,45 @@ class AIAnalysisResponse(BaseModel):
     build_commands: Optional[str] = None
     start_commands: Optional[str] = None
     environment_variables: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT RECOMMENDATION SCHEMAS
+# ──────────────────────────────────────────────
+
+class DeploymentRecommendationResponse(BaseModel):
+    id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
+    repository_full_name: str
+    recommended_target: Optional[str] = None
+    azure_configuration: dict = {}
+    environment_variables: List[str] = []
+    scaling_recommendation: dict = {}
+    database_recommendation: dict = {}
+    estimated_deployment_time: Optional[str] = None
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT FAILURE ANALYSIS SCHEMAS
+# ──────────────────────────────────────────────
+
+class FailureAnalysisResponse(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    deployment_id: uuid.UUID
+    failure_summary: str
+    root_cause: str
+    severity: str
+    recommended_fix: str
+    step_by_step_resolution: List[str] = []
+    created_at: Optional[str] = None
 
     class Config:
         from_attributes = True
