@@ -108,7 +108,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   // ── Notification actions ──
-  const addNotification = (notif: Omit<Notification, "id" | "created_at" | "read">) => {
+  const addNotification = useCallback((notif: Omit<Notification, "id" | "created_at" | "read">) => {
     const newNotif: Notification = {
       ...notif,
       id: generateId("notif"),
@@ -116,37 +116,37 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       read: false,
     };
     setNotifications((prev) => [newNotif, ...prev]);
-  };
+  }, []);
 
-  const markAsRead = async (id: string) => {
+  const markAsRead = useCallback(async (id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n))
     );
     try { await api.markNotificationRead(id); } catch { /* best-effort */ }
-  };
+  }, []);
 
-  const markAllAsRead = async () => {
+  const markAllAsRead = useCallback(async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     try { await api.markAllNotificationsRead(); } catch { /* best-effort */ }
-  };
+  }, []);
 
-  const clearAll = () => {
+  const clearAll = useCallback(() => {
     setNotifications([]);
-  };
+  }, []);
 
   // ── Toast actions ──
-  const addToast = (message: string, type: Toast["type"] = "info") => {
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = generateId("toast");
     const newToast: Toast = { id, message, type };
     setToasts((prev) => [...prev, newToast]);
     setTimeout(() => {
       removeToast(id);
     }, 3500);
-  };
-
-  const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  }, [removeToast]);
 
   const resetOnboarding = async () => {
     await api.resetOnboarding();

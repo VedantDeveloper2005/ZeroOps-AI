@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink, Trash2, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 import { useRouter } from "next/navigation";
@@ -216,70 +216,86 @@ export default function RepositoriesPage() {
     return () => clearInterval(timer);
   }, [isAnalyzing]);
 
-  // Automatically trigger AI analysis when step 3 is reached
+  // Track whether analysis has already been triggered for the current step-3 visit
+  const hasTriggeredAnalysis = useRef(false);
+
+  // Reset the guard when leaving step 3
   useEffect(() => {
-    if (onboardStep === 3 && selectedRepo) {
-      setIsAnalyzing(true);
-      const selectedRepoObj = gitRepos.find((r) => r.full_name === selectedRepo);
-      api.analyzeRepo(selectedRepo, selectedBranch)
-        .then((data: any) => {
-          setIsAnalyzing(false);
-          setAnalysisResult({
-            framework: data.framework || detectedFramework,
-            language: data.language || selectedRepoObj?.language || "TypeScript",
-            runtime: data.runtime || "Node.js 20",
-            packageManager: data.package_manager || "npm",
-            dockerSupport: data.docker_support ?? false,
-            monorepoStructure: data.monorepo_structure || "None",
-            databaseDependencies: data.database_dependencies || [],
-            deploymentStrategy: data.deployment_strategy || "Azure App Service",
-            buildCommands: data.build_commands || "npm run build",
-            startCommands: data.start_commands || "npm start",
-            environmentVariables: data.environment_variables || [],
-            riskScore: data.risk_score ?? 18,
-            cpu: data.resources?.cpu || "200m",
-            memory: data.resources?.memory || "256Mi",
-            ports: data.port || "3000",
-            vulnerabilities: data.vulnerabilities || [],
-            deploymentRecommendation: data.deployment_recommendation || null,
-          });
-          
-          if (data.environment_variables && data.environment_variables.length > 0) {
-            setWizardEnvVars((prev) => {
-              if (prev.length > 0) return prev;
-              return data.environment_variables.map((v: string) => ({
-                key: v,
-                value: "",
-                is_secret: v.toLowerCase().includes("secret") || v.toLowerCase().includes("key") || v.toLowerCase().includes("password") || v.toLowerCase().includes("token"),
-              }));
-            });
-          }
-          addToast("AI Analysis complete!", "success");
-        })
-        .catch(() => {
-          setIsAnalyzing(false);
-          setAnalysisResult({
-            framework: detectedFramework,
-            language: selectedRepoObj?.language || "TypeScript",
-            runtime: "Node.js 20",
-            packageManager: "npm",
-            dockerSupport: false,
-            monorepoStructure: "None",
-            databaseDependencies: [],
-            deploymentStrategy: "Azure App Service",
-            buildCommands: "npm run build",
-            startCommands: "npm start",
-            environmentVariables: [],
-            riskScore: 18,
-            cpu: "200m",
-            memory: "256Mi",
-            ports: detectedFramework === "FastAPI" ? "8000" : "3000",
-            vulnerabilities: [],
-          });
-          addToast("AI Analysis completed with local metadata.", "success");
-        });
+    if (onboardStep !== 3) {
+      hasTriggeredAnalysis.current = false;
     }
-  }, [onboardStep, selectedRepo, selectedBranch, detectedFramework, gitRepos, addToast]);
+  }, [onboardStep]);
+
+  // Automatically trigger AI analysis when step 3 is reached (exactly once)
+  useEffect(() => {
+    if (onboardStep !== 3 || !selectedRepo || hasTriggeredAnalysis.current) return;
+    hasTriggeredAnalysis.current = true;
+
+    setIsAnalyzing(true);
+    const repoObj = gitRepos.find((r) => r.full_name === selectedRepo);
+    const fallbackFramework = detectedFramework;
+
+    api.analyzeRepo(selectedRepo, selectedBranch)
+      .then((data: any) => {
+        setIsAnalyzing(false);
+        setAnalysisResult({
+          framework: data.framework || fallbackFramework,
+          language: data.language || repoObj?.language || "TypeScript",
+          runtime: data.runtime || "Node.js 20",
+          packageManager: data.package_manager || "npm",
+          dockerSupport: data.docker_support ?? false,
+          monorepoStructure: data.monorepo_structure || "None",
+          databaseDependencies: data.database_dependencies || [],
+          deploymentStrategy: data.deployment_strategy || "Azure App Service",
+          buildCommands: data.build_commands || "npm run build",
+          startCommands: data.start_commands || "npm start",
+          environmentVariables: data.environment_variables || [],
+          riskScore: data.risk_score ?? 18,
+          cpu: data.resources?.cpu || "200m",
+          memory: data.resources?.memory || "256Mi",
+          ports: data.port || "3000",
+          vulnerabilities: data.vulnerabilities || [],
+          deploymentRecommendation: data.deployment_recommendation || null,
+        });
+        
+        if (data.environment_variables && data.environment_variables.length > 0) {
+          setWizardEnvVars((prev) => {
+            if (prev.length > 0) return prev;
+            return data.environment_variables.map((v: string) => ({
+              key: v,
+              value: "",
+              is_secret: v.toLowerCase().includes("secret") || v.toLowerCase().includes("key") || v.toLowerCase().includes("password") || v.toLowerCase().includes("token"),
+            }));
+          });
+        }
+        addToast("AI Analysis complete!", "success");
+      })
+      .catch(() => {
+        setIsAnalyzing(false);
+        setAnalysisResult({
+          framework: fallbackFramework,
+          language: repoObj?.language || "TypeScript",
+          runtime: "Node.js 20",
+          packageManager: "npm",
+          dockerSupport: false,
+          monorepoStructure: "None",
+          databaseDependencies: [],
+          deploymentStrategy: "Azure App Service",
+          buildCommands: "npm run build",
+          startCommands: "npm start",
+          environmentVariables: [],
+          riskScore: 18,
+          cpu: "200m",
+          memory: "256Mi",
+          ports: fallbackFramework === "FastAPI" ? "8000" : "3000",
+          vulnerabilities: [],
+        });
+        addToast("AI Analysis completed with local metadata.", "success");
+      });
+  // Only re-run when the step or selected repo/branch actually changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboardStep, selectedRepo, selectedBranch]);
+
 
   const handleLaunchDeployment = async () => {
     addToast(`Launching deployment for ${selectedRepo}...`, "info");
