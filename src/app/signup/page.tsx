@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function SignupPage() {
@@ -68,7 +67,7 @@ export default function SignupPage() {
   };
 
   return (
-    <main className="flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4">
+    <main className="dark flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4 text-foreground">
       {/* Left Column (Hero & Video Background) */}
       <div className="w-[52%] hidden lg:flex relative flex-col items-center justify-end pb-32 px-12 rounded-3xl overflow-hidden shadow-2xl h-full border border-border/10 dark">
         {/* Background Video */}
@@ -121,10 +120,6 @@ export default function SignupPage() {
 
       {/* Right Column (Sign Up Form) */}
       <div className="flex-1 flex flex-col items-center justify-center py-12 lg:py-6 px-4 sm:px-12 lg:px-16 xl:px-24 overflow-y-auto lg:overflow-hidden relative">
-        {/* Theme Toggle Button positioned in top right of form side */}
-        <div className="absolute top-6 right-6 z-20">
-          <ThemeToggle collapsed />
-        </div>
 
         {/* Sign Up Form Content */}
         <motion.div

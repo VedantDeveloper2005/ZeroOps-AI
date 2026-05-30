@@ -11,17 +11,19 @@ import { Footer } from "@/components/landing/Footer";
 
 export default function Home() {
   return (
-    <main className="overflow-x-hidden">
-      <Navbar />
-      <HeroSection />
-      <FeaturesSection />
-      <DeploymentFlowSection />
-      <SecuritySection />
-      <AIIntelligenceSection />
-      <AutonomousShowcaseSection />
-      <MetricsSection />
-      <PricingSection />
-      <Footer />
-    </main>
+    <div className="dark bg-background text-foreground min-h-screen">
+      <main className="overflow-x-hidden">
+        <Navbar />
+        <HeroSection />
+        <FeaturesSection />
+        <DeploymentFlowSection />
+        <SecuritySection />
+        <AIIntelligenceSection />
+        <AutonomousShowcaseSection />
+        <MetricsSection />
+        <PricingSection />
+        <Footer />
+      </main>
+    </div>
   );
 }
