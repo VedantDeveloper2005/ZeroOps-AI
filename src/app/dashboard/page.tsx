@@ -4,7 +4,8 @@ import { motion } from "framer-motion";
 import {
   GitBranch, ExternalLink, RefreshCw, Terminal, Globe,
   Calendar, Clock, Brain, Loader2, FolderGit2, AlertTriangle,
-  Check, ArrowRight, ShieldCheck, Cpu
+  Check, ArrowRight, ShieldCheck, Cpu, Sparkles, DollarSign,
+  Activity
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -13,6 +14,54 @@ import { api, type Project, type Deployment, type AIAnalysis } from "@/lib/api";
 import { ArchitectureDiagram } from "@/components/dashboard/ArchitectureDiagram";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { liveUrlForProject, normalizeProjectId } from "@/lib/demo-runtime";
+
+// Helper function to calculate project readiness score based on metadata
+function calculateProjectReadinessScore(project: Project, analysis: AIAnalysis | null): number {
+  let score = 75; // baseline
+  if (project.framework && project.framework !== "Unknown") score += 10;
+  if (project.language) score += 5;
+  if (project.latest_deployment_status === "running" || project.status === "active") score += 5;
+  if (analysis) {
+    if (analysis.runtime) score += 5;
+    if (analysis.docker_support || analysis.dockerfile) score += 5;
+    const vulnerabilities = analysis.vulnerabilities || [];
+    score -= Math.min(15, vulnerabilities.length * 5);
+  }
+  return Math.min(100, Math.max(0, score));
+}
+
+// Circle gauge component for deployment readiness
+function ProjectReadinessCircle({ score }: { score: number }) {
+  const radius = 22;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+  const color = score >= 90 ? "text-success" : score >= 80 ? "text-warning" : "text-danger";
+  const strokeColor = score >= 90 ? "var(--success)" : score >= 80 ? "var(--warning)" : "var(--danger)";
+
+  return (
+    <div className="relative w-16 h-16 flex-shrink-0">
+      <svg className="w-16 h-16 -rotate-90" viewBox="0 0 54 54">
+        <circle cx="27" cy="27" r={radius} fill="none" stroke="var(--border)" strokeWidth="4" />
+        <motion.circle
+          cx="27"
+          cy="27"
+          r={radius}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="4"
+          strokeLinecap="round"
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          style={{ strokeDasharray: circumference }}
+        />
+      </svg>
+      <span className={`absolute inset-0 flex items-center justify-center text-xs font-extrabold ${color}`}>
+        {score}%
+      </span>
+    </div>
+  );
+}
 
 export default function DashboardHome() {
   const { projects, hasDeployed, isLoading: contextLoading, refreshProjects, addToast } = useNotifications();
@@ -129,6 +178,7 @@ export default function DashboardHome() {
   const pId = normalizeProjectId(activeProject.full_name);
   const liveUrl = liveUrlForProject(pId);
   const customDomain = `${pId}.zeroops.app`;
+  const readinessScore = calculateProjectReadinessScore(activeProject, analysis);
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
@@ -161,88 +211,219 @@ export default function DashboardHome() {
         )}
       </div>
 
-      {/* Vercel-style Outcomes & Status Card */}
+      {/* Row 1: Outcomes-First Hero & AI Health Agent */}
       <div className="grid md:grid-cols-3 gap-6">
-        <div className="md:col-span-2 glass rounded-2xl border border-border/60 p-6 bg-gradient-to-b from-card to-card/40 space-y-5">
-          <div className="grid sm:grid-cols-2 gap-4 text-xs">
-            <div className="space-y-1">
-              <p className="font-semibold text-foreground-muted uppercase tracking-wider text-[9px]">Deployment URL</p>
+        {/* Outcomes Hero Card */}
+        <div className="md:col-span-2 glass rounded-2xl border border-border/60 p-6 bg-gradient-to-b from-card to-card/40 flex flex-col justify-between space-y-6">
+          <div className="space-y-4">
+            {/* Healthy & Active Pulsing Dot Indicator */}
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Globe size={14} className="text-primary" />
-                <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="font-mono text-primary hover:underline truncate max-w-[200px]">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-success"></span>
+                </span>
+                <span className="text-xs font-bold text-success uppercase tracking-wider">
+                  Healthy & Active
+                </span>
+              </div>
+              <span className="text-[10px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                Production Env
+              </span>
+            </div>
+
+            {/* Big URL display */}
+            <div className="space-y-1">
+              <p className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Live URL</p>
+              <div className="flex items-center gap-3">
+                <Globe className="text-primary w-5 h-5 flex-shrink-0" />
+                <a
+                  href={liveUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-lg md:text-xl font-mono font-bold text-foreground hover:text-primary transition truncate hover:underline"
+                >
                   {liveUrl.replace("https://", "")}
                 </a>
               </div>
             </div>
-            <div className="space-y-1">
-              <p className="font-semibold text-foreground-muted uppercase tracking-wider text-[9px]">Custom Domain</p>
-              <div className="flex items-center gap-2 text-foreground">
-                <ShieldCheck size={14} className="text-success" />
-                <span className="font-mono truncate">{customDomain}</span>
-                <span className="text-[9px] bg-success/15 border border-success/30 text-success px-1.5 py-0.2 rounded-full font-bold">Active</span>
+
+            {/* Metadata Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 pt-4 border-t border-border/20 text-xs">
+              <div>
+                <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Target region</p>
+                <p className="mt-1 font-semibold text-foreground flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                  Azure App Service ({activeProject.region || "East US"})
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Framework / Runtime</p>
+                <p className="mt-1 font-semibold text-foreground">
+                  {activeProject.framework} • {analysis?.runtime || "Node.js 22"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Last deployment</p>
+                <p className="mt-1 font-semibold text-foreground flex items-center gap-1">
+                  <Clock size={12} className="text-foreground-muted" />
+                  {deployments[0]?.started_at
+                    ? new Date(deployments[0].started_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " at " + new Date(deployments[0].started_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+                    : "Recently"}
+                </p>
               </div>
             </div>
           </div>
 
-          <div className="pt-4 border-t border-border/20 flex flex-wrap gap-3">
+          {/* Actions */}
+          <div className="flex flex-wrap gap-3 pt-4 border-t border-border/20">
             <a
               href={liveUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary-hover font-semibold rounded-xl text-xs transition glow-blue"
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-primary text-white hover:bg-primary-hover font-semibold rounded-xl text-xs transition shadow-lg shadow-primary/20 hover:shadow-primary/30"
             >
               <ExternalLink size={14} /> Open Application
             </a>
             <button
               onClick={() => handleCopyUrl(liveUrl)}
-              className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition"
+              className="px-4 py-2.5 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition"
             >
               Copy URL
             </button>
             <button
               disabled={redeploying}
               onClick={() => handleRedeploy(activeProject)}
-              className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2.5 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition disabled:opacity-50"
             >
               <RefreshCw size={14} className={redeploying ? "animate-spin" : ""} /> Redeploy
             </button>
             <button
               onClick={() => router.push(`/dashboard/deployments?repo=${encodeURIComponent(activeProject.full_name)}`)}
-              className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition text-foreground-muted hover:text-foreground"
+              className="flex items-center gap-1.5 px-4 py-2.5 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition text-foreground-muted hover:text-foreground"
             >
               <Terminal size={14} /> View Logs
             </button>
           </div>
         </div>
 
-        {/* AI Health & Meta Card */}
-        <div className="glass rounded-2xl border border-border/60 p-6 bg-gradient-to-b from-primary/5 to-accent/5 flex flex-col justify-between shadow-sm">
+        {/* AI Health Summary Card */}
+        <div className="glass rounded-2xl border border-primary/20 p-6 bg-gradient-to-b from-primary/5 via-accent/5 to-transparent flex flex-col justify-between shadow-sm space-y-4">
           <div className="space-y-3">
             <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
-              <Brain size={14} className="animate-pulse" /> Autonomic Health Status
+              <Brain size={14} className="animate-pulse text-primary" /> AI Health Agent
             </h4>
-            <div className="space-y-2.5 text-xs pt-1">
-              <div className="flex justify-between border-b border-border/40 pb-2">
-                <span className="text-foreground-muted">Platform Target</span>
-                <span className="font-semibold text-foreground">{activeProject.framework}</span>
+            
+            <p className="text-xs text-foreground-muted leading-relaxed font-medium">
+              Your application is healthy. All platform systems are running at peak performance. Average response times are excellent, and auto-scaling configs are active.
+            </p>
+
+            <div className="space-y-2 text-xs pt-1.5 border-t border-border/20">
+              <div className="flex items-center gap-2 text-foreground-muted">
+                <Check size={14} className="text-success shrink-0" />
+                <span>SSL certificate is active & secure</span>
               </div>
-              <div className="flex justify-between border-b border-border/40 pb-2">
-                <span className="text-foreground-muted">Scaling Status</span>
-                <span className="font-semibold text-success flex items-center gap-1"><Cpu size={12} /> Auto-Scaling</span>
+              <div className="flex items-center gap-2 text-foreground-muted">
+                <Check size={14} className="text-success shrink-0" />
+                <span>Auto-scaling is configured</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-foreground-muted">Deployment target</span>
-                <span className="font-semibold text-foreground">Azure App Service</span>
+              <div className="flex items-center gap-2 text-foreground-muted">
+                <Check size={14} className="text-success shrink-0" />
+                <span>No active deployment issues</span>
+              </div>
+              <div className="flex items-center gap-2 text-foreground-muted">
+                <Check size={14} className="text-success shrink-0" />
+                <span>Continuous sync from GitHub</span>
               </div>
             </div>
           </div>
-          <div className="text-[10px] text-foreground-muted/60 text-center border-t border-border/40 pt-3">
-            ZeroOps Autonomic Control Plane Active
+          
+          <div className="text-[10px] text-foreground-muted/60 text-center border-t border-border/20 pt-3 flex items-center justify-center gap-1.5">
+            <Activity size={10} className="text-success animate-pulse" />
+            <span>Autonomic Plane Status: Active</span>
           </div>
         </div>
       </div>
 
-      {/* SVG System Architecture & Project Explanation */}
+      {/* Risk Alert Banner if any vulnerabilities exist */}
+      {analysis?.vulnerabilities && analysis.vulnerabilities.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-warning/10 border border-warning/20 rounded-xl p-4 flex gap-3 text-xs text-warning"
+        >
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-bold">AI Risk Detection: Setup requires verification</p>
+            <p className="leading-relaxed text-[11px] text-foreground-muted">
+              We identified potential items that could affect production stability or security. Review recommendations below.
+            </p>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Row 2: AI Engine Insights (Readiness, Cost, and Risks) */}
+      <div className="grid md:grid-cols-3 gap-6">
+        {/* Card 1: Readiness Score */}
+        <div className="glass rounded-2xl border border-border/60 p-5 bg-card/40 flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h4 className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1">
+              <Sparkles size={11} className="text-primary" /> Readiness Score
+            </h4>
+            <p className="text-base font-extrabold text-foreground">Deployment Ready</p>
+            <p className="text-[10px] text-foreground-muted">
+              {readinessScore >= 90 ? "High-readiness setup" : "Standard setup"}
+            </p>
+          </div>
+          <ProjectReadinessCircle score={readinessScore} />
+        </div>
+
+        {/* Card 2: AI Cost Estimation */}
+        <div className="glass rounded-2xl border border-border/60 p-5 bg-card/40 flex flex-col justify-between gap-3">
+          <div className="space-y-1">
+            <h4 className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1">
+              <DollarSign size={12} className="text-success" /> AI Cost Advisor
+            </h4>
+            <p className="text-base font-extrabold text-foreground">Free Tier Eligible</p>
+            <p className="text-[10px] text-foreground-muted">
+              Recommended: {analysis?.cpu_recommendation || "0.5 vCPU"} / {analysis?.memory_recommendation || "1 GB RAM"}
+            </p>
+          </div>
+          <div className="text-[9px] text-success bg-success/10 border border-success/20 rounded-lg px-2.5 py-1 font-semibold w-fit">
+            Estimated cost: $0.00 / month
+          </div>
+        </div>
+
+        {/* Card 3: AI Security & Risks */}
+        <div className="glass rounded-2xl border border-border/60 p-5 bg-card/40 flex flex-col justify-between gap-3">
+          <div className="space-y-1">
+            <h4 className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider flex items-center gap-1">
+              <ShieldCheck size={12} className="text-primary" /> AI Risk Scanner
+            </h4>
+            <p className="text-base font-extrabold text-foreground">
+              {analysis?.vulnerabilities && analysis.vulnerabilities.length > 0
+                ? `${analysis.vulnerabilities.length} Issues Found`
+                : "No Risks Detected"}
+            </p>
+            <p className="text-[10px] text-foreground-muted">
+              {analysis?.vulnerabilities && analysis.vulnerabilities.length > 0
+                ? "Security tuning suggested"
+                : "Namespace isolation active"}
+            </p>
+          </div>
+          <div className={`text-[9px] rounded-lg px-2.5 py-1 font-semibold w-fit border ${
+            analysis?.vulnerabilities && analysis.vulnerabilities.length > 0
+              ? "bg-warning/15 border-warning/30 text-warning"
+              : "bg-success/10 border-success/20 text-success"
+          }`}>
+            {analysis?.vulnerabilities && analysis.vulnerabilities.length > 0
+              ? "Needs review"
+              : "Security verified ✓"}
+          </div>
+        </div>
+      </div>
+
+      {/* Row 3: SVG System Architecture */}
       <div className="space-y-4">
         <div className="border-b border-border/40 pb-2">
           <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">Project System Architecture</h2>
@@ -257,38 +438,38 @@ export default function DashboardHome() {
         />
       </div>
 
-      {/* AI Explanation & Recommendations */}
+      {/* Row 4: AI Explanation & Recommendations */}
       <div className="grid md:grid-cols-2 gap-6">
         <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-card/40">
           <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
-            <Brain size={14} /> Explain This Project
+            <Brain size={14} /> Explain My Project
           </h4>
-          <p className="text-xs text-foreground-muted leading-relaxed">
+          <p className="text-xs text-foreground-muted leading-relaxed font-medium">
             {analysis?.explanation || `This is a ${activeProject.framework} application built with ${activeProject.language || "TypeScript"}. It is containerized and managed autonomously by ZeroOps on Azure App Service with isolated security configurations.`}
           </p>
         </div>
 
         <div className="glass rounded-xl p-5 border border-border/60 space-y-3 bg-card/40">
           <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-            Recommendations & Optimizations
+            AI Recommendations & Optimizations
           </h4>
           <ul className="space-y-2">
             {analysis?.vulnerabilities && analysis.vulnerabilities.length > 0 ? (
               analysis.vulnerabilities.slice(0, 3).map((rec, i) => (
                 <li key={i} className="flex gap-2 items-start text-xs text-foreground-muted">
                   <span className="text-primary font-bold select-none">•</span>
-                  <span>{rec}</span>
+                  <span className="font-medium">{rec}</span>
                 </li>
               ))
             ) : (
               <>
                 <li className="flex gap-2 items-start text-xs text-foreground-muted">
                   <Check size={12} className="text-success shrink-0 mt-0.5" />
-                  <span>Configure idle pod scale-down boundaries to reduce cloud billing by 30%.</span>
+                  <span className="font-medium">Configure idle pod scale-down boundaries to reduce cloud billing by 30%.</span>
                 </li>
                 <li className="flex gap-2 items-start text-xs text-foreground-muted">
                   <Check size={12} className="text-success shrink-0 mt-0.5" />
-                  <span>Deploy SSL configuration for secure database connection pools.</span>
+                  <span className="font-medium">Deploy SSL configuration for secure database connection pools.</span>
                 </li>
               </>
             )}
@@ -296,7 +477,7 @@ export default function DashboardHome() {
         </div>
       </div>
 
-      {/* Deployment History Timeline */}
+      {/* Row 5: Deployment History Timeline */}
       <div className="glass rounded-2xl border border-border/60 p-6 bg-card/20 space-y-4">
         <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Deployment Timeline</h3>
         

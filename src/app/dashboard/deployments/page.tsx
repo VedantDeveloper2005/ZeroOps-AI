@@ -1,8 +1,8 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useCallback, useState, useEffect, useRef, Suspense } from "react";
-import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Loader2, GitBranch, Server, Network, Activity, Cpu, Brain, Box, Cloud, Shield, FolderGit2, Globe, Clock, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
+import { Check, Loader, Circle, RefreshCw, RotateCcw, Maximize, Loader2, GitBranch, Server, Network, Activity, Cpu, Brain, Box, Cloud, Shield, FolderGit2, Globe, Clock, ExternalLink, ChevronDown, ChevronUp, Copy, Link2, Rocket, Sparkles, AlertCircle, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -16,7 +16,7 @@ import {
 } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 
-const stepIcons = [GitBranch, Cloud, Brain, Box, Cpu, Network, Server, Box, Activity, Check];
+const stepIcons = [GitBranch, Brain, Box, Cloud, Shield, Rocket, Activity, Check];
 
 // Local step type for the pipeline UI
 interface PipelineStep {
@@ -241,8 +241,8 @@ function DeploymentsPageContent() {
 
           if (detail.status === "failed") {
             setSteps(createInitialSteps().map((step, idx) => {
-              if (idx < 8) return { ...step, status: "completed" as const, duration: "done" };
-              if (idx === 8) return { ...step, status: "pending" as const, duration: "failed" };
+              if (idx < 6) return { ...step, status: "completed" as const, duration: "done" };
+              if (idx === 6) return { ...step, status: "pending" as const, duration: "failed" };
               return { ...step, status: "pending" as const, duration: "" };
             }));
           } else {
@@ -311,7 +311,7 @@ function DeploymentsPageContent() {
               refreshStats();
               addNotification({
                 title: "Deployment Successful",
-                message: `Successfully deployed application for run ${deployId} to AKS.`,
+                message: `Successfully deployed application for run ${deployId} to Azure.`,
                 type: "success",
                 category: "deployment",
                 action_url: "/dashboard/deployments",
@@ -469,7 +469,7 @@ function DeploymentsPageContent() {
   const handleAutoFix = async () => {
     if (isApplyingFix) return;
     setIsApplyingFix(true);
-    addToast("NVIDIA Nemotron applying auto-remediation...", "info");
+    addToast("AI applying auto-remediation...", "info");
     
     // Simulate patch / remediation time
     await new Promise(resolve => setTimeout(resolve, 1800));
@@ -480,6 +480,12 @@ function DeploymentsPageContent() {
     // Trigger redeploy
     handleRedeploy();
   };
+
+  // Calculate progress percentage
+  const completedSteps = steps.filter(s => s.status === 'completed').length;
+  const progressPercent = Math.round((completedSteps / steps.length) * 100);
+  const estimatedRemainingSteps = steps.length - completedSteps;
+  const estimatedTimeRemaining = estimatedRemainingSteps > 0 ? `~${Math.max(1, Math.round(estimatedRemainingSteps * 0.25))}m ${Math.round(estimatedRemainingSteps * 8) % 60}s` : "";
 
   return (
     <div className="space-y-6">
@@ -514,7 +520,9 @@ function DeploymentsPageContent() {
         )}
       </div>
 
-      {/* Success Moment (Confetti, copy url, open app, stats) */}
+      {/* ════════════════════════════════════════════
+          SUCCESS EXPERIENCE (Step 6)
+          ════════════════════════════════════════════ */}
       {showPipeline && isSuccessful && (
         <motion.div
           initial={{ opacity: 0, scale: 0.98 }}
@@ -522,31 +530,57 @@ function DeploymentsPageContent() {
           transition={{ duration: 0.5 }}
           className="glass rounded-2xl border-2 border-success/30 bg-gradient-to-b from-success/5 to-transparent p-8 shadow-2xl relative overflow-hidden text-center space-y-6"
         >
-          {/* Animated Success Background / Confetti */}
-          <div className="absolute inset-0 pointer-events-none opacity-20">
-            <div className="absolute top-10 left-1/4 w-2 h-2 bg-green-400 rounded-full animate-ping" style={{ animationDelay: '0.2s' }} />
-            <div className="absolute top-20 right-1/4 w-3.5 h-3.5 bg-emerald-400 rounded-full animate-ping" style={{ animationDelay: '0.8s' }} />
-            <div className="absolute bottom-12 left-1/3 w-2.5 h-2.5 bg-teal-400 rounded-full animate-ping" style={{ animationDelay: '1.4s' }} />
-            <div className="absolute bottom-16 right-1/3 w-3 h-3 bg-green-300 rounded-full animate-ping" style={{ animationDelay: '0.5s' }} />
+          {/* Celebration confetti particles */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {[...Array(12)].map((_, i) => (
+              <motion.div
+                key={i}
+                className={`absolute w-2 h-2 rounded-full ${['bg-green-400', 'bg-emerald-400', 'bg-teal-400', 'bg-success', 'bg-primary', 'bg-accent'][i % 6]}`}
+                initial={{ 
+                  x: `${50 + (Math.random() - 0.5) * 20}%`, 
+                  y: '-5%', 
+                  scale: 0,
+                  opacity: 0 
+                }}
+                animate={{ 
+                  x: `${10 + Math.random() * 80}%`, 
+                  y: `${60 + Math.random() * 40}%`, 
+                  scale: [0, 1.2, 0.8],
+                  opacity: [0, 1, 0],
+                  rotate: Math.random() * 360 
+                }}
+                transition={{ 
+                  duration: 2 + Math.random(), 
+                  delay: 0.1 * i, 
+                  ease: "easeOut" 
+                }}
+                style={{ width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px` }}
+              />
+            ))}
           </div>
 
           {/* Big Glow Checkmark */}
           <div className="flex justify-center">
             <div className="relative">
               <div className="absolute inset-0 bg-success/20 blur-xl rounded-full scale-150 animate-pulse" />
-              <div className="w-16 h-16 rounded-full bg-success/15 border border-success/40 flex items-center justify-center text-success relative z-10">
-                <Check size={36} className="animate-[scaleIn_0.3s_ease-out]" />
-              </div>
+              <motion.div 
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: "spring", bounce: 0.5, delay: 0.2 }}
+                className="w-16 h-16 rounded-full bg-success/15 border border-success/40 flex items-center justify-center text-success relative z-10"
+              >
+                <Check size={36} />
+              </motion.div>
             </div>
           </div>
 
           {/* Title */}
           <div className="space-y-1.5 max-w-lg mx-auto">
             <h2 className="text-xl md:text-2xl font-extrabold tracking-tight text-foreground">
-              Deployment Successful!
+              🎉 Application Successfully Deployed
             </h2>
             <p className="text-xs text-foreground-muted font-medium">
-              Your repository has been scanned, containerized, and deployed to Azure App Service.
+              Your application has been analyzed, built, and deployed to production.
             </p>
           </div>
 
@@ -565,7 +599,15 @@ function DeploymentsPageContent() {
               </a>
             </div>
 
-            <div className="flex items-center justify-center gap-3 pt-2">
+            {/* Custom domain */}
+            <div className="flex items-center justify-center gap-2 text-xs text-foreground-muted">
+              <Shield size={12} className="text-success" />
+              <span className="font-mono">{projectId}.zeroops.app</span>
+              <span className="text-[9px] bg-success/15 border border-success/30 text-success px-1.5 py-0.5 rounded-full font-bold">SSL Active</span>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
               <a
                 href={currentDeployment?.live_url || liveUrlForProject(projectId)}
                 target="_blank"
@@ -576,25 +618,40 @@ function DeploymentsPageContent() {
               </a>
               <button
                 onClick={() => handleCopyUrl(currentDeployment?.live_url || liveUrlForProject(projectId))}
-                className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
               >
-                Copy URL
+                <Copy size={14} /> Copy URL
+              </button>
+              <button
+                onClick={() => {
+                  const url = currentDeployment?.live_url || liveUrlForProject(projectId);
+                  navigator.clipboard.writeText(`Check out my deployment: ${url}`);
+                  addToast("Share link copied!", "success");
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+              >
+                <Link2 size={14} /> Share
+              </button>
+              <button
+                disabled={isAnimating}
+                onClick={handleRedeploy}
+                className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw size={14} /> Redeploy
               </button>
             </div>
           </div>
 
           {/* Deployment Stats Row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-2 border-t border-border/20 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 max-w-2xl mx-auto pt-2 border-t border-border/20 text-xs">
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Framework</span>
+              <p className="font-semibold text-foreground">{analysis?.framework || "Node.js"}</p>
+            </div>
             <div className="space-y-1">
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Branch</span>
               <p className="font-mono font-semibold text-foreground flex items-center justify-center gap-1">
                 <GitBranch size={12} /> {currentDeployment?.branch || "main"}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Commit</span>
-              <p className="font-mono font-semibold text-foreground">
-                {currentDeployment?.commit_sha?.substring(0, 7) || "7a8b9c2"}
               </p>
             </div>
             <div className="space-y-1">
@@ -609,11 +666,17 @@ function DeploymentsPageContent() {
                 {currentDeployment?.environment || "production"}
               </p>
             </div>
+            <div className="space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider">Commit</span>
+              <p className="font-mono font-semibold text-foreground">
+                {currentDeployment?.commit_sha?.substring(0, 7) || "7a8b9c2"}
+              </p>
+            </div>
           </div>
         </motion.div>
       )}
 
-      {/* AI Deployment Report */}
+      {/* AI Deployment Report (success) */}
       {showPipeline && isSuccessful && (
         <motion.div
           initial={{ opacity: 0, y: 15 }}
@@ -627,25 +690,25 @@ function DeploymentsPageContent() {
             </div>
             <div>
               <h4 className="text-sm font-bold text-foreground">AI Deployment Report</h4>
-              <p className="text-[10px] text-foreground-muted font-medium">Autonomic analysis and resource configuration</p>
+              <p className="text-[10px] text-foreground-muted font-medium">What AI configured for your application</p>
             </div>
           </div>
 
           <div className="grid md:grid-cols-2 gap-6 text-xs">
-            {/* Scanning Summary */}
+            {/* What AI Configured */}
             <div className="space-y-3">
-              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">ZeroOps Scan Details</p>
+              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">Your Application</p>
               <div className="space-y-2 bg-background-secondary/30 p-4 rounded-xl border border-border/20">
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Detected Framework</span>
+                  <span className="text-foreground-muted">Framework</span>
                   <span className="font-semibold text-foreground">{analysis?.framework || "Node.js"}</span>
                 </div>
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Runtime Version</span>
+                  <span className="text-foreground-muted">Runtime</span>
                   <span className="font-semibold text-foreground">{analysis?.runtime || "Node.js 20"}</span>
                 </div>
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Internal Container Port</span>
+                  <span className="text-foreground-muted">Port</span>
                   <span className="font-semibold text-foreground">{analysis?.port || "3000"}</span>
                 </div>
                 <div className="flex justify-between">
@@ -657,24 +720,24 @@ function DeploymentsPageContent() {
               </div>
             </div>
 
-            {/* Cloud Settings */}
+            {/* Cloud Setup */}
             <div className="space-y-3">
-              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">Infrastructure Provisioning</p>
+              <p className="font-bold text-foreground uppercase tracking-wider text-[10px] text-primary">Cloud Setup</p>
               <div className="space-y-2 bg-background-secondary/30 p-4 rounded-xl border border-border/20">
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Target Service</span>
+                  <span className="text-foreground-muted">Platform</span>
                   <span className="font-semibold text-foreground">Azure App Service</span>
                 </div>
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Provisioned CPU</span>
+                  <span className="text-foreground-muted">CPU Allocated</span>
                   <span className="font-semibold text-foreground">{analysis?.cpu_recommendation || "200m"}</span>
                 </div>
                 <div className="flex justify-between border-b border-border/20 pb-2">
-                  <span className="text-foreground-muted">Provisioned Memory</span>
+                  <span className="text-foreground-muted">Memory Allocated</span>
                   <span className="font-semibold text-foreground">{analysis?.memory_recommendation || "256Mi"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-foreground-muted">Database Links</span>
+                  <span className="text-foreground-muted">Database</span>
                   <span className="font-semibold text-foreground text-ellipsis overflow-hidden truncate max-w-[150px]">
                     {analysis?.database_dependencies && analysis.database_dependencies.length > 0 && analysis.database_dependencies[0] !== "None"
                       ? analysis.database_dependencies.join(", ")
@@ -685,10 +748,10 @@ function DeploymentsPageContent() {
             </div>
           </div>
 
-          {/* Project Summary / Plain English description */}
+          {/* Project Summary */}
           {analysis?.explanation && (
             <div className="pt-2 border-t border-border/20 text-xs">
-              <p className="font-bold text-foreground mb-1">Architecture Summary</p>
+              <p className="font-bold text-foreground mb-1">About Your App</p>
               <p className="text-foreground-muted leading-relaxed">
                 {analysis.explanation}
               </p>
@@ -697,7 +760,7 @@ function DeploymentsPageContent() {
         </motion.div>
       )}
 
-      {/* Collapse Stepper & Logs Toggle Button */}
+      {/* Toggle for build logs on success */}
       {showPipeline && isSuccessful && (
         <div className="flex flex-col items-center pt-2">
           <button
@@ -706,22 +769,168 @@ function DeploymentsPageContent() {
           >
             {showRawLogs ? (
               <>
-                <ChevronUp size={14} /> Hide technical logs
+                <ChevronUp size={14} /> Hide build logs
               </>
             ) : (
               <>
-                <ChevronDown size={14} /> View technical logs
+                <ChevronDown size={14} /> View build logs
               </>
             )}
           </button>
         </div>
       )}
 
-      {/* Pipeline & Terminal (shown for non-successful runs, or when toggled) */}
+      {/* ════════════════════════════════════════════
+          FAILURE EXPERIENCE (Step 5) — shown before pipeline
+          ════════════════════════════════════════════ */}
+      {showPipeline && isFailed && !showRawLogs && (
+        <>
+          {isLoadingFailureAnalysis ? (
+            <div className="flex items-center justify-center p-8 bg-card border border-border rounded-xl shadow-sm">
+              <Loader2 className="animate-spin text-primary mr-2" size={16} />
+              <span className="text-xs text-foreground-muted">AI is analyzing the failure...</span>
+            </div>
+          ) : failureAnalysis ? (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass rounded-xl border border-rose-500/20 bg-gradient-to-b from-rose-500/5 to-transparent p-6 shadow-md space-y-5"
+            >
+              {/* Header */}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center justify-between border-b border-border/40 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500">
+                    <AlertCircle size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5">
+                      AI Deployment Assistant
+                    </h4>
+                    <p className="text-[10px] text-foreground-muted">Issue detected during deployment</p>
+                  </div>
+                </div>
+                <span className={`self-start sm:self-auto text-[10px] font-mono uppercase tracking-wider font-bold px-2 py-0.5 rounded border ${
+                  failureAnalysis.severity === "critical" 
+                    ? "bg-red-500/15 border-red-500/30 text-red-400"
+                    : failureAnalysis.severity === "warning"
+                    ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
+                    : "bg-rose-500/15 border-rose-500/30 text-rose-400"
+                }`}>
+                  {failureAnalysis.severity || "error"}
+                </span>
+              </div>
+
+              {/* Plain English Explanation */}
+              <div className="space-y-4 text-xs">
+                <div>
+                  <p className="font-bold text-foreground mb-1.5">What happened</p>
+                  <p className="text-foreground-muted bg-background-secondary/40 border border-border/40 p-3 rounded-lg leading-relaxed">
+                    {failureAnalysis.failure_summary}
+                  </p>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <p className="font-bold text-foreground">Why it happened</p>
+                    <p className="text-foreground-muted leading-relaxed">
+                      {failureAnalysis.root_cause}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-bold text-foreground">How to fix it</p>
+                    <p className="text-foreground-muted leading-relaxed">
+                      {failureAnalysis.recommended_fix}
+                    </p>
+                  </div>
+                </div>
+
+                {failureAnalysis.step_by_step_resolution && failureAnalysis.step_by_step_resolution.length > 0 && (
+                  <div className="pt-2">
+                    <p className="font-bold text-foreground mb-2">Step-by-Step Resolution</p>
+                    <div className="space-y-2">
+                      {failureAnalysis.step_by_step_resolution.map((step: string, idx: number) => (
+                        <div key={idx} className="flex gap-3 items-start bg-background-secondary/20 border border-border/20 p-2.5 rounded-lg">
+                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-[10px] font-bold text-rose-400 border border-rose-500/20">
+                            {idx + 1}
+                          </span>
+                          <span className="text-foreground-muted leading-relaxed">{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="pt-4 border-t border-border/20 flex flex-wrap gap-3 justify-end">
+                  <button
+                    onClick={() => setShowRawLogs(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer text-foreground-muted"
+                  >
+                    View Technical Logs
+                  </button>
+                  <button
+                    disabled={isAnimating || isApplyingFix}
+                    onClick={handleRedeploy}
+                    className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} /> Retry Deployment
+                  </button>
+                  <button
+                    disabled={isApplyingFix}
+                    onClick={handleAutoFix}
+                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition shadow-lg shadow-rose-950/20 cursor-pointer"
+                  >
+                    {isApplyingFix ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Applying fix...
+                      </>
+                    ) : (
+                      <>
+                        <Zap size={14} />
+                        Fix Automatically
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+        </>
+      )}
+
+      {/* ════════════════════════════════════════════
+          DEPLOYMENT EXPERIENCE (Step 4) — Pipeline & Logs
+          ════════════════════════════════════════════ */}
       {showPipeline && (!isSuccessful || showRawLogs) && (
         <>
+          {/* Progress percentage hero (during active deployment) */}
+          {isAnimating && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-center py-4"
+            >
+              <motion.p 
+                key={progressPercent}
+                initial={{ scale: 0.9 }}
+                animate={{ scale: 1 }}
+                className="text-4xl font-extrabold text-foreground tabular-nums"
+              >
+                {progressPercent}%
+              </motion.p>
+              {estimatedTimeRemaining && (
+                <p className="text-xs text-foreground-muted mt-1">
+                  Estimated time remaining: {estimatedTimeRemaining}
+                </p>
+              )}
+            </motion.div>
+          )}
+
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
-            <h3 className="text-sm font-bold mb-6 text-foreground">Active Deployment Pipeline</h3>
+            <h3 className="text-sm font-bold mb-6 text-foreground">
+              {isAnimating ? "Deploying..." : isFailed ? "Deployment Failed" : "Deployment Pipeline"}
+            </h3>
             <div className="flex items-center justify-between overflow-x-auto pb-4">
               {steps.map((step, i) => {
                 const Icon = stepIcons[i] || Circle;
@@ -763,7 +972,7 @@ function DeploymentsPageContent() {
             <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden mt-4">
               <motion.div
                 initial={{ width: "0%" }}
-                animate={{ width: `${(steps.filter(s => s.status === 'completed').length / steps.length) * 100}%` }}
+                animate={{ width: `${progressPercent}%` }}
                 transition={{ duration: 0.5, ease: "easeOut" }}
                 className="h-full bg-primary rounded-full relative"
               >
@@ -778,7 +987,7 @@ function DeploymentsPageContent() {
               <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
               <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
               <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
-              <span className="text-[10px] text-foreground-muted ml-2 font-mono">deployment-log</span>
+              <span className="text-[10px] text-foreground-muted ml-2 font-mono">build-log</span>
               {isAnimating && <Loader2 size={12} className="animate-spin text-primary ml-auto" />}
             </div>
             <div ref={termRef} className="p-4 font-mono text-[11px] leading-6 h-[300px] overflow-y-auto no-scrollbar bg-zinc-950 text-zinc-100">
@@ -788,104 +997,6 @@ function DeploymentsPageContent() {
               {visibleLines < activeLines.length && <span className="inline-block w-2 h-4 bg-primary animate-pulse" />}
             </div>
           </motion.div>
-
-          {/* NVIDIA Nemotron Failure Analysis Card */}
-          {isLoadingFailureAnalysis ? (
-            <div className="flex items-center justify-center p-8 bg-card border border-border rounded-xl shadow-sm">
-              <Loader2 className="animate-spin text-primary mr-2" size={16} />
-              <span className="text-xs text-foreground-muted">Querying NVIDIA Nemotron for failure root cause...</span>
-            </div>
-          ) : failureAnalysis ? (
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass rounded-xl border border-rose-500/20 bg-gradient-to-b from-rose-500/5 to-transparent p-6 shadow-md space-y-4"
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center justify-between border-b border-border/40 pb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500">
-                    <Brain size={18} />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5">
-                      NVIDIA Nemotron failure analysis
-                    </h4>
-                    <p className="text-[10px] text-foreground-muted">Autonomous Root Cause Detection Engine</p>
-                  </div>
-                </div>
-                <span className={`self-start sm:self-auto text-[10px] font-mono uppercase tracking-wider font-bold px-2 py-0.5 rounded border ${
-                  failureAnalysis.severity === "critical" 
-                    ? "bg-red-500/15 border-red-500/30 text-red-400"
-                    : failureAnalysis.severity === "warning"
-                    ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
-                    : "bg-rose-500/15 border-rose-500/30 text-rose-400"
-                }`}>
-                  {failureAnalysis.severity || "error"}
-                </span>
-              </div>
-
-              <div className="space-y-4 text-xs">
-                <div>
-                  <p className="font-bold text-foreground mb-1.5">Failure Summary</p>
-                  <p className="text-foreground-muted bg-background-secondary/40 border border-border/40 p-3 rounded-lg leading-relaxed">
-                    {failureAnalysis.failure_summary}
-                  </p>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <p className="font-bold text-foreground">Root Cause Analysis</p>
-                    <p className="text-foreground-muted leading-relaxed">
-                      {failureAnalysis.root_cause}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="font-bold text-foreground">Recommended Fix</p>
-                    <p className="text-foreground-muted leading-relaxed">
-                      {failureAnalysis.recommended_fix}
-                    </p>
-                  </div>
-                </div>
-
-                {failureAnalysis.step_by_step_resolution && failureAnalysis.step_by_step_resolution.length > 0 && (
-                  <div className="pt-2">
-                    <p className="font-bold text-foreground mb-2">Step-by-Step Resolution</p>
-                    <div className="space-y-2">
-                      {failureAnalysis.step_by_step_resolution.map((step: string, idx: number) => (
-                        <div key={idx} className="flex gap-3 items-start bg-background-secondary/20 border border-border/20 p-2.5 rounded-lg">
-                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-[10px] font-bold text-rose-400 border border-rose-500/20">
-                            {idx + 1}
-                          </span>
-                          <span className="text-foreground-muted leading-relaxed">{step}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Auto-Fix button */}
-                <div className="pt-4 border-t border-border/20 flex justify-end">
-                  <button
-                    disabled={isApplyingFix}
-                    onClick={handleAutoFix}
-                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition shadow-lg shadow-rose-950/20 cursor-pointer"
-                  >
-                    {isApplyingFix ? (
-                      <>
-                        <Loader2 size={14} className="animate-spin" />
-                        Applying remediation...
-                      </>
-                    ) : (
-                      <>
-                        <Brain size={14} />
-                        Auto-Fix & Redeploy
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          ) : null}
         </>
       )}
 
@@ -945,7 +1056,7 @@ function DeploymentsPageContent() {
           >
             <h3 className="text-lg font-bold mb-2">Scale Deployment</h3>
             <p className="text-xs text-foreground-muted mb-6">
-              Adjust the replica count for {projectId}. ZeroOps will autonomously partition and register pods.
+              Adjust the replica count for {projectId}. ZeroOps will handle the rest automatically.
             </p>
             <div className="flex items-center justify-between bg-card/40 border border-border rounded-lg p-4 mb-6">
               <span className="text-sm font-semibold">Replica Count</span>

@@ -8,7 +8,7 @@ import {
   LayoutDashboard, GitBranch, Rocket, Brain, DollarSign,
   Shield, Activity, TrendingUp, Network, Terminal,
   AlertTriangle, CreditCard, Settings, ChevronLeft, ChevronRight, LogOut,
-  Lock,
+  Lock, Sparkles,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
@@ -20,13 +20,13 @@ const lockedRoutes = new Set([
 
 const navSections = [
   {
-    label: "SYSTEM",
+    label: "PLATFORM",
     items: [
       { name: "Overview", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
-      { name: "App Delivery", icon: GitBranch, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories", "/dashboard/deployments"] },
-      { name: "Intelligence", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis", "/dashboard/security", "/dashboard/cost-optimization"] },
-      { name: "Operations", icon: Activity, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring", "/dashboard/infrastructure", "/dashboard/autoscaling", "/dashboard/logs", "/dashboard/incidents"], isLockedIfNoDeploy: true },
-      { name: "Preferences", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings", "/dashboard/billing", "/dashboard/profile"] },
+      { name: "Deploy", icon: Rocket, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories", "/dashboard/deployments"] },
+      { name: "Insights", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis", "/dashboard/security", "/dashboard/cost-optimization"] },
+      { name: "Monitor", icon: Activity, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring", "/dashboard/infrastructure", "/dashboard/autoscaling", "/dashboard/logs", "/dashboard/incidents"], isLockedIfNoDeploy: true },
+      { name: "Settings", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings", "/dashboard/billing", "/dashboard/profile"] },
     ],
   },
 ];

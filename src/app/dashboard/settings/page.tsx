@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
-import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell, Activity, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Shield, RefreshCw, Key, Link2, Bell, Activity, Loader2, Sparkles, Brain, Zap, Heart } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { api } from "@/lib/api";
 
@@ -73,10 +73,10 @@ export default function SettingsPage() {
   const handleToggle = async (key: keyof typeof settings) => {
     const nextValue = !settings[key];
     const names: Record<string, string> = {
-      predictiveScaling: "Predictive Autoscaling",
-      autoRollback: "Instant Deployment Rollback",
-      aiThreatMitigation: "Automatic Threat Block",
-      autoOOMRestart: "Self-Healing Pod Restarts",
+      predictiveScaling: "Auto-Scaling",
+      autoRollback: "Auto-Rollback",
+      aiThreatMitigation: "Threat Protection",
+      autoOOMRestart: "Self-Healing",
       slackNotifications: "Slack Alerts Integration",
       emailAlerts: "Critical Incident Emails",
     };
@@ -154,49 +154,95 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      {/* AI Managed Infrastructure Banner */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/5 via-accent/5 to-transparent p-6 shadow-lg"
+      >
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <Brain size={22} className="text-primary" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-foreground">AI Managed Infrastructure</h2>
+            <p className="text-xs text-foreground-muted">
+              ZeroOps automatically manages scaling, security, recovery, and performance optimization for your applications.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          {[
+            { icon: Zap, label: "Auto-Scaling", active: settings.predictiveScaling },
+            { icon: RefreshCw, label: "Auto-Rollback", active: settings.autoRollback },
+            { icon: Shield, label: "Threat Protection", active: settings.aiThreatMitigation },
+            { icon: Heart, label: "Self-Healing", active: settings.autoOOMRestart },
+          ].map((item) => (
+            <div key={item.label} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-semibold transition ${
+              item.active 
+                ? "bg-success/10 border-success/20 text-success" 
+                : "bg-card/40 border-border/40 text-foreground-muted"
+            }`}>
+              <item.icon size={14} />
+              <span>{item.label}</span>
+              <span className="ml-auto text-[9px] uppercase tracking-wider">
+                {item.active ? "Active" : "Off"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
       <div className="grid md:grid-cols-3 gap-6">
-        {/* Left Column: AI Autonomics switches */}
+        {/* Left Column: AI Managed Features */}
         <div className="md:col-span-2 space-y-6">
-          {/* AI Autonomic Tuning */}
+          {/* AI Managed Features (formerly AI Autonomic Settings) */}
           <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             className="bg-card border border-border rounded-xl p-6 shadow-sm"
           >
             <h3 className="font-bold text-base text-foreground mb-2 flex items-center gap-2">
-              <Shield size={18} className="text-primary" />
-              AI Autonomic Settings
+              <Sparkles size={18} className="text-primary" />
+              AI Managed Features
             </h3>
             <p className="text-xs text-foreground-muted mb-6">
-              Configure how much autonomous control the ZeroOps AI agent is allowed to execute on your Azure Kubernetes clusters.
+              These features are managed by AI automatically. You can override them if needed.
             </p>
 
             <div className="space-y-3">
               {[
                 {
                   key: "predictiveScaling" as const,
-                  title: "Predictive Autoscaling",
-                  desc: "Permits AI to pre-scale node pools in anticipation of calculated traffic spikes.",
+                  title: "Auto-Scaling",
+                  desc: "Automatically scales your app when traffic increases or decreases.",
                 },
                 {
                   key: "autoRollback" as const,
-                  title: "Instant Failed Deployment Rollbacks",
-                  desc: "Automatically roll back to the last stable container version if health checks fail.",
+                  title: "Auto-Rollback",
+                  desc: "Returns to the working version if a deployment fails health checks.",
                 },
                 {
                   key: "aiThreatMitigation" as const,
-                  title: "Automatic Threat Block",
-                  desc: "Instantly deploy Azure firewall rules to block IPs generating DDoS or SQL injection attempts.",
+                  title: "Threat Protection",
+                  desc: "Blocks malicious traffic and DDoS attempts automatically.",
                 },
                 {
                   key: "autoOOMRestart" as const,
-                  title: "Self-Healing Pod Restarts",
-                  desc: "AI identifies OOM (Out Of Memory) crashes and auto-restarts pods with optimized memory thresholds.",
+                  title: "Self-Healing",
+                  desc: "Detects crashes and restarts your app with optimized settings.",
                 },
               ].map((item) => (
                 <div key={item.key} className="flex items-center justify-between p-4 rounded-lg bg-background-secondary/50 hover:bg-card-hover/40 transition border border-border/40">
                   <div className="space-y-0.5 pr-6">
-                    <p className="text-xs font-bold text-foreground">{item.title}</p>
+                    <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      {item.title}
+                      {settings[item.key] && (
+                        <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-bold uppercase tracking-wider">
+                          AI Managed
+                        </span>
+                      )}
+                    </p>
                     <p className="text-[10px] text-foreground-muted leading-relaxed">{item.desc}</p>
                   </div>
                   <button
@@ -221,14 +267,14 @@ export default function SettingsPage() {
           >
             <h3 className="font-bold text-base text-foreground mb-4 flex items-center gap-2">
               <Link2 size={18} className="text-primary" />
-              Connected Provider Integrations
+              Connected Integrations
             </h3>
             
             <div className="space-y-2.5">
               {[
-                { name: "GitHub Integration", details: "Connected to GitHub Organization 'acme-corp'", status: "active", icon: "🐙" },
-                { name: "Microsoft Azure (AKS)", details: "Authorized subscription: 'Azure-Enterprise-AKS'", status: "active", icon: "☁️" },
-                { name: "Slack Notifications", details: "Send autonomous incident summaries to #ops-alerts", status: "inactive", icon: "💬" }
+                { name: "GitHub", details: "Connected to your GitHub account", status: "active", icon: "🐙" },
+                { name: "Microsoft Azure", details: "Cloud hosting and deployment platform", status: "active", icon: "☁️" },
+                { name: "Slack Notifications", details: "Get notified about deployments and incidents", status: "inactive", icon: "💬" }
               ].map((prov) => (
                 <div key={prov.name} className="flex items-center justify-between p-3 rounded-lg bg-background-secondary/40 border border-border/40">
                   <div className="flex items-center gap-3">
@@ -258,7 +304,7 @@ export default function SettingsPage() {
               Developer Sandbox Tools
             </h3>
             <p className="text-xs text-foreground-muted mb-6">
-              Reset the local state of ZeroOps AI to re-test the initial onboarding wizard, connected repository steps, and the 10-stage deployment pipeline.
+              Reset the local state to re-test the onboarding wizard and deployment pipeline.
             </p>
 
             <button
@@ -284,18 +330,18 @@ export default function SettingsPage() {
           >
             <h3 className="font-bold text-base mb-2 flex items-center gap-2 text-foreground">
               <Activity className="text-primary" size={18} />
-              Admin Diagnostics & Health Checks
+              System Health
             </h3>
             <p className="text-xs text-foreground-muted mb-6">
-              Live status ping checks for external APIs, PostgreSQL connection pool, and deployment pipeline.
+              Live status checks for connected services and infrastructure.
             </p>
 
             <div className="space-y-3">
               {[
                 { name: "System Core", status: sysHealth?.status === "healthy" ? "healthy" : "unhealthy", details: `Env: ${sysHealth?.environment || "production"}`, loading: loadingHealth },
-                { name: "Database Service", status: dbHealth?.status === "healthy" ? "healthy" : "unhealthy", details: dbHealth?.details || "Not reachable", loading: loadingHealth },
-                { name: "GitHub Link", status: ghHealth?.status === "healthy" ? "healthy" : "unhealthy", details: ghHealth?.details || "Not reachable", loading: loadingHealth },
-                { name: "Deployments Engine", status: depHealth?.status === "healthy" ? "healthy" : "unhealthy", details: `Total runs: ${depHealth?.total_deployments ?? 0} (${depHealth?.active_deployments_running ?? 0} active)`, loading: loadingHealth },
+                { name: "Database", status: dbHealth?.status === "healthy" ? "healthy" : "unhealthy", details: dbHealth?.details || "Not reachable", loading: loadingHealth },
+                { name: "GitHub", status: ghHealth?.status === "healthy" ? "healthy" : "unhealthy", details: ghHealth?.details || "Not reachable", loading: loadingHealth },
+                { name: "Deployment Engine", status: depHealth?.status === "healthy" ? "healthy" : "unhealthy", details: `Total runs: ${depHealth?.total_deployments ?? 0} (${depHealth?.active_deployments_running ?? 0} active)`, loading: loadingHealth },
               ].map((service) => (
                 <div key={service.name} className="flex items-center justify-between p-3 rounded-lg bg-background-secondary/40 border border-border/40">
                   <div>
@@ -322,7 +368,7 @@ export default function SettingsPage() {
               onClick={refreshHealthChecks}
               className="mt-4 px-4 py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition cursor-pointer shadow-sm"
             >
-              Refresh Diagnostics
+              Refresh
             </button>
           </motion.div>
         </div>
@@ -341,7 +387,7 @@ export default function SettingsPage() {
               CLI Access Tokens
             </h3>
             <p className="text-[10px] text-foreground-muted mb-4 leading-normal">
-              Use this key to authorize the ZeroOps CLI in your local terminal workspaces.
+              Use this key to authorize the ZeroOps CLI in your terminal.
             </p>
 
             <div className="space-y-3">
@@ -384,13 +430,13 @@ export default function SettingsPage() {
           >
             <h3 className="font-bold text-sm mb-3 flex items-center gap-2 text-foreground">
               <Bell size={14} className="text-primary" />
-              Alert Subscriptions
+              Notifications
             </h3>
             
             <div className="space-y-3 text-xs">
               {[
-                { key: "emailAlerts" as const, label: "Critical Incident Emails", desc: "Notify immediately upon system outages" },
-                { key: "slackNotifications" as const, label: "Slack Agent Digests", desc: "Weekly summaries of AI optimization results" }
+                { key: "emailAlerts" as const, label: "Email Alerts", desc: "Get notified about outages and critical issues" },
+                { key: "slackNotifications" as const, label: "Slack Digests", desc: "Weekly AI optimization summaries" }
               ].map((alert) => (
                 <div key={alert.key} className="flex items-start justify-between gap-3">
                   <div>

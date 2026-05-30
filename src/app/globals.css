@@ -29,8 +29,8 @@
     --card: hsl(0, 0%, 100%);
     --card-hover: hsl(240, 5%, 96%);
     --card-active: hsl(240, 5%, 94%);
-    --border: hsl(240, 6%, 90%);
-    --border-hover: hsl(240, 6%, 82%);
+    --border: hsl(240, 6%, 91%);
+    --border-hover: hsl(240, 6%, 83%);
 
     /* Semantic */
     --success: hsl(142, 60%, 40%);
@@ -49,15 +49,22 @@
     --radius-xl: 1rem;
     --radius-2xl: 1.25rem;
 
-    /* Subtle Shadows instead of aggressive glow */
-    --shadow-glow-blue: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-glow-purple: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-glow-green: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-glow-red: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-glow-cyan: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    /* Subtle Shadows for Light Mode - clean soft glows */
+    --shadow-glow-blue: 0 4px 12px 0 rgba(0, 110, 255, 0.06), 0 1px 3px 0 rgba(0, 110, 255, 0.03);
+    --shadow-glow-purple: 0 4px 12px 0 rgba(100, 50, 255, 0.06), 0 1px 3px 0 rgba(100, 50, 255, 0.03);
+    --shadow-glow-green: 0 4px 12px 0 rgba(34, 197, 94, 0.06), 0 1px 3px 0 rgba(34, 197, 94, 0.03);
+    --shadow-glow-red: 0 4px 12px 0 rgba(239, 68, 68, 0.06), 0 1px 3px 0 rgba(239, 68, 68, 0.03);
+    --shadow-glow-cyan: 0 4px 12px 0 rgba(6, 182, 212, 0.06), 0 1px 3px 0 rgba(6, 182, 212, 0.03);
 
     /* Glass */
-    --glass-base-rgb: 0, 0, 0;
+    --glass-base-rgb: 255, 255, 255;
+    --glass-bg: rgba(255, 255, 255, 0.75);
+    --glass-border: hsla(240, 6%, 90%, 0.5);
+    --glass-strong-bg: rgba(255, 255, 255, 0.9);
+    --glass-strong-border: hsla(240, 6%, 90%, 0.85);
+    --glass-subtle-bg: rgba(255, 255, 255, 0.45);
+    --glass-subtle-border: hsla(240, 6%, 90%, 0.3);
+
     --brand-gray: hsl(240, 10%, 96%);
   }
 
@@ -99,14 +106,20 @@
     --info-glow: hsla(199, 85%, 50%, 0.2);
 
     /* Shadows */
-    --shadow-glow-blue: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-glow-purple: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-glow-green: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-glow-red: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-glow-cyan: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-glow-blue: 0 0 15px hsla(211, 100%, 50%, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-glow-purple: 0 0 15px hsla(255, 60%, 60%, 0.25), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-glow-green: 0 0 15px hsla(142, 60%, 45%, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-glow-red: 0 0 15px hsla(0, 72%, 55%, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-glow-cyan: 0 0 15px hsla(199, 85%, 50%, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
 
     /* Glass */
-    --glass-base-rgb: 255, 255, 255;
+    --glass-base-rgb: 0, 0, 0;
+    --glass-bg: rgba(9, 9, 11, 0.5);
+    --glass-border: hsla(240, 6%, 15%, 0.5);
+    --glass-strong-bg: rgba(9, 9, 11, 0.8);
+    --glass-strong-border: hsla(240, 6%, 15%, 0.8);
+    --glass-subtle-bg: rgba(9, 9, 11, 0.25);
+    --glass-subtle-border: hsla(240, 6%, 15%, 0.3);
   }
 
 }
@@ -191,10 +204,10 @@ body {
    =========================== */
 
 .glass {
-  background: rgba(var(--glass-base-rgb), 0.02);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(var(--glass-base-rgb), 0.06);
+  border: 1px solid var(--glass-border);
   overflow: hidden;
 }
 
@@ -223,17 +236,17 @@ body {
 }
 
 .glass-strong {
-  background: rgba(var(--glass-base-rgb), 0.04);
+  background: var(--glass-strong-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(var(--glass-base-rgb), 0.08);
+  border: 1px solid var(--glass-strong-border);
 }
 
 .glass-subtle {
-  background: rgba(var(--glass-base-rgb), 0.01);
+  background: var(--glass-subtle-bg);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  border: 1px solid rgba(var(--glass-base-rgb), 0.04);
+  border: 1px solid var(--glass-subtle-border);
 }
 
 /* ===========================

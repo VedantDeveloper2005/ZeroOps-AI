@@ -17,36 +17,36 @@ interface NavGroup {
 
 const navGroups: Record<string, NavGroup> = {
   delivery: {
-    title: "App Delivery",
-    description: "Connect code repositories and track live Kubernetes pipelines.",
+    title: "Deploy",
+    description: "Connect your repositories and deploy your applications.",
     tabs: [
       { label: "Repositories", href: "/dashboard/repositories" },
       { label: "Deployments", href: "/dashboard/deployments" },
     ],
   },
   intelligence: {
-    title: "AI Intelligence",
-    description: "Autonomic tuning, security verification, and cost-saving insights.",
+    title: "Insights",
+    description: "AI analysis, security checks, and cost optimization.",
     tabs: [
       { label: "AI Insights", href: "/dashboard/ai-analysis" },
-      { label: "Security Center", href: "/dashboard/security" },
+      { label: "Security", href: "/dashboard/security" },
       { label: "Cost Savings", href: "/dashboard/cost-optimization" },
     ],
   },
   operations: {
-    title: "Operations & Observability",
-    description: "Real-time metrics, node topology, scaling policies, and log streams.",
+    title: "Monitor",
+    description: "Health, performance, and live logs for your applications.",
     tabs: [
-      { label: "Metrics", href: "/dashboard/monitoring" },
+      { label: "Health", href: "/dashboard/monitoring" },
       { label: "Topology", href: "/dashboard/infrastructure" },
-      { label: "Autoscaling", href: "/dashboard/autoscaling" },
+      { label: "Scaling", href: "/dashboard/autoscaling" },
       { label: "Incidents", href: "/dashboard/incidents" },
-      { label: "Live Logs", href: "/dashboard/logs" },
+      { label: "Logs", href: "/dashboard/logs" },
     ],
   },
   settings: {
-    title: "System Preferences",
-    description: "Manage CLI access tokens, subscription plans, and credentials.",
+    title: "Settings",
+    description: "Account, integrations, and configuration.",
     tabs: [
       { label: "General", href: "/dashboard/settings" },
       { label: "Billing", href: "/dashboard/billing" },

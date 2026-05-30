@@ -1,14 +1,13 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink, Trash2, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink, Trash2, Eye, EyeOff, AlertTriangle, Sparkles, Shield, Zap, Globe, ChevronDown, ChevronUp } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 import { useRouter } from "next/navigation";
 import { api, type Project, type GitHubRepoItem } from "@/lib/api";
-import { ArchitectureDiagram } from "@/components/dashboard/ArchitectureDiagram";
 
 
 const frameworkColors: Record<string, string> = {
@@ -76,6 +75,33 @@ function calculateReadinessScore(repo: GitHubRepoItem): number {
   return Math.min(100, score);
 }
 
+function ReadinessCircle({ score }: { score: number }) {
+  const radius = 18;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+  const color = score >= 90 ? "text-success" : score >= 80 ? "text-warning" : "text-danger";
+  const strokeColor = score >= 90 ? "var(--success)" : score >= 80 ? "var(--warning)" : "var(--danger)";
+
+  return (
+    <div className="relative w-12 h-12 flex-shrink-0">
+      <svg className="w-12 h-12 -rotate-90" viewBox="0 0 44 44">
+        <circle cx="22" cy="22" r={radius} fill="none" stroke="var(--border)" strokeWidth="3" />
+        <motion.circle
+          cx="22" cy="22" r={radius} fill="none"
+          stroke={strokeColor} strokeWidth="3" strokeLinecap="round"
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          style={{ strokeDasharray: circumference }}
+        />
+      </svg>
+      <span className={`absolute inset-0 flex items-center justify-center text-[10px] font-bold ${color}`}>
+        {score}%
+      </span>
+    </div>
+  );
+}
+
 export default function RepositoriesPage() {
   const router = useRouter();
   const { user, loginWithGitHub } = useAuth();
@@ -111,7 +137,10 @@ export default function RepositoriesPage() {
   const [deployMode, setDeployMode] = useState("standard");
   const [detectedFramework, setDetectedFramework] = useState("Next.js");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showScanLogs, setShowScanLogs] = useState(false);
 
+  // AI scan checklist state
+  const [scanChecklist, setScanChecklist] = useState<{ label: string; done: boolean }[]>([]);
 
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -191,7 +220,29 @@ export default function RepositoriesPage() {
     }
   }, [isGitHubConnected, hasDeployed, loadRepos]);
 
-  // Repository scanning progressive logs
+  // AI Scan checklist animation
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setScanChecklist([]);
+      return;
+    }
+    const items = [
+      "Framework detected",
+      "Runtime identified",
+      "Build process analyzed",
+      "Dependencies scanned",
+      "Deployment strategy generated",
+    ];
+    setScanChecklist(items.map(label => ({ label, done: false })));
+    
+    items.forEach((_, idx) => {
+      setTimeout(() => {
+        setScanChecklist(prev => prev.map((item, i) => i <= idx ? { ...item, done: true } : item));
+      }, 1000 + idx * 1200);
+    });
+  }, [isAnalyzing]);
+
+  // Repository scanning progressive logs (kept for technical view)
   useEffect(() => {
     if (!isAnalyzing) {
       setScanLogs([]);
@@ -453,19 +504,22 @@ export default function RepositoriesPage() {
       <div className="space-y-6 max-w-4xl mx-auto">
         {/* Onboarding Wizard Header */}
         <div className="text-center space-y-2 mb-8 animate-fade-in">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[10px] font-bold uppercase tracking-wider mb-3">
+            <Sparkles size={12} /> AI-Powered Deployment
+          </div>
           <h1 className="text-3xl font-extrabold text-foreground tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-foreground to-foreground-muted">
-            Onboarding Wizard
+            Deploy Your Application
           </h1>
           <p className="text-sm text-foreground-muted">
-            Set up your workspace and launch your first autonomic cloud deployment.
+            Connect your GitHub repository and let AI handle the rest.
           </p>
           
           {/* Progress Indicators (3 Steps) */}
           <div className="flex items-center justify-center gap-2 pt-6 max-w-xl mx-auto overflow-x-auto no-scrollbar">
             {[
-              { id: 1, label: "Select Repo & Branch" },
-              { id: 2, label: "AI Scan & Architecture" },
-              { id: 3, label: "Review & Deploy" },
+              { id: 1, label: "Choose Repository" },
+              { id: 2, label: "AI Analysis" },
+              { id: 3, label: "Deploy" },
             ].map((step, idx) => (
               <div key={step.id} className="flex items-center flex-1 min-w-[120px]">
                 <div className="flex flex-col items-center gap-1.5 flex-1">
@@ -548,14 +602,16 @@ export default function RepositoriesPage() {
             transition={{ duration: 0.25 }}
             className="glass rounded-2xl border border-border/40 p-6 md:p-8 shadow-2xl space-y-6"
           >
-            {/* STEP 1: SELECT REPOSITORY */}
+            {/* ═══════════════════════════════════════════
+                STEP 1: CHOOSE REPOSITORY
+                ═══════════════════════════════════════════ */}
             {onboardStep === 1 && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-border/40 pb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Select Repository</h3>
+                    <h3 className="text-lg font-bold text-foreground">Choose Repository</h3>
                     <p className="text-xs text-foreground-muted">
-                      Select the project codebase you wish to configure and deploy.
+                      Select the project you want to deploy. AI will analyze it automatically.
                     </p>
                   </div>
                   <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-success border border-success/20 font-medium">
@@ -576,20 +632,16 @@ export default function RepositoriesPage() {
                 </div>
 
                 {isLoadingRepos ? (
-                  <div className="grid md:grid-cols-3 gap-3">
-                    {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div className="grid md:grid-cols-2 gap-3">
+                    {[1, 2, 3, 4].map((i) => (
                       <div key={i} className="p-4 rounded-xl border border-border bg-card/40 space-y-3 animate-pulse">
                         <div className="flex items-center justify-between">
                           <div className="h-4 bg-background-secondary rounded w-24" />
-                          <div className="h-4 bg-background-secondary rounded-full w-12" />
+                          <div className="h-10 w-10 bg-background-secondary rounded-full" />
                         </div>
                         <div className="space-y-1.5">
                           <div className="h-3 bg-background-secondary rounded w-full" />
                           <div className="h-3 bg-background-secondary rounded w-2/3" />
-                        </div>
-                        <div className="flex items-center justify-between pt-2">
-                          <div className="h-3 bg-background-secondary rounded w-10" />
-                          <div className="h-3 bg-background-secondary rounded w-14" />
                         </div>
                       </div>
                     ))}
@@ -609,9 +661,11 @@ export default function RepositoriesPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid md:grid-cols-3 gap-3 max-h-[320px] overflow-y-auto pr-1">
+                    <div className="grid md:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
                       {gitRepos.map((repo) => {
                         const readiness = calculateReadinessScore(repo);
+                        const fw = detectFramework(repo.language);
+                        const isSelected = selectedRepo === repo.full_name;
                         return (
                           <motion.div
                             key={repo.id}
@@ -619,57 +673,53 @@ export default function RepositoriesPage() {
                             animate={{ opacity: 1, y: 0 }}
                             onClick={() => {
                               setSelectedRepo(repo.full_name);
-                              setDetectedFramework(detectFramework(repo.language));
+                              setDetectedFramework(fw);
                             }}
                             className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
-                              selectedRepo === repo.full_name
+                              isSelected
                                 ? "bg-primary-subtle/20 border-primary shadow-lg scale-[1.01] bg-gradient-to-b from-card to-primary-subtle/5"
                                 : "bg-card border-border hover:bg-card-hover hover:border-border/80"
                             }`}
                           >
-                            <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
-                              <span className="font-semibold text-xs text-foreground truncate max-w-[130px]">
-                                {repo.name}
-                              </span>
-                              <div className="flex items-center gap-1.5">
-                                {repo.private && (
-                                  <Lock size={10} className="text-foreground-muted" />
-                                )}
-                                {repo.language && (
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-foreground-muted font-medium">
-                                    {repo.language}
+                            <div className="flex items-start justify-between gap-3">
+                              {/* Left: Repo info */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="font-semibold text-sm text-foreground truncate">
+                                    {repo.name}
                                   </span>
+                                  {repo.private && (
+                                    <Lock size={10} className="text-foreground-muted flex-shrink-0" />
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-foreground-muted line-clamp-1 mb-2.5">
+                                  {repo.description || "No description provided."}
+                                </p>
+
+                                {/* Framework badge + metadata */}
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${frameworkColors[fw] || "bg-white/10 text-foreground-muted"}`}>
+                                    {fw} detected
+                                  </span>
+                                  {readiness >= 90 && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-success/15 text-success border border-success/20 font-bold flex items-center gap-0.5">
+                                      <Check size={8} /> Ready
+                                    </span>
+                                  )}
+                                  <span className="text-[9px] text-foreground-muted">
+                                    {timeAgo(repo.updated_at)}
+                                  </span>
+                                </div>
+
+                                {readiness >= 90 && (
+                                  <p className="text-[9px] text-success/70 mt-1.5 font-medium">
+                                    No configuration required
+                                  </p>
                                 )}
                               </div>
-                            </div>
-                            <p className="text-[11px] text-foreground-muted line-clamp-2 min-h-[28px]">
-                              {repo.description || "No description provided."}
-                            </p>
 
-                            <div className="mt-2.5 flex items-center justify-between">
-                              <span className="text-[10px] text-foreground-muted">Readiness:</span>
-                              <div className="flex items-center gap-1.5">
-                                <div className="h-1.5 w-12 bg-background-secondary rounded-full overflow-hidden border border-border/40">
-                                  <div
-                                    className={`h-full rounded-full ${
-                                      readiness >= 90 ? "bg-success" : readiness >= 80 ? "bg-warning" : "bg-danger"
-                                    }`}
-                                    style={{ width: `${readiness}%` }}
-                                  />
-                                </div>
-                                <span className={`text-[10px] font-bold ${
-                                  readiness >= 90 ? "text-success" : readiness >= 80 ? "text-warning" : "text-danger"
-                                }`}>
-                                  {readiness}%
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border/20 text-[9px] text-foreground-muted">
-                              <span className="flex items-center gap-0.5">
-                                <Star size={9} /> {repo.stargazers_count}
-                              </span>
-                              <span>{timeAgo(repo.updated_at)}</span>
+                              {/* Right: Readiness circle */}
+                              <ReadinessCircle score={readiness} />
                             </div>
                           </motion.div>
                         );
@@ -695,30 +745,27 @@ export default function RepositoriesPage() {
                   </>
                 )}
 
-                {/* Branch Selection Panel (if repo selected) */}
+                {/* Branch Selection Panel */}
                 {selectedRepo && (
                   <motion.div 
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="p-4 rounded-xl border border-primary/20 bg-primary-subtle/5 space-y-3"
+                    className="p-4 rounded-xl border border-primary/20 bg-primary-subtle/5 flex items-center justify-between gap-4"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <GitBranch size={16} className="text-primary animate-pulse" />
-                        <span className="text-xs font-semibold text-foreground">Target Branch Selection</span>
-                      </div>
-                      <span className="text-[10px] font-mono text-primary font-bold">{selectedRepo}</span>
+                    <div className="flex items-center gap-2">
+                      <GitBranch size={14} className="text-primary" />
+                      <span className="text-xs font-semibold text-foreground">Branch</span>
                     </div>
-                    <div>
+                    <div className="flex-1 max-w-[200px]">
                       {isLoadingBranches ? (
-                        <div className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground-muted flex items-center gap-2">
-                          <Loader2 size={12} className="animate-spin text-primary" /> Loading branches...
+                        <div className="bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground-muted flex items-center gap-2">
+                          <Loader2 size={12} className="animate-spin text-primary" /> Loading...
                         </div>
                       ) : (
                         <select
                           value={selectedBranch}
                           onChange={(e) => setSelectedBranch(e.target.value)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-mono"
+                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-mono"
                         >
                           {availableBranches.map((b) => (
                             <option key={b} value={b}>{b}</option>
@@ -735,98 +782,141 @@ export default function RepositoriesPage() {
                     onClick={() => setOnboardStep(2)}
                     className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
                   >
-                    Next <ArrowRight size={14} />
+                    Continue <ArrowRight size={14} />
                   </button>
                 </div>
               </div>
             )}
 
 
-            {/* STEP 2: AI CODE SCAN & ARCHITECTURE */}
+            {/* ═══════════════════════════════════════════
+                STEP 2: AI ANALYSIS
+                ═══════════════════════════════════════════ */}
             {onboardStep === 2 && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-border/40 pb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">AI Scan & Architecture</h3>
+                    <h3 className="text-lg font-bold text-foreground">AI Analysis</h3>
                     <p className="text-xs text-foreground-muted">
-                      ZeroOps AI is analyzing your repository structure and auto-compiling the deployment flow.
+                      ZeroOps AI is understanding your project to configure the best deployment.
                     </p>
                   </div>
                   <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
-                    {selectedRepo} @ {selectedBranch}
+                    {selectedRepo.split("/").pop()}
                   </span>
                 </div>
 
                 {isAnalyzing ? (
-                  <div className="relative overflow-hidden bg-card border border-border rounded-2xl p-8 text-center space-y-6 shadow-xl">
-                    <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse" />
-                    <div className="relative mx-auto w-16 h-16 flex items-center justify-center bg-primary/10 border border-primary/20 rounded-full animate-bounce">
-                      <Brain size={28} className="text-primary animate-pulse" />
-                      <Loader2 size={64} className="absolute animate-spin text-primary/40" />
-                    </div>
-                    <div className="space-y-4 relative">
-                      <div>
-                        <h4 className="text-sm font-bold text-foreground">Analyzing Repository via GPT-4.1</h4>
-                        <p className="text-xs text-foreground-muted">
-                          GitHub Models is scanning files and structure for deployment architecture.
-                        </p>
+                  <div className="space-y-6">
+                    {/* AI Understanding experience */}
+                    <div className="relative overflow-hidden bg-card border border-border rounded-2xl p-8 shadow-xl">
+                      <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse" />
+                      
+                      {/* Centered AI icon */}
+                      <div className="relative flex justify-center mb-6">
+                        <div className="w-14 h-14 flex items-center justify-center bg-primary/10 border border-primary/20 rounded-full">
+                          <Brain size={24} className="text-primary animate-pulse" />
+                        </div>
                       </div>
-                      <div className="text-[11px] text-foreground-muted font-mono max-w-lg mx-auto bg-zinc-950 p-4 rounded-xl border border-border/60 text-left space-y-2 max-h-[160px] overflow-y-auto no-scrollbar shadow-inner">
-                        {scanLogs.map((log, index) => (
-                          <div key={index} className="flex items-center gap-2 animate-fade-in">
-                            <span className="text-primary select-none font-bold">›</span>
-                            <span>{log}</span>
-                            {index === scanLogs.length - 1 && (
-                              <span className="w-1.5 h-3 bg-primary animate-ping" />
-                            )}
-                          </div>
+                      
+                      <div className="relative text-center mb-6">
+                        <h4 className="text-sm font-bold text-foreground">Understanding your project...</h4>
+                        <p className="text-xs text-foreground-muted mt-1">This usually takes a few seconds</p>
+                      </div>
+
+                      {/* Animated Checklist */}
+                      <div className="relative max-w-sm mx-auto space-y-3">
+                        {scanChecklist.map((item, idx) => (
+                          <motion.div
+                            key={idx}
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: idx * 0.15 }}
+                            className="flex items-center gap-3 text-xs"
+                          >
+                            <div className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-500 ${
+                              item.done 
+                                ? "bg-success/15 border border-success/30" 
+                                : "bg-card border border-border"
+                            }`}>
+                              {item.done ? (
+                                <Check size={12} className="text-success" />
+                              ) : (
+                                <Loader2 size={10} className="text-foreground-muted animate-spin" />
+                              )}
+                            </div>
+                            <span className={`font-medium transition-colors duration-300 ${
+                              item.done ? "text-foreground" : "text-foreground-muted"
+                            }`}>
+                              {item.done ? "✓" : "·"} {item.label}
+                            </span>
+                          </motion.div>
                         ))}
                       </div>
+
+                      {/* Technical logs toggle */}
+                      <div className="relative mt-6 flex justify-center">
+                        <button
+                          onClick={() => setShowScanLogs(prev => !prev)}
+                          className="text-[10px] text-foreground-muted hover:text-foreground flex items-center gap-1 transition cursor-pointer"
+                        >
+                          {showScanLogs ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          {showScanLogs ? "Hide technical logs" : "View technical logs"}
+                        </button>
+                      </div>
+
+                      <AnimatePresence>
+                        {showScanLogs && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="relative mt-3 overflow-hidden"
+                          >
+                            <div className="text-[11px] text-foreground-muted font-mono bg-zinc-950 p-4 rounded-xl border border-border/60 text-left space-y-2 max-h-[140px] overflow-y-auto no-scrollbar shadow-inner">
+                              {scanLogs.map((log, index) => (
+                                <div key={index} className="flex items-center gap-2 animate-fade-in">
+                                  <span className="text-primary select-none font-bold">›</span>
+                                  <span>{log}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-6 animate-fade-in">
-                    {/* Plain English Explanation */}
-                    <div className="glass rounded-xl p-5 border border-primary/20 bg-gradient-to-r from-primary/5 to-transparent space-y-2">
-                      <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
-                        <Brain size={14} className="text-primary animate-pulse" /> Explain This Project
-                      </h4>
-                      <p className="text-xs text-foreground-muted leading-relaxed">
+                    {/* Conversational AI Project Summary */}
+                    <div className="glass rounded-xl p-6 border border-primary/20 bg-gradient-to-r from-primary/5 to-transparent space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
+                          <Brain size={14} className="text-primary" />
+                        </div>
+                        <h4 className="text-xs font-bold text-primary uppercase tracking-wider">AI Project Summary</h4>
+                      </div>
+                      <p className="text-sm text-foreground leading-relaxed">
                         {analysisResult?.explanation}
                       </p>
                     </div>
 
-                    {/* AI Architecture Diagram */}
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                        Autonomic System Architecture
-                      </h4>
-                      <ArchitectureDiagram 
-                        repo={selectedRepo}
-                        branch={selectedBranch}
-                        framework={analysisResult?.framework || detectedFramework}
-                        runtime={analysisResult?.runtime || "Node.js 20"}
-                        database={analysisResult?.databaseDependencies?.[0] || "None"}
-                        liveUrl={`https://${selectedRepo.split("/").pop() || "app"}.zeroops.dev`}
-                      />
-                    </div>
-
-                    {/* AI Project Summary Grid */}
+                    {/* AI Confidence + Recommendation */}
                     <div className="grid md:grid-cols-3 gap-4">
-                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Framework & Runtime</p>
-                        <p className="text-xs font-semibold text-foreground">{analysisResult?.framework} ({analysisResult?.language})</p>
-                        <p className="text-[10px] text-foreground-muted mt-0.5">{analysisResult?.runtime}</p>
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Your App</p>
+                        <p className="text-sm font-bold text-foreground">{analysisResult?.framework}</p>
+                        <p className="text-[10px] text-foreground-muted">{analysisResult?.language} · {analysisResult?.runtime}</p>
                       </div>
-                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Deployment Target</p>
-                        <p className="text-xs font-semibold text-foreground">{analysisResult?.deploymentStrategy}</p>
-                        <p className="text-[10px] text-foreground-muted mt-0.5">Azure Isolated Containers</p>
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Where It Will Run</p>
+                        <p className="text-sm font-bold text-foreground">{analysisResult?.deploymentStrategy}</p>
+                        <p className="text-[10px] text-foreground-muted">Recommended by AI</p>
                       </div>
-                      <div className="glass rounded-xl p-4 border border-border/60 space-y-1 bg-card/40">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Est. Deploy Time</p>
-                        <p className="text-xs font-semibold text-success font-mono">~2 minutes</p>
-                        <p className="text-[10px] text-foreground-muted mt-0.5">Recommended Env: Production</p>
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Time to Go Live</p>
+                        <p className="text-sm font-bold text-success font-mono">~2 minutes</p>
+                        <p className="text-[10px] text-foreground-muted">Production environment</p>
                       </div>
                     </div>
 
@@ -834,7 +924,7 @@ export default function RepositoriesPage() {
                     {analysisResult?.vulnerabilities?.length > 0 && (
                       <div className="p-4 rounded-xl border border-warning/20 bg-warning/5 space-y-2 animate-fade-in">
                         <p className="text-xs font-semibold text-warning flex items-center gap-1.5">
-                          <AlertTriangle size={14} /> Security Recommendations
+                          <AlertTriangle size={14} /> Things to Review
                         </p>
                         <ul className="list-disc pl-4 space-y-1 text-[11px] text-foreground-muted">
                           {analysisResult.vulnerabilities.map((v: string, idx: number) => (
@@ -858,21 +948,23 @@ export default function RepositoriesPage() {
                     onClick={() => setOnboardStep(3)}
                     className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
                   >
-                    Next <ArrowRight size={14} />
+                    Continue <ArrowRight size={14} />
                   </button>
                 </div>
               </div>
             )}
 
 
-            {/* STEP 3: REVIEW & LAUNCH */}
+            {/* ═══════════════════════════════════════════
+                STEP 3: DEPLOY
+                ═══════════════════════════════════════════ */}
             {onboardStep === 3 && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-border/40 pb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Review & Launch Deployment</h3>
+                    <h3 className="text-lg font-bold text-foreground">Deploy</h3>
                     <p className="text-xs text-foreground-muted">
-                      Configure environment variables and target cloud options to start your autonomic delivery pipeline.
+                      AI has configured the optimal deployment. Review and launch.
                     </p>
                   </div>
                   <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-success border border-success/20 font-medium">
@@ -880,156 +972,129 @@ export default function RepositoriesPage() {
                   </span>
                 </div>
 
-                <div className="grid md:grid-cols-3 gap-6">
-                  {/* Left Section: Environment Variables and Scaling */}
-                  <div className="md:col-span-2 space-y-6">
-                    {/* Env Var Form */}
-                    <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
-                      <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
-                        Configure Environment Variables
+                {/* AI Deployment Plan — main content */}
+                <div className="grid md:grid-cols-5 gap-6">
+                  {/* Left: AI Plan + Env Vars */}
+                  <div className="md:col-span-3 space-y-6">
+                    {/* AI Deployment Plan Card */}
+                    <div className="glass rounded-xl p-5 border border-primary/15 bg-gradient-to-b from-primary/5 to-transparent space-y-4">
+                      <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
+                        <Brain size={14} /> AI Deployment Plan
                       </h4>
-                      <div className="grid md:grid-cols-3 gap-3 items-end">
-                        <div className="space-y-1.5">
-                          <label className="block text-[10px] font-semibold text-foreground-muted">Key</label>
-                          <input
-                            type="text"
-                            value={newEnvKey}
-                            onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
-                            placeholder="e.g. DATABASE_URL"
-                            className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
-                          />
+                      <div className="space-y-2.5 text-xs">
+                        {[
+                          { label: "Deployment Target", value: analysisResult?.deploymentStrategy || "Azure App Service" },
+                          { label: "Runtime", value: analysisResult?.runtime || "Node.js 22" },
+                          { label: "Environment", value: "Production" },
+                          { label: "SSL", value: "Included", check: true },
+                          { label: "Scaling", value: "Automatic", check: true },
+                          { label: "Estimated Cost", value: "Free Tier Eligible", highlight: true },
+                        ].map((row) => (
+                          <div key={row.label} className="flex items-center justify-between py-2 border-b border-border/20 last:border-0">
+                            <span className="text-foreground-muted">{row.label}</span>
+                            <span className={`font-semibold flex items-center gap-1 ${row.highlight ? "text-success" : row.check ? "text-success" : "text-foreground"}`}>
+                              {row.check && <Check size={12} />}
+                              {row.value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Environment Variables */}
+                    {(wizardEnvVars.length > 0 || analysisResult?.environmentVariables?.length > 0) && (
+                      <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
+                            Environment Variables
+                          </h4>
+                          {analysisResult?.environmentVariables?.length > 0 && (
+                            <span className="text-[9px] text-primary font-medium">AI detected these may be needed</span>
+                          )}
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="block text-[10px] font-semibold text-foreground-muted">Value</label>
-                          <input
-                            type="text"
-                            value={newEnvVal}
-                            onChange={(e) => setNewEnvVal(e.target.value)}
-                            placeholder="e.g. value_here"
-                            className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <label className="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer select-none pb-2">
+                        
+                        {/* Existing env var list */}
+                        {wizardEnvVars.length > 0 && (
+                          <div className="border border-border/60 rounded-xl overflow-hidden max-h-[140px] overflow-y-auto">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-background-secondary border-b border-border/60 text-foreground-muted font-semibold">
+                                  <th className="p-2.5">Key</th>
+                                  <th className="p-2.5">Value</th>
+                                  <th className="p-2.5 text-center w-12"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border/40 bg-card/20">
+                                {wizardEnvVars.map((v, idx) => (
+                                  <tr key={idx} className="hover:bg-card-hover/20">
+                                    <td className="p-2.5 font-mono font-semibold text-foreground truncate max-w-[120px]">{v.key}</td>
+                                    <td className="p-2.5 font-mono text-foreground-muted truncate max-w-[160px]">
+                                      {v.is_secret ? "••••••••" : v.value || "—"}
+                                    </td>
+                                    <td className="p-2.5 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setWizardEnvVars((prev) => prev.filter((_, i) => i !== idx));
+                                          addToast(`Removed ${v.key}`, "info");
+                                        }}
+                                        className="text-foreground-muted hover:text-danger transition-colors cursor-pointer"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {/* Add new env var */}
+                        <div className="flex gap-2 items-end">
+                          <div className="flex-1">
                             <input
-                              type="checkbox"
-                              checked={newEnvIsSecret}
-                              onChange={(e) => setNewEnvIsSecret(e.target.checked)}
-                              className="rounded border-border text-primary focus:ring-primary w-3.5 h-3.5 bg-card"
+                              type="text"
+                              value={newEnvKey}
+                              onChange={(e) => setNewEnvKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                              placeholder="KEY"
+                              className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
                             />
-                            Secret / Masked
-                          </label>
+                          </div>
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={newEnvVal}
+                              onChange={(e) => setNewEnvVal(e.target.value)}
+                              placeholder="value"
+                              className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted font-mono"
+                            />
+                          </div>
                           <button
                             type="button"
                             onClick={() => {
-                              if (!newEnvKey.trim()) {
-                                addToast("Variable Key cannot be empty.", "warning");
-                                return;
-                              }
-                              if (wizardEnvVars.some((v) => v.key === newEnvKey.trim())) {
-                                addToast(`Variable '${newEnvKey}' already added.`, "warning");
-                                return;
-                              }
-                              setWizardEnvVars((prev) => [
-                                ...prev,
-                                { key: newEnvKey.trim(), value: newEnvVal, is_secret: newEnvIsSecret },
-                              ]);
-                              setNewEnvKey("");
-                              setNewEnvVal("");
-                              setNewEnvIsSecret(false);
+                              if (!newEnvKey.trim()) { addToast("Variable Key cannot be empty.", "warning"); return; }
+                              if (wizardEnvVars.some((v) => v.key === newEnvKey.trim())) { addToast(`Variable '${newEnvKey}' already added.`, "warning"); return; }
+                              setWizardEnvVars((prev) => [...prev, { key: newEnvKey.trim(), value: newEnvVal, is_secret: newEnvIsSecret }]);
+                              setNewEnvKey(""); setNewEnvVal(""); setNewEnvIsSecret(false);
                               addToast("Environment variable added.", "success");
                             }}
-                            className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm h-[34px] mb-[1px]"
+                            className="px-3 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition cursor-pointer"
                           >
-                            <Plus size={14} /> Add
+                            <Plus size={14} />
                           </button>
                         </div>
                       </div>
-                    </div>
-
-                    {/* Env Var List */}
-                    {wizardEnvVars.length > 0 && (
-                      <div className="border border-border/60 rounded-xl overflow-hidden max-h-[160px] overflow-y-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-background-secondary border-b border-border/60 text-foreground-muted font-semibold">
-                              <th className="p-3">Key</th>
-                              <th className="p-3">Value</th>
-                              <th className="p-3 text-center">Type</th>
-                              <th className="p-3 text-center w-12">Action</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border/40 bg-card/20">
-                            {wizardEnvVars.map((v, idx) => (
-                              <tr key={idx} className="hover:bg-card-hover/20">
-                                <td className="p-3 font-mono font-semibold text-foreground truncate max-w-[150px]">{v.key}</td>
-                                <td className="p-3 font-mono text-foreground-muted truncate max-w-[200px]">
-                                  {v.is_secret ? "••••••••" : v.value || "—"}
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-[9px] font-semibold border ${
-                                    v.is_secret
-                                      ? "bg-warning/10 border-warning/20 text-warning"
-                                      : "bg-success/10 border-success/20 text-success"
-                                  }`}>
-                                    {v.is_secret ? "Secret" : "Plaintext"}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setWizardEnvVars((prev) => prev.filter((_, i) => i !== idx));
-                                      addToast(`Removed ${v.key}`, "info");
-                                    }}
-                                    className="text-foreground-muted hover:text-danger transition-colors cursor-pointer"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
                     )}
 
-                    {/* Regional Targeting */}
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Target Azure Region</label>
-                        <select
-                          value={region}
-                          onChange={(e) => setRegion(e.target.value)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                        >
-                          <option value="eastus">East US (Virginia)</option>
-                          <option value="westus2">West US 2 (Washington)</option>
-                          <option value="westeurope">West Europe (Amsterdam)</option>
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="block text-xs font-semibold text-foreground-muted">Deployment Mode</label>
-                        <select
-                          value={deployMode}
-                          onChange={(e) => setDeployMode(e.target.value)}
-                          className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
-                        >
-                          <option value="standard">Rolling Update (Zero Downtime)</option>
-                          <option value="canary">Canary Release (10% Split)</option>
-                          <option value="bluegreen">Blue/Green Deploy</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Collapsible Advanced Settings (Kubernetes Scaling) */}
+                    {/* Advanced Settings (collapsed) */}
                     <div className="border border-border/40 rounded-xl overflow-hidden bg-card/20">
                       <button
                         type="button"
                         onClick={() => setShowAdvanced(!showAdvanced)}
-                        className="w-full p-4 flex items-center justify-between text-xs font-bold text-foreground hover:bg-card-hover/40 transition-colors"
+                        className="w-full p-4 flex items-center justify-between text-xs font-bold text-foreground-muted hover:bg-card-hover/40 transition-colors"
                       >
-                        <span>Advanced Infrastructure Settings</span>
+                        <span>Advanced Settings</span>
                         <span className="text-[10px] text-primary">{showAdvanced ? "Hide" : "Show"}</span>
                       </button>
                       
@@ -1037,41 +1102,58 @@ export default function RepositoriesPage() {
                         <div className="p-4 border-t border-border/40 space-y-4 bg-zinc-950/20">
                           <div className="grid md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
-                              <label className="block text-xs font-semibold text-foreground-muted">Min Pod Replicas</label>
+                              <label className="block text-xs font-semibold text-foreground-muted">Region</label>
+                              <select
+                                value={region}
+                                onChange={(e) => setRegion(e.target.value)}
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                              >
+                                <option value="eastus">East US (Virginia)</option>
+                                <option value="westus2">West US 2 (Washington)</option>
+                                <option value="westeurope">West Europe (Amsterdam)</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="block text-xs font-semibold text-foreground-muted">Deployment Strategy</label>
+                              <select
+                                value={deployMode}
+                                onChange={(e) => setDeployMode(e.target.value)}
+                                className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer"
+                              >
+                                <option value="standard">Rolling Update (Zero Downtime)</option>
+                                <option value="canary">Canary Release (10% Split)</option>
+                                <option value="bluegreen">Blue/Green Deploy</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <label className="block text-xs font-semibold text-foreground-muted">Min Replicas</label>
                               <input
-                                type="number"
-                                min="1"
-                                max="10"
-                                value={minReplicas}
+                                type="number" min="1" max="10" value={minReplicas}
                                 onChange={(e) => setMinReplicas(parseInt(e.target.value) || 1)}
                                 className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
                               />
                             </div>
                             <div className="space-y-1.5">
-                              <label className="block text-xs font-semibold text-foreground-muted">Max Pod Replicas</label>
+                              <label className="block text-xs font-semibold text-foreground-muted">Max Replicas</label>
                               <input
-                                type="number"
-                                min="1"
-                                max="50"
-                                value={maxReplicas}
+                                type="number" min="1" max="50" value={maxReplicas}
                                 onChange={(e) => setMaxReplicas(parseInt(e.target.value) || 10)}
                                 className="w-full bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
                               />
                             </div>
-                          </div>
-                          <div className="text-[11px] text-foreground-muted leading-relaxed">
-                            ZeroOps configures Horizontal Pod Autoscalers (HPA) to scale between {minReplicas} and {maxReplicas} replicas, triggered dynamically at 70% CPU utilization.
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Right Section: Deployment Review Summary */}
-                  <div className="glass rounded-xl p-5 border border-border bg-gradient-to-b from-primary/5 to-accent/5 space-y-4 flex flex-col justify-between shadow-md">
+                  {/* Right: Deployment Summary + Launch */}
+                  <div className="md:col-span-2 glass rounded-xl p-5 border border-border bg-gradient-to-b from-primary/5 to-accent/5 space-y-4 flex flex-col justify-between shadow-md h-fit">
                     <div className="space-y-3">
                       <h4 className="text-xs font-bold text-primary uppercase tracking-wider">
-                        Source Code & Target
+                        Deployment Summary
                       </h4>
                       <div className="space-y-2.5 text-xs">
                         <div className="border-b border-border/40 pb-2">
@@ -1087,7 +1169,7 @@ export default function RepositoriesPage() {
                           <p className="mt-0.5 font-semibold text-foreground">{analysisResult?.framework}</p>
                         </div>
                         <div>
-                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Est. Deployment Time</p>
+                          <p className="text-[9px] font-bold text-foreground-muted uppercase">Estimated Time</p>
                           <p className="mt-0.5 font-semibold text-success font-mono">~2 minutes</p>
                         </div>
                       </div>
@@ -1096,11 +1178,12 @@ export default function RepositoriesPage() {
                     <div className="pt-4 border-t border-border/40">
                       <button
                         onClick={handleLaunchDeployment}
-                        className="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold transition glow-blue flex items-center justify-center gap-2 cursor-pointer"
+                        className="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-bold transition glow-blue flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <Rocket size={14} />
-                        Launch Deployment
+                        <Rocket size={16} />
+                        Deploy Now
                       </button>
+                      <p className="text-[10px] text-foreground-muted text-center mt-2">Estimated: ~2 min to go live</p>
                     </div>
                   </div>
                 </div>
