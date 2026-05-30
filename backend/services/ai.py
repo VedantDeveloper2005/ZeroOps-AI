@@ -233,7 +233,11 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         "build_commands": build_commands,
         "start_commands": start_commands,
         "environment_variables": environment_variables,
-        "explanation": f"This is a {framework} application built with {language}. It utilizes {package_manager} for package management and dependencies. ZeroOps AI has configured high-availability container delivery on Azure App Service with auto-scaling limits."
+        "explanation": f"This is a {framework} application built with {language}. It utilizes {package_manager} for package management and dependencies. ZeroOps AI has configured high-availability container delivery on Azure App Service with auto-scaling limits.",
+        "recommended_compute_tier": "Azure App Service B1",
+        "estimated_cost": "$13/month",
+        "recommended_region": "Central India",
+        "expected_traffic": "50,000 requests/month"
     }
 
 
@@ -334,6 +338,10 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
     22. "dockerfile": Recommended or actual Dockerfile contents (string)
     23. "kubernetes_manifest": Recommended Kubernetes manifests in YAML (string), making sure all resource metadata elements specify the target namespace 'zeroops-{{project_id}}', environment variables are injected via envFrom from secretRef 'project-secrets', ingress is configured with class 'nginx', tls host '{{project_id}}.zeroops.dev', and cert-manager annotation cluster-issuer 'letsencrypt-prod'.
     24. "explanation": A plain English summary (2-3 sentences) explaining what this codebase is and what it does based on the file list and package files (e.g. 'This is a Next.js web application built with TypeScript...').
+    25. "recommended_compute_tier": Recommended Azure compute tier (e.g., "Azure App Service B1", "Azure App Service B2", "Azure Container Apps Basic")
+    26. "estimated_cost": Recommended monthly cost estimation as string (e.g., "$13/month", "$26/month")
+    27. "recommended_region": Recommended Azure region close to major traffic (e.g., "Central India", "East US", "West Europe")
+    28. "expected_traffic": Expected traffic tier for the recommended compute setup as string (e.g., "50,000 requests/month", "100,000 requests/month")
     
     Respond ONLY with valid JSON. No markdown codeblocks, no extra explanation text.
     """

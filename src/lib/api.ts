@@ -255,6 +255,55 @@ export interface SecurityStatus {
   rbacEnabled: boolean;
 }
 
+export interface CustomDomain {
+  name: string;
+  default: boolean;
+  ssl: boolean;
+  dns_verified: boolean;
+  https_enabled: boolean;
+  created_at: string;
+}
+
+export interface ProjectMember {
+  email: string;
+  role: string;
+  name: string;
+  joined_at: string;
+}
+
+export interface ProjectActivity {
+  id: string;
+  project_id: string | null;
+  project_name?: string;
+  action: string;
+  details: string | null;
+  created_at: string;
+}
+
+export interface HealthScore {
+  score: number;
+  status: string;
+  breakdown: {
+    performance: number;
+    security: number;
+    reliability: number;
+    scalability: number;
+    cost: number;
+  };
+  recommendations: string[];
+}
+
+export interface CostOptimization {
+  current_cost: number;
+  recommended_cost: number;
+  savings: number;
+  recommendations: {
+    title: string;
+    description: string;
+    savings: number;
+  }[];
+}
+
 // ──────────────────────────────────────────────
 // API CLIENT
 // ──────────────────────────────────────────────
@@ -478,4 +527,62 @@ export const api = {
 
   getDeploymentFailureAnalysis: (deploymentId: string) =>
     request<FailureAnalysis>(`/api/deployments/${deploymentId}/failure-analysis`),
+
+  // ── Collaboration & Optimization Endpoints ──
+  getHealthScore: (projectId: string) =>
+    request<HealthScore>(`/api/projects/${projectId}/health-score`),
+
+  getCostOptimization: (projectId: string) =>
+    request<CostOptimization>(`/api/projects/${projectId}/cost-optimization`),
+
+  getProjectDomains: (projectId: string) =>
+    request<CustomDomain[]>(`/api/projects/${projectId}/domains`),
+
+  connectDomain: (projectId: string, name: string) =>
+    request<CustomDomain[]>(`/api/projects/${projectId}/domains`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  verifyDomain: (projectId: string, name: string) =>
+    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}/verify`, {
+      method: "POST",
+    }),
+
+  renewSSL: (projectId: string, name: string) =>
+    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}/renew-ssl`, {
+      method: "POST",
+    }),
+
+  removeDomain: (projectId: string, name: string) =>
+    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}`, {
+      method: "DELETE",
+    }),
+
+  getProjectMembers: (projectId: string) =>
+    request<ProjectMember[]>(`/api/projects/${projectId}/members`),
+
+  addMember: (projectId: string, email: string, role: string) =>
+    request<ProjectMember[]>(`/api/projects/${projectId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    }),
+
+  removeMember: (projectId: string, email: string) =>
+    request<ProjectMember[]>(`/api/projects/${projectId}/members/${email}`, {
+      method: "DELETE",
+    }),
+
+  getProjectActivity: (projectId: string) =>
+    request<ProjectActivity[]>(`/api/projects/${projectId}/activity`),
+
+  getGlobalActivity: () =>
+    request<ProjectActivity[]>("/api/activity"),
+
+  fixDeploymentAutomatically: (deployId: string) =>
+    request<{ status: string; message: string; deployment_id: string; project_id: string }>(
+      `/api/deployments/${deployId}/fix-auto`,
+      { method: "POST" }
+    ),
 };
+

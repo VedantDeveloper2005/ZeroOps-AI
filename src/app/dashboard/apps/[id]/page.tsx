@@ -5,24 +5,27 @@ import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   Globe, Clock, Cpu, HardDrive, ShieldCheck, ExternalLink,
-  Copy, RefreshCw, Terminal, Calendar, ArrowLeft, Brain,
-  Activity, CheckCircle2, ChevronRight, Zap, AlertTriangle, GitBranch
+  RefreshCw, Calendar, ArrowLeft, Brain,
+  Activity, ChevronRight, Zap, AlertTriangle, GitBranch
 } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useRouter } from "next/navigation";
-import { api, type Project, type Deployment, type AIAnalysis, type TelemetryMetric } from "@/lib/api";
+import { api, type Project, type Deployment, type AIAnalysis, type TelemetryMetric, type CustomDomain, type ProjectActivity, type HealthScore } from "@/lib/api";
 import { ArchitectureDiagram } from "@/components/dashboard/ArchitectureDiagram";
 import { liveUrlForProject, normalizeProjectId } from "@/lib/demo-runtime";
 
 export default function AppDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = React.use(params);
-  const { projects, addToast, refreshProjects } = useNotifications();
+  const { addToast } = useNotifications();
   const router = useRouter();
 
   const [project, setProject] = useState<Project | null>(null);
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [metrics, setMetrics] = useState<TelemetryMetric | null>(null);
+  const [domains, setDomains] = useState<CustomDomain[]>([]);
+  const [activities, setActivities] = useState<ProjectActivity[]>([]);
+  const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
   const [loading, setLoading] = useState(true);
   const [redeploying, setRedeploying] = useState(false);
 
@@ -32,22 +35,24 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
       const proj = await api.getProject(id);
       setProject(proj);
 
-      const [analysisData, depsData, metricsData] = await Promise.allSettled([
+      const [analysisData, depsData, metricsData, domainsData, activitiesData, scoreData] = await Promise.allSettled([
         api.getAIAnalysis(id),
         api.getDeployments(50),
-        api.getProjectMetrics(id)
+        api.getProjectMetrics(id),
+        api.getProjectDomains(id),
+        api.getProjectActivity(id),
+        api.getHealthScore(id)
       ]);
 
-      if (analysisData.status === "fulfilled") {
-        setAnalysis(analysisData.value);
-      }
+      if (analysisData.status === "fulfilled") setAnalysis(analysisData.value);
       if (depsData.status === "fulfilled") {
         const filtered = depsData.value.filter(d => d.project_id === id);
         setDeployments(filtered);
       }
-      if (metricsData.status === "fulfilled") {
-        setMetrics(metricsData.value);
-      }
+      if (metricsData.status === "fulfilled") setMetrics(metricsData.value);
+      if (domainsData.status === "fulfilled") setDomains(domainsData.value);
+      if (activitiesData.status === "fulfilled") setActivities(activitiesData.value);
+      if (scoreData.status === "fulfilled") setHealthScore(scoreData.value);
     } catch (err) {
       console.error("Failed to load project details:", err);
       addToast("Failed to load application details.", "error");
@@ -111,10 +116,27 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
 
   const pId = normalizeProjectId(project.full_name);
   const liveUrl = liveUrlForProject(pId);
-  const customDomain = `${pId}.zeroops.app`;
 
-  // Human friendly resource evaluation (CPU & Memory from telemetry metrics)
+  // Parse custom domain display
+  const primaryCustomDomain = domains.find(d => d.dns_verified);
+  const domainName = primaryCustomDomain ? primaryCustomDomain.name : `${project.name}.zeroops.dev`;
+  const isSslActive = primaryCustomDomain ? primaryCustomDomain.ssl : false;
+
   const isHealthy = project.status === "active" || project.latest_deployment_status === "running";
+
+  // Telemetry aggregates
+  const cpuVal = metrics?.cpu && metrics.cpu.length > 0 ? metrics.cpu[metrics.cpu.length - 1].value : 8;
+  const cpuStatus = cpuVal > 80 ? "Critical" : cpuVal > 50 ? "Moderate Load" : "Healthy";
+  const cpuColor = cpuVal > 80 ? "bg-danger" : cpuVal > 50 ? "bg-warning" : "bg-success";
+
+  const memVal = metrics?.memory && metrics.memory.length > 0 ? metrics.memory[metrics.memory.length - 1].value : 42;
+  const memStatus = memVal > 90 ? "Critical" : memVal > 70 ? "Warning" : "Stable";
+  const memColor = memVal > 90 ? "bg-danger" : memVal > 70 ? "bg-warning" : "bg-success";
+
+  const errRateStr = metrics?.error_rate || "0.0%";
+  const errVal = parseFloat(errRateStr.replace("%", "")) || 0.0;
+  const netStatus = errVal > 1.0 ? "Degraded" : "Excellent";
+  const netColor = errVal > 1.0 ? "bg-danger" : "bg-success";
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-12">
@@ -186,21 +208,23 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
             <div className="space-y-1">
               <p className="font-bold text-foreground-muted uppercase tracking-wider text-[9px]">Custom Domain Mapping</p>
               <div className="flex items-center gap-2 text-foreground">
-                <ShieldCheck size={14} className="text-success" />
-                <span className="font-mono truncate">{customDomain}</span>
-                <span className="text-[8px] bg-success/15 border border-success/30 text-success px-1.5 py-0.2 rounded-full font-bold uppercase">SSL Active</span>
+                <ShieldCheck size={14} className={isSslActive ? "text-success" : "text-foreground-muted"} />
+                <span className="font-mono truncate">{domainName}</span>
+                {isSslActive && (
+                  <span className="text-[8px] bg-success/15 border border-success/30 text-success px-1.5 py-0.2 rounded-full font-bold uppercase">SSL Active</span>
+                )}
               </div>
             </div>
             <div className="space-y-1">
               <p className="font-bold text-foreground-muted uppercase tracking-wider text-[9px]">Environment</p>
               <p className="font-semibold text-foreground flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Production
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Production
               </p>
             </div>
             <div className="space-y-1">
               <p className="font-bold text-foreground-muted uppercase tracking-wider text-[9px]">Version Tag</p>
               <p className="font-semibold text-foreground font-mono text-[11px] truncate">
-                {deployments[0]?.commit_sha ? `sha-${deployments[0].commit_sha.slice(0, 7)}` : "v1.2.0"}
+                {deployments[0]?.commit_sha ? `sha-${deployments[0].commit_sha.slice(0, 7)}` : "v1.0.0"}
               </p>
             </div>
           </div>
@@ -213,10 +237,14 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
               <Brain size={14} className="animate-pulse text-primary" /> AI Health Summary
             </h4>
             <div className="text-xs text-foreground-muted leading-relaxed font-medium space-y-2">
-              <p>Application is healthy. All autonomic liveness checks passed successfully.</p>
-              <p className="text-[11px] border-t border-border/20 pt-2 text-primary font-semibold flex items-center gap-1">
-                <Zap size={12} /> Next optimization: Enable static asset CDN.
+              <p>
+                Application health score: <span className="text-primary font-bold">{healthScore?.score || 94}/100</span> ({healthScore?.status || "Strong Reliability"}).
               </p>
+              {healthScore?.recommendations && healthScore.recommendations.length > 0 && (
+                <p className="text-[10px] border-t border-border/20 pt-2 text-primary font-semibold flex items-center gap-1 leading-normal">
+                  <Zap size={12} className="flex-shrink-0" /> {healthScore.recommendations[0]}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -231,11 +259,11 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
             <Cpu size={14} className="text-primary" />
           </div>
           <div>
-            <p className="text-lg font-bold text-foreground">Healthy</p>
-            <p className="text-[10px] text-foreground-muted mt-0.5">Your app has enough resources.</p>
+            <p className="text-lg font-bold text-foreground">{cpuStatus}</p>
+            <p className="text-[10px] text-foreground-muted mt-0.5">CPU footprint utilization is at {cpuVal}%.</p>
           </div>
           <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden border border-border/40">
-            <div className="h-full bg-success w-[12%]" />
+            <div className={`h-full ${cpuColor}`} style={{ width: `${Math.min(100, Math.max(5, cpuVal))}%` }} />
           </div>
         </div>
 
@@ -246,26 +274,26 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
             <HardDrive size={14} className="text-accent" />
           </div>
           <div>
-            <p className="text-lg font-bold text-foreground">Stable</p>
-            <p className="text-[10px] text-foreground-muted mt-0.5">Average footprint: {analysis?.memory_recommendation || "256Mi"}.</p>
+            <p className="text-lg font-bold text-foreground">{memStatus}</p>
+            <p className="text-[10px] text-foreground-muted mt-0.5">Active memory consumption is at {memVal}%.</p>
           </div>
           <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden border border-border/40">
-            <div className="h-full bg-success w-[34%]" />
+            <div className={`h-full ${memColor}`} style={{ width: `${Math.min(100, Math.max(5, memVal))}%` }} />
           </div>
         </div>
 
         {/* Network Bandwidth */}
         <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Bandwidth</span>
+            <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Network Health</span>
             <Activity size={14} className="text-success" />
           </div>
           <div>
-            <p className="text-lg font-bold text-foreground">Excellent</p>
-            <p className="text-[10px] text-foreground-muted mt-0.5">0.02% error rate over past 24h.</p>
+            <p className="text-lg font-bold text-foreground">{netStatus}</p>
+            <p className="text-[10px] text-foreground-muted mt-0.5">Error rate over 24h: {errRateStr}.</p>
           </div>
           <div className="h-1.5 bg-background-secondary rounded-full overflow-hidden border border-border/40">
-            <div className="h-full bg-success w-[99%]" />
+            <div className={`h-full ${netColor}`} style={{ width: `${Math.min(100, Math.max(5, 100 - errVal))}%` }} />
           </div>
         </div>
       </div>
@@ -347,24 +375,41 @@ export default function AppDetailsPage({ params }: { params: Promise<{ id: strin
         </div>
 
         {/* Right: Recent Operations Activity Feed */}
-        <div className="glass rounded-2xl border border-border/60 p-6 bg-card/20 space-y-4 shadow-sm">
-          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Recent Activity</h3>
-          <div className="space-y-4 text-xs">
-            <div className="border-l-2 border-primary pl-3 py-1 space-y-0.5">
-              <p className="font-bold text-foreground">Domain Mapped</p>
-              <p className="text-[10px] text-foreground-muted">Custom domain setup mapped successfully</p>
-              <span className="text-[9px] text-foreground-muted/60">2 hours ago</span>
-            </div>
-            <div className="border-l-2 border-success pl-3 py-1 space-y-0.5">
-              <p className="font-bold text-foreground">Self-Healing Event</p>
-              <p className="text-[10px] text-foreground-muted">App cluster health checks completed</p>
-              <span className="text-[9px] text-foreground-muted/60">12 hours ago</span>
-            </div>
-            <div className="border-l-2 border-accent pl-3 py-1 space-y-0.5">
-              <p className="font-bold text-foreground">Rollback System Verified</p>
-              <p className="text-[10px] text-foreground-muted">AI autonomic fallback routing configured</p>
-              <span className="text-[9px] text-foreground-muted/60">1 day ago</span>
-            </div>
+        <div className="glass rounded-2xl border border-border/60 p-6 bg-card/20 space-y-4 shadow-sm flex flex-col justify-between">
+          <div>
+            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider border-b border-border/40 pb-2 mb-3">Recent Activity</h3>
+            {activities.length > 0 ? (
+              <div className="space-y-4 text-xs overflow-y-auto max-h-[280px] pr-1">
+                {activities.slice(0, 5).map((act) => {
+                  const actDate = new Date(act.created_at);
+                  const dateStr = actDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                  const timeStr = actDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+                  
+                  const isHealed = act.action.toLowerCase().includes("healing") || act.action.toLowerCase().includes("rollback") || act.action.toLowerCase().includes("mitigated");
+                  const isFailure = act.action.toLowerCase().includes("failed") || act.action.toLowerCase().includes("error") || act.action.toLowerCase().includes("critical");
+                  const isDomain = act.action.toLowerCase().includes("domain");
+                  const borderClass = isFailure 
+                    ? "border-danger" 
+                    : isHealed 
+                    ? "border-warning" 
+                    : isDomain 
+                    ? "border-primary" 
+                    : "border-success";
+
+                  return (
+                    <div key={act.id} className={`border-l-2 ${borderClass} pl-3 py-1 space-y-0.5`}>
+                      <p className="font-bold text-foreground">{act.action}</p>
+                      <p className="text-[10px] text-foreground-muted leading-snug">{act.details}</p>
+                      <span className="text-[9px] text-foreground-muted/60 font-medium">{dateStr} at {timeStr}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-xs text-foreground-muted py-6 font-medium">
+                No recent activity events logged.
+              </div>
+            )}
           </div>
         </div>
       </div>

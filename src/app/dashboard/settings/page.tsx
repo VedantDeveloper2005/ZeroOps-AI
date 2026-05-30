@@ -4,17 +4,21 @@ import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import {
   Eye, EyeOff, Shield, RefreshCw, Key, Globe, Bell, Activity,
-  Loader2, Sparkles, Brain, Zap, Heart, Settings, Users, Mail,
-  CheckCircle, Plus, Info, ShieldAlert, Trash2
+  Loader2, Brain, CheckCircle, Plus, Trash2, Globe2, ShieldCheck, Settings, Users
 } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api } from "@/lib/api";
+import { api, Project, CustomDomain, ProjectMember, EnvVar } from "@/lib/api";
 
 type TabId = "general" | "domains" | "security" | "team" | "notifications" | "ai";
 
 export default function SettingsPage() {
   const { addToast, addNotification, resetOnboarding } = useNotifications();
   const [activeTab, setActiveTab] = useState<TabId>("general");
+
+  // Project selector states
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [loadingProjects, setLoadingProjects] = useState(true);
 
   // API Key state
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
@@ -28,22 +32,27 @@ export default function SettingsPage() {
   const [depHealth, setDepHealth] = useState<any>(null);
   const [loadingHealth, setLoadingHealth] = useState(true);
 
-  // General settings form state
-  const [projName, setProjName] = useState("ZeroOps AI Application");
-  const [projDesc, setProjDesc] = useState("World-class autonomous deployment platform running on Microsoft Azure AKS.");
-
-  // Domain state
-  const [domains, setDomains] = useState([
-    { name: "zeroops-app.zeroops.app", default: true, ssl: true },
-    { name: "zeroops.ai", default: false, ssl: true }
-  ]);
+  // Domain states
+  const [domains, setDomains] = useState<CustomDomain[]>([]);
+  const [loadingDomains, setLoadingDomains] = useState(false);
   const [newDomain, setNewDomain] = useState("");
+  const [verifyingDomainName, setVerifyingDomainName] = useState<string | null>(null);
+  const [renewingDomainName, setRenewingDomainName] = useState<string | null>(null);
 
-  // Secrets state
-  const [secrets, setSecrets] = useState([
-    { key: "DATABASE_URL", value: "postgresql://zeroops_user:••••••••••••@db.zeroops.azure.com:5432/production" },
-    { key: "JWT_SECRET", value: "zo_jwt_sec_84b72fd91c28c83e1a0b5a37f59b6c2d" }
-  ]);
+  // Secrets/Env vars state
+  const [secrets, setSecrets] = useState<EnvVar[]>([]);
+  const [loadingSecrets, setLoadingSecrets] = useState(false);
+  const [newSecretKey, setNewSecretKey] = useState("");
+  const [newSecretValue, setNewSecretValue] = useState("");
+  const [newSecretIsSecret, setNewSecretIsSecret] = useState(true);
+  const [savingSecret, setSavingSecret] = useState(false);
+
+  // Team members state
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [newMemberEmail, setNewMemberEmail] = useState("");
+  const [newMemberRole, setNewMemberRole] = useState("Developer");
+  const [addingMember, setAddingMember] = useState(false);
 
   // System settings state
   const [settings, setSettings] = useState({
@@ -75,10 +84,55 @@ export default function SettingsPage() {
     }
   };
 
+  // Load Projects on startup
   useEffect(() => {
+    async function loadProjects() {
+      try {
+        const data = await api.getProjects();
+        setProjects(data);
+        if (data.length > 0) {
+          setSelectedProjectId(data[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to load projects", err);
+      } finally {
+        setLoadingProjects(false);
+      }
+    }
+    loadProjects();
     refreshHealthChecks();
   }, []);
 
+  // Load project-specific data when selected project changes
+  useEffect(() => {
+    if (!selectedProjectId) return;
+
+    async function loadProjectData() {
+      setLoadingDomains(true);
+      setLoadingSecrets(true);
+      setLoadingMembers(true);
+      try {
+        const [doms, envs, mems] = await Promise.allSettled([
+          api.getProjectDomains(selectedProjectId!),
+          api.getEnvVars(selectedProjectId!),
+          api.getProjectMembers(selectedProjectId!),
+        ]);
+
+        if (doms.status === "fulfilled") setDomains(doms.value);
+        if (envs.status === "fulfilled") setSecrets(envs.value);
+        if (mems.status === "fulfilled") setMembers(mems.value);
+      } catch (err) {
+        console.error("Failed to load project configuration", err);
+      } finally {
+        setLoadingDomains(false);
+        setLoadingSecrets(false);
+        setLoadingMembers(false);
+      }
+    }
+    loadProjectData();
+  }, [selectedProjectId]);
+
+  // Load global system settings & API key
   useEffect(() => {
     async function loadSettings() {
       try {
@@ -95,19 +149,17 @@ export default function SettingsPage() {
         console.error("Failed to load settings", err);
       }
     }
-    loadSettings();
-  }, []);
 
-  useEffect(() => {
     async function loadApiKey() {
       try {
         const data = await api.getApiKey();
         setApiKey(data.apiKey);
       } catch (err) {
         console.error("Failed to load API key", err);
-        setApiKey("");
       }
     }
+
+    loadSettings();
     loadApiKey();
   }, []);
 
@@ -170,12 +222,121 @@ export default function SettingsPage() {
     }
   };
 
-  const handleAddDomain = (e: React.FormEvent) => {
+  // Domain Handlers
+  const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDomain.trim()) return;
-    setDomains([...domains, { name: newDomain, default: false, ssl: true }]);
-    addToast(`Domain ${newDomain} connected. SSL generated automatically.`, "success");
-    setNewDomain("");
+    if (!selectedProjectId || !newDomain.trim()) return;
+
+    try {
+      const res = await api.connectDomain(selectedProjectId, newDomain.trim());
+      setDomains(res);
+      addToast(`Domain ${newDomain} connected successfully. Complete DNS verification to activate SSL.`, "success");
+      setNewDomain("");
+    } catch (err: any) {
+      addToast(err.message || "Failed to connect domain", "error");
+    }
+  };
+
+  const handleVerifyDomain = async (domainName: string) => {
+    if (!selectedProjectId) return;
+    setVerifyingDomainName(domainName);
+    try {
+      const res = await api.verifyDomain(selectedProjectId, domainName);
+      setDomains(res);
+      addToast(`DNS Verified and SSL/HTTPS activated for ${domainName}!`, "success");
+    } catch (err: any) {
+      addToast(err.message || "Verification failed. Check your DNS records.", "error");
+    } finally {
+      setVerifyingDomainName(null);
+    }
+  };
+
+  const handleRenewSSL = async (domainName: string) => {
+    if (!selectedProjectId) return;
+    setRenewingDomainName(domainName);
+    try {
+      const res = await api.renewSSL(selectedProjectId, domainName);
+      setDomains(res);
+      addToast(`SSL Certificate for ${domainName} successfully renewed.`, "success");
+    } catch (err: any) {
+      addToast(err.message || "SSL renewal failed.", "error");
+    } finally {
+      setRenewingDomainName(null);
+    }
+  };
+
+  const handleRemoveDomain = async (domainName: string) => {
+    if (!selectedProjectId) return;
+    try {
+      const res = await api.removeDomain(selectedProjectId, domainName);
+      setDomains(res);
+      addToast(`Domain ${domainName} removed.`, "warning");
+    } catch (err: any) {
+      addToast(err.message || "Failed to remove domain", "error");
+    }
+  };
+
+  // Environment Variable Secrets Handlers
+  const handleAddSecret = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProjectId || !newSecretKey.trim() || !newSecretValue.trim()) return;
+    setSavingSecret(true);
+
+    try {
+      const res = await api.addEnvVar(selectedProjectId, {
+        key: newSecretKey.trim().toUpperCase(),
+        value: newSecretValue.trim(),
+        is_secret: newSecretIsSecret
+      });
+      setSecrets([...secrets, res]);
+      setNewSecretKey("");
+      setNewSecretValue("");
+      addToast(`Environment variable ${newSecretKey} saved successfully.`, "success");
+    } catch (err: any) {
+      addToast(err.message || "Failed to save environment variable", "error");
+    } finally {
+      setSavingSecret(false);
+    }
+  };
+
+  const handleDeleteSecret = async (varId: string, keyName: string) => {
+    if (!selectedProjectId) return;
+    try {
+      await api.deleteEnvVar(selectedProjectId, varId);
+      setSecrets(secrets.filter(s => s.id !== varId));
+      addToast(`Variable ${keyName} deleted from production environment.`, "warning");
+    } catch (err: any) {
+      addToast(err.message || "Failed to delete variable", "error");
+    }
+  };
+
+  // Team invitation Handlers
+  const handleAddMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProjectId || !newMemberEmail.trim()) return;
+    setAddingMember(true);
+
+    try {
+      const res = await api.addMember(selectedProjectId, newMemberEmail.trim(), newMemberRole);
+      setMembers(res);
+      setNewMemberEmail("");
+      addToast(`Member ${newMemberEmail} added successfully to the workspace.`, "success");
+    } catch (err: any) {
+      addToast(err.message || "Failed to add team member", "error");
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const handleRemoveMember = async (email: string) => {
+    if (!selectedProjectId) return;
+    try {
+      const res = await api.removeMember(selectedProjectId, email);
+      setMembers(res);
+      addToast(`Member ${email} removed from workspace.`, "warning");
+    } catch (err: any) {
+      addToast(err.message || "Failed to remove member", "error");
+    }
   };
 
   const tabs = [
@@ -187,12 +348,34 @@ export default function SettingsPage() {
     { id: "ai" as const, label: "AI Settings", icon: Brain }
   ];
 
+  const activeProject = projects.find(p => p.id === selectedProjectId);
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* Settings layout headers */}
-      <div className="border-b border-border/40 pb-5">
-        <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Project Settings</h1>
-        <p className="text-xs text-foreground-muted">Configure domains, environment variables, security credentials, and AI settings.</p>
+      <div className="border-b border-border/40 pb-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Project Settings</h1>
+          <p className="text-xs text-foreground-muted">Configure domains, environment variables, security credentials, and AI settings.</p>
+        </div>
+        
+        {/* Project Selector dropdown */}
+        {!loadingProjects && projects.length > 0 && (
+          <div className="flex items-center gap-2 bg-card border border-border px-3 py-1.5 rounded-xl shadow-sm">
+            <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Project:</span>
+            <select
+              value={selectedProjectId || ""}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="bg-transparent text-xs font-bold text-foreground focus:outline-none cursor-pointer border-none p-0"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id} className="bg-card text-foreground font-semibold">
+                  {p.name} ({p.framework})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="grid md:grid-cols-4 gap-6">
@@ -226,30 +409,121 @@ export default function SettingsPage() {
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
                 <h3 className="font-extrabold text-sm text-foreground">General Configuration</h3>
                 <div className="space-y-4 text-xs">
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-foreground-muted">Project Name</label>
-                    <input
-                      type="text"
-                      value={projName}
-                      onChange={(e) => setProjName(e.target.value)}
-                      className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-foreground-muted">Description</label>
-                    <textarea
-                      value={projDesc}
-                      onChange={(e) => setProjDesc(e.target.value)}
-                      rows={3}
-                      className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium resize-none"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-foreground-muted">Hosting Environment</label>
-                    <div className="bg-background-secondary/40 p-3.5 rounded-xl border border-border/40 font-mono text-[10px] text-foreground-muted flex items-center justify-between">
-                      <span>Azure App Service (West US cluster)</span>
-                      <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.2 rounded-full font-bold uppercase">Production</span>
+                  {loadingProjects ? (
+                    <div className="flex items-center gap-2 text-foreground-muted font-medium py-2">
+                      <Loader2 size={14} className="animate-spin text-primary" /> Loading project information...
                     </div>
+                  ) : activeProject ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="font-bold text-foreground-muted">Project Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={activeProject.name}
+                          className="w-full bg-background-secondary/50 border border-border rounded-xl px-4 py-2.5 text-foreground-muted font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="font-bold text-foreground-muted">Repository</label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={activeProject.full_name}
+                            className="w-full bg-background-secondary/50 border border-border rounded-xl px-4 py-2.5 text-foreground-muted font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="font-bold text-foreground-muted">Active Branch</label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={activeProject.branch}
+                            className="w-full bg-background-secondary/50 border border-border rounded-xl px-4 py-2.5 text-foreground-muted font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="font-bold text-foreground-muted">Hosting Infrastructure</label>
+                        <div className="bg-background-secondary/40 p-3.5 rounded-xl border border-border/40 font-mono text-[10px] text-foreground-muted flex items-center justify-between">
+                          <span>Azure App Service ({activeProject.region || "Central India"})</span>
+                          <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.2 rounded-full font-bold uppercase">
+                            {activeProject.status === "active" ? "Operational" : activeProject.status}
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-foreground-muted font-medium py-2">
+                      No active projects. Go to Repository Import Flow to create one.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Autonomic Diagnostics */}
+              <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
+                    <Activity size={16} className="text-primary animate-pulse" /> Autonomic Platform Diagnostics
+                  </h3>
+                  <button
+                    onClick={refreshHealthChecks}
+                    disabled={loadingHealth}
+                    className="p-1.5 hover:bg-card-hover rounded-lg text-foreground-muted hover:text-foreground cursor-pointer transition border border-border/40"
+                  >
+                    <RefreshCw size={12} className={loadingHealth ? "animate-spin" : ""} />
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  {/* System check */}
+                  <div className="p-3 bg-background-secondary/30 rounded-xl border border-border/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-foreground-muted">AI Control Engine</span>
+                      <span className={`w-2 h-2 rounded-full ${sysHealth?.status === "healthy" ? "bg-success" : "bg-warning"}`} />
+                    </div>
+                    <p className="text-[10px] text-foreground-muted font-mono">
+                      Env: {sysHealth?.environment || "production"} <br />
+                      API: {sysHealth?.openAIConfigured ? "OpenAI Connected" : "Local Engine Running"}
+                    </p>
+                  </div>
+                  
+                  {/* Database check */}
+                  <div className="p-3 bg-background-secondary/30 rounded-xl border border-border/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-foreground-muted">Database Server</span>
+                      <span className={`w-2 h-2 rounded-full ${dbHealth?.status === "healthy" ? "bg-success" : "bg-warning"}`} />
+                    </div>
+                    <p className="text-[10px] text-foreground-muted font-mono">
+                      Type: PostgreSQL <br />
+                      State: {dbHealth?.details || "Checking..."}
+                    </p>
+                  </div>
+
+                  {/* GitHub check */}
+                  <div className="p-3 bg-background-secondary/30 rounded-xl border border-border/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-foreground-muted">GitHub Sync</span>
+                      <span className={`w-2 h-2 rounded-full ${ghHealth?.status === "healthy" ? "bg-success" : "bg-warning"}`} />
+                    </div>
+                    <p className="text-[10px] text-foreground-muted font-mono">
+                      Webhook: Active <br />
+                      State: {ghHealth?.details || "Checking..."}
+                    </p>
+                  </div>
+
+                  {/* Orchestrator check */}
+                  <div className="p-3 bg-background-secondary/30 rounded-xl border border-border/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-foreground-muted">Container Telemetry</span>
+                      <span className={`w-2 h-2 rounded-full ${depHealth?.status === "healthy" ? "bg-success" : "bg-warning"}`} />
+                    </div>
+                    <p className="text-[10px] text-foreground-muted font-mono">
+                      Total Deploys: {depHealth?.total_deployments || 0} <br />
+                      Active Pipelines: {depHealth?.active_deployments_running || 0}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -281,39 +555,102 @@ export default function SettingsPage() {
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
                 <h3 className="font-extrabold text-sm text-foreground">Connected Domains</h3>
-                <div className="space-y-3">
-                  {domains.map((dom) => (
-                    <div key={dom.name} className="flex items-center justify-between p-3.5 rounded-xl bg-background-secondary/30 border border-border/40 text-xs">
-                      <div className="space-y-0.5">
-                        <p className="font-mono font-bold text-foreground">{dom.name}</p>
-                        <p className="text-[10px] text-foreground-muted font-medium">
-                          {dom.default ? "System default domain" : "Custom mapped alias"}
-                        </p>
+                
+                {loadingDomains ? (
+                  <div className="flex items-center gap-2 text-foreground-muted font-medium py-4 text-xs">
+                    <Loader2 size={14} className="animate-spin text-primary" /> Loading domains config...
+                  </div>
+                ) : domains.length > 0 ? (
+                  <div className="space-y-3">
+                    {domains.map((dom) => (
+                      <div key={dom.name} className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl bg-background-secondary/30 border border-border/40 text-xs gap-3">
+                        <div className="space-y-0.5">
+                          <p className="font-mono font-bold text-foreground flex items-center gap-1.5">
+                            <Globe2 size={12} className="text-foreground-muted" />
+                            {dom.name}
+                          </p>
+                          <p className="text-[10px] text-foreground-muted font-medium">
+                            {dom.default ? "Primary system mapping" : `Added on Let's Encrypt SSL`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          {/* DNS verified */}
+                          {dom.dns_verified ? (
+                            <span className="flex items-center gap-0.5 text-[9px] bg-success/10 border border-success/20 text-success px-2 py-0.5 rounded-full font-bold uppercase">
+                              <ShieldCheck size={10} /> DNS Verified
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleVerifyDomain(dom.name)}
+                              disabled={verifyingDomainName === dom.name}
+                              className="flex items-center gap-1 text-[9px] bg-warning/15 hover:bg-warning/25 border border-warning/30 text-warning px-2.5 py-1 rounded-full font-bold uppercase cursor-pointer transition disabled:opacity-50"
+                            >
+                              {verifyingDomainName === dom.name ? (
+                                <>
+                                  <Loader2 size={8} className="animate-spin" /> Verifying
+                                </>
+                              ) : (
+                                "Verify DNS"
+                              )}
+                            </button>
+                          )}
+
+                          {/* SSL active */}
+                          {dom.ssl ? (
+                            <button
+                              onClick={() => handleRenewSSL(dom.name)}
+                              disabled={renewingDomainName === dom.name}
+                              className="flex items-center gap-0.5 text-[9px] bg-success/10 hover:bg-success/20 border border-success/20 text-success px-2 py-0.5 rounded-full font-bold uppercase cursor-pointer disabled:opacity-50"
+                            >
+                              {renewingDomainName === dom.name ? (
+                                <Loader2 size={8} className="animate-spin mr-0.5" />
+                              ) : (
+                                <CheckCircle size={10} />
+                              )}
+                              SSL Active
+                            </button>
+                          ) : (
+                            <span className="flex items-center gap-0.5 text-[9px] bg-card-hover border border-border text-foreground-muted px-2 py-0.5 rounded-full font-bold uppercase">
+                              SSL Inactive
+                            </span>
+                          )}
+
+                          {/* Remove custom domain */}
+                          {!dom.default && (
+                            <button
+                              onClick={() => handleRemoveDomain(dom.name)}
+                              className="p-1 hover:bg-warning/10 text-foreground-muted hover:text-warning rounded transition cursor-pointer border border-transparent hover:border-warning/20 ml-2"
+                              title="Disconnect domain"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {dom.ssl && (
-                          <span className="flex items-center gap-1 text-[9px] bg-success/10 border border-success/20 text-success px-2 py-0.5 rounded-full font-bold uppercase">
-                            <CheckCircle size={10} /> SSL Active
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-foreground-muted py-4 font-medium">
+                    No custom domains connected to this project yet.
+                  </div>
+                )}
 
                 {/* Add domain form */}
-                <form onSubmit={handleAddDomain} className="flex gap-2 text-xs pt-2">
-                  <input
-                    type="text"
-                    value={newDomain}
-                    onChange={(e) => setNewDomain(e.target.value)}
-                    placeholder="my-domain.com"
-                    className="flex-1 bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium"
-                  />
-                  <button type="submit" className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition flex items-center gap-1 shadow-md shadow-primary/10 cursor-pointer">
-                    <Plus size={14} /> Add Domain
-                  </button>
-                </form>
+                {selectedProjectId && (
+                  <form onSubmit={handleAddDomain} className="flex gap-2 text-xs pt-2">
+                    <input
+                      type="text"
+                      required
+                      value={newDomain}
+                      onChange={(e) => setNewDomain(e.target.value)}
+                      placeholder="app.mycompany.com"
+                      className="flex-1 bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium"
+                    />
+                    <button type="submit" className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition flex items-center gap-1 shadow-md shadow-primary/10 cursor-pointer">
+                      <Plus size={14} /> Connect Domain
+                    </button>
+                  </form>
+                )}
               </div>
             </motion.div>
           )}
@@ -352,24 +689,93 @@ export default function SettingsPage() {
                   onClick={regenerateApiKey}
                   className="w-full py-2.5 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                 >
-                  <RefreshCw size={12} /> Regenerate Access Key
+                  <RefreshCw size={12} className="text-foreground-muted" /> Regenerate Access Key
                 </button>
               </div>
 
               {/* Secrets Vault */}
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
-                <h3 className="font-extrabold text-sm text-foreground">Environment Variables (Secrets)</h3>
+                <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
+                  <Shield size={16} className="text-success" /> Environment Variables (Vault Secrets)
+                </h3>
                 <p className="text-xs text-foreground-muted leading-normal">
-                  Decrypted values are securely isolated in Azure Vault containers and only readable at application runtime.
+                  Decrypted values are securely isolated in HSM-protected Azure Vault containers and injected only at application runtime.
                 </p>
-                <div className="space-y-2 text-xs">
-                  {secrets.map((sec) => (
-                    <div key={sec.key} className="flex items-center justify-between p-3 rounded-xl bg-background-secondary/30 border border-border/40">
-                      <span className="font-mono font-bold text-foreground">{sec.key}</span>
-                      <span className="font-mono text-[10px] text-foreground-muted truncate max-w-[200px]">{sec.value}</span>
+                
+                {loadingSecrets ? (
+                  <div className="flex items-center gap-2 text-foreground-muted font-medium py-4 text-xs">
+                    <Loader2 size={14} className="animate-spin text-primary" /> Loading encrypted vault secrets...
+                  </div>
+                ) : secrets.length > 0 ? (
+                  <div className="space-y-2 text-xs">
+                    {secrets.map((sec) => (
+                      <div key={sec.id} className="flex items-center justify-between p-3 rounded-xl bg-background-secondary/30 border border-border/40">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-foreground">{sec.key}</span>
+                          {sec.is_secret && (
+                            <span className="text-[8px] bg-success/15 border border-success/25 text-success font-semibold px-1 rounded uppercase">HSM Secret</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-[10px] text-foreground-muted truncate max-w-[200px]">{sec.value}</span>
+                          <button
+                            onClick={() => handleDeleteSecret(sec.id, sec.key)}
+                            className="p-1 hover:bg-warning/10 text-foreground-muted hover:text-warning rounded transition cursor-pointer border border-transparent hover:border-warning/20"
+                            title="Delete secret"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-foreground-muted py-4 font-medium">
+                    No variables defined for this project's production environment.
+                  </div>
+                )}
+
+                {/* Add secret form */}
+                {selectedProjectId && (
+                  <form onSubmit={handleAddSecret} className="border-t border-border/40 pt-4 space-y-3 text-xs">
+                    <h4 className="font-bold text-foreground">Add New Variable</h4>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        required
+                        placeholder="KEY_NAME"
+                        value={newSecretKey}
+                        onChange={(e) => setNewSecretKey(e.target.value)}
+                        className="flex-1 bg-background-secondary border border-border rounded-xl px-4 py-2 text-foreground focus:outline-none font-mono font-bold"
+                      />
+                      <input
+                        type="text"
+                        required
+                        placeholder="value_string"
+                        value={newSecretValue}
+                        onChange={(e) => setNewSecretValue(e.target.value)}
+                        className="flex-[2] bg-background-secondary border border-border rounded-xl px-4 py-2 text-foreground focus:outline-none font-mono"
+                      />
+                      <div className="flex items-center gap-2 px-1">
+                        <input
+                          type="checkbox"
+                          id="isSecret"
+                          checked={newSecretIsSecret}
+                          onChange={(e) => setNewSecretIsSecret(e.target.checked)}
+                          className="w-4 h-4 rounded border-border text-primary focus:ring-primary cursor-pointer"
+                        />
+                        <label htmlFor="isSecret" className="font-bold text-foreground-muted cursor-pointer select-none">Encrypt Secret</label>
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={savingSecret}
+                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-md disabled:opacity-50"
+                      >
+                        {savingSecret ? "Saving..." : "Save"}
+                      </button>
                     </div>
-                  ))}
-                </div>
+                  </form>
+                )}
               </div>
             </motion.div>
           )}
@@ -378,38 +784,87 @@ export default function SettingsPage() {
           {activeTab === "team" && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
-                <h3 className="font-extrabold text-sm text-foreground">Team Access</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-background-secondary/30 border border-border/40 text-xs">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">U</div>
-                      <div>
-                        <p className="font-bold text-foreground">Project Owner</p>
-                        <p className="text-[10px] text-foreground-muted">owner@zeroops.ai</p>
+                <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
+                  <Users size={16} className="text-primary" /> Project Access & Team Control
+                </h3>
+                
+                {loadingMembers ? (
+                  <div className="flex items-center gap-2 text-foreground-muted font-medium py-4 text-xs">
+                    <Loader2 size={14} className="animate-spin text-primary" /> Loading workspace members...
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {members.map((mem) => (
+                      <div key={mem.email} className="flex items-center justify-between p-3.5 rounded-xl bg-background-secondary/30 border border-border/40 text-xs">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-extrabold border border-primary/20">
+                            {mem.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-bold text-foreground">{mem.name}</p>
+                            <p className="text-[10px] text-foreground-muted">{mem.email}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-[9px] border px-2 py-0.5 rounded-full font-bold uppercase ${
+                            mem.role === "Owner"
+                              ? "bg-primary/10 border-primary/20 text-primary"
+                              : mem.role === "Admin"
+                              ? "bg-success/10 border-success/20 text-success"
+                              : mem.role === "Developer"
+                              ? "bg-accent/10 border-accent/20 text-accent"
+                              : "bg-card-hover border-border text-foreground-muted"
+                          }`}>
+                            {mem.role}
+                          </span>
+                          
+                          {mem.role !== "Owner" && (
+                            <button
+                              onClick={() => handleRemoveMember(mem.email)}
+                              className="p-1 hover:bg-warning/10 text-foreground-muted hover:text-warning rounded transition cursor-pointer border border-transparent hover:border-warning/20 ml-2"
+                              title="Revoke access"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.5 rounded-full font-bold uppercase">
-                      Owner
-                    </span>
+                    ))}
                   </div>
-                </div>
+                )}
 
-                <div className="border-t border-border/40 pt-4 space-y-2 text-xs">
-                  <h4 className="font-bold text-foreground-muted">Invite Workspace Member</h4>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="member@company.com"
-                      className="flex-1 bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium"
-                    />
-                    <button
-                      onClick={() => addToast("Invitation link sent to member.", "success")}
-                      className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-md shadow-primary/10"
-                    >
-                      Invite
-                    </button>
-                  </div>
-                </div>
+                {/* Invite form */}
+                {selectedProjectId && (
+                  <form onSubmit={handleAddMember} className="border-t border-border/40 pt-4 space-y-2 text-xs">
+                    <h4 className="font-bold text-foreground-muted">Invite Workspace Member</h4>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="email"
+                        required
+                        placeholder="developer@mycompany.com"
+                        value={newMemberEmail}
+                        onChange={(e) => setNewMemberEmail(e.target.value)}
+                        className="flex-1 bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-medium"
+                      />
+                      <select
+                        value={newMemberRole}
+                        onChange={(e) => setNewMemberRole(e.target.value)}
+                        className="bg-background-secondary border border-border rounded-xl px-3 py-2.5 text-foreground focus:outline-none font-semibold cursor-pointer"
+                      >
+                        <option value="Admin">Admin</option>
+                        <option value="Developer">Developer</option>
+                        <option value="Viewer">Viewer</option>
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={addingMember}
+                        className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-md shadow-primary/10 disabled:opacity-50"
+                      >
+                        {addingMember ? "Adding..." : "Add Member"}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             </motion.div>
           )}
@@ -423,7 +878,7 @@ export default function SettingsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-foreground">Critical Email Alerts</p>
-                      <p className="text-[10px] text-foreground-muted mt-0.5">Receive immediate incident reports for OOM and connection crashes</p>
+                      <p className="text-[10px] text-foreground-muted mt-0.5">Receive immediate incident reports for OOM and container crashes</p>
                     </div>
                     <input
                       type="checkbox"
@@ -453,6 +908,7 @@ export default function SettingsPage() {
                     </div>
                     <input
                       type="checkbox"
+                      defaultChecked
                       className="w-4.5 h-4.5 rounded border-border text-primary focus:ring-primary bg-card cursor-pointer"
                     />
                   </div>

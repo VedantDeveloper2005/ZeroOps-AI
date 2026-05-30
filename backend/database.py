@@ -171,6 +171,16 @@ async def run_migrations():
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS start_commands TEXT",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS environment_variables JSON DEFAULT '[]'",
         "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS explanation TEXT",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS custom_domains JSON DEFAULT '[]'",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS members JSON DEFAULT '[]'",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS recommended_compute_tier TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS estimated_cost TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS recommended_region TEXT",
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS expected_traffic TEXT",
+        "ALTER TABLE deployment_recommendations ADD COLUMN IF NOT EXISTS recommended_compute_tier TEXT",
+        "ALTER TABLE deployment_recommendations ADD COLUMN IF NOT EXISTS estimated_cost TEXT",
+        "ALTER TABLE deployment_recommendations ADD COLUMN IF NOT EXISTS recommended_region TEXT",
+        "ALTER TABLE deployment_recommendations ADD COLUMN IF NOT EXISTS expected_traffic TEXT",
 
         
         # Make project_id in ai_analyses nullable

@@ -205,7 +205,11 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
                 deployment_strategy=metadata.get("deployment_strategy"),
                 build_commands=metadata.get("build_commands"),
                 start_commands=metadata.get("start_commands"),
-                environment_variables=metadata.get("environment_variables", [])
+                environment_variables=metadata.get("environment_variables", []),
+                recommended_compute_tier=metadata.get("recommended_compute_tier") or "Azure App Service B1",
+                estimated_cost=metadata.get("estimated_cost") or "$13/month",
+                recommended_region=metadata.get("recommended_region") or "Central India",
+                expected_traffic=metadata.get("expected_traffic") or "50,000 requests/month"
             )
             db.add(analysis)
             

@@ -184,6 +184,10 @@ class AIAnalysisResponse(BaseModel):
     start_commands: Optional[str] = None
     environment_variables: List[str] = []
     explanation: Optional[str] = None
+    recommended_compute_tier: Optional[str] = None
+    estimated_cost: Optional[str] = None
+    recommended_region: Optional[str] = None
+    expected_traffic: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -210,6 +214,10 @@ class DeploymentRecommendationResponse(BaseModel):
     database_recommendation: dict = {}
     estimated_deployment_time: Optional[str] = None
     created_at: Optional[str] = None
+    recommended_compute_tier: Optional[str] = None
+    estimated_cost: Optional[str] = None
+    recommended_region: Optional[str] = None
+    expected_traffic: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -392,3 +400,16 @@ class TelemetryMetricResponse(BaseModel):
     error_rate: str = "0.0%"
     response_time: str = "45ms"
     request_count: int = 1200
+
+
+# ──────────────────────────────────────────────
+# COLLABORATION & DOMAIN SCHEMAS
+# ──────────────────────────────────────────────
+
+class ProjectDomainCreate(BaseModel):
+    name: str
+
+class ProjectMemberCreate(BaseModel):
+    email: EmailStr
+    role: str
+

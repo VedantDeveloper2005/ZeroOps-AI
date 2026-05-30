@@ -3,18 +3,41 @@
 import { motion } from "framer-motion";
 import {
   Rocket, GitBranch, Globe, Clock, Activity, ShieldCheck,
-  Brain, ExternalLink, Copy, Plus, Sparkles, TrendingUp,
-  Terminal, Settings, Key, AlertTriangle, ArrowRight, Server, CheckCircle2
+  Brain, Plus, Sparkles, ArrowRight, Server, Loader2, AlertTriangle
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useRouter } from "next/navigation";
+import { api, ProjectActivity, DashboardStats } from "@/lib/api";
 import { normalizeProjectId, liveUrlForProject } from "@/lib/demo-runtime";
 
 export default function DashboardHome() {
   const { projects, isLoading: contextLoading, addToast } = useNotifications();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
+  
+  // Real stats & activities states
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [activities, setActivities] = useState<ProjectActivity[]>([]);
+  const [loadingActivities, setLoadingActivities] = useState(true);
+
+  useEffect(() => {
+    async function loadDashboardData() {
+      try {
+        const [statsData, activitiesData] = await Promise.allSettled([
+          api.getDashboardStats(),
+          api.getGlobalActivity()
+        ]);
+        if (statsData.status === "fulfilled") setStats(statsData.value);
+        if (activitiesData.status === "fulfilled") setActivities(activitiesData.value);
+      } catch (err) {
+        console.error("Failed to load dashboard data", err);
+      } finally {
+        setLoadingActivities(false);
+      }
+    }
+    loadDashboardData();
+  }, []);
 
   const handleCopyUrl = (url: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -36,13 +59,12 @@ export default function DashboardHome() {
     );
   }
 
-  // Activity Feed data matching user spec
-  const activities = [
-    { id: 1, type: "success", title: "Deployment completed", detail: "zeroops-web-frontend deployed successfully", time: "2m ago" },
-    { id: 2, type: "info", title: "Domain connected", detail: "Custom domain zeroops.app configured for web-frontend", time: "1h ago" },
-    { id: 3, type: "security", title: "SSL generated", detail: "Let's Encrypt certificate configured for secure traffic", time: "3h ago" },
-    { id: 4, type: "warning", title: "Traffic spike detected", detail: "Traffic increased by 240% on API services", time: "5h ago" }
-  ];
+  // Calculate success rate dynamically based on real data
+  const totalDeploys = stats?.total_deployments || 0;
+  const failedDeploys = stats?.failed_deployments || 0;
+  const successRate = totalDeploys > 0 
+    ? `${Math.round(((totalDeploys - failedDeploys) / totalDeploys) * 100)}%`
+    : "100%";
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-12">
@@ -59,28 +81,31 @@ export default function DashboardHome() {
       {/* Row 1: Platform Health Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: "Applications Running", value: "12", detail: "All systems operational", color: "text-primary", icon: Server },
-          { label: "Success Rate", value: "99.8%", detail: "Last 30 days build rate", color: "text-success", icon: ShieldCheck },
-          { label: "Average Deploy Time", value: "42s", detail: "Fully optimized container builds", color: "text-accent", icon: Clock },
-          { label: "Monthly Traffic", value: "120k", detail: "Total served requests", color: "text-info", icon: Activity }
-        ].map((stat, i) => (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-            className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-2 relative overflow-hidden group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">{stat.label}</span>
-              <stat.icon size={16} className={`${stat.color} opacity-80`} />
-            </div>
-            <div className="space-y-1">
-              <p className="text-3xl font-extrabold text-foreground tracking-tight">{stat.value}</p>
-              <p className="text-[10px] text-foreground-muted font-medium">{stat.detail}</p>
-            </div>
-          </motion.div>
-        ))}
+          { label: "Applications Running", value: String(projects.length), detail: "All services operational", color: "text-primary", icon: Server },
+          { label: "Build Success Rate", value: successRate, detail: `Based on ${totalDeploys} deployment(s)`, color: "text-success", icon: ShieldCheck },
+          { label: "Failed Incidents", value: String(failedDeploys), detail: "Autonomously resolved or rolled back", color: "text-danger", icon: AlertTriangle },
+          { label: "Security Compliance", value: stats ? `${stats.security_score}%` : "96%", detail: "Secrets isolated in HSM Vault", color: "text-info", icon: Activity }
+        ].map((stat, i) => {
+          const StatIcon = stat.icon;
+          return (
+            <motion.div
+              key={stat.label}
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }}
+              className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-2 relative overflow-hidden group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">{stat.label}</span>
+                <StatIcon size={16} className={`${stat.color} opacity-80`} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-3xl font-extrabold text-foreground tracking-tight">{stat.value}</p>
+                <p className="text-[10px] text-foreground-muted font-medium">{stat.detail}</p>
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* Row 2: AI Insights & Quick Actions */}
@@ -99,15 +124,24 @@ export default function DashboardHome() {
             <div className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40">
               <div className="w-5 h-5 rounded-full bg-success/15 text-success flex items-center justify-center shrink-0 font-bold">✓</div>
               <p className="text-foreground-muted font-medium leading-relaxed">
-                Your React apps deploy <strong className="text-foreground font-bold">20% faster</strong> than average. Node.js base cache is fully optimized.
+                ZeroOps AI is actively monitoring your deployed applications. Build pipelines and base image caches are fully optimized.
               </p>
             </div>
-            <div className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40">
-              <div className="w-5 h-5 rounded-full bg-warning/15 text-warning flex items-center justify-center shrink-0 font-bold">!</div>
-              <p className="text-foreground-muted font-medium leading-relaxed">
-                <strong className="text-foreground font-bold">2 applications</strong> have optimization opportunities. Enable CDN / static asset caching to reduce latency by 38%.
-              </p>
-            </div>
+            {projects.length > 0 ? (
+              <div className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40">
+                <div className="w-5 h-5 rounded-full bg-warning/15 text-warning flex items-center justify-center shrink-0 font-bold">!</div>
+                <p className="text-foreground-muted font-medium leading-relaxed">
+                  Autonomic cost scaling opportunities detected. Navigate to <strong className="text-foreground font-bold hover:underline cursor-pointer" onClick={() => router.push("/dashboard/ai-analysis")}>AI Insights</strong> to audit instance tiers and save up to $8/month.
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40">
+                <div className="w-5 h-5 rounded-full bg-info/15 text-info flex items-center justify-center shrink-0 font-bold">i</div>
+                <p className="text-foreground-muted font-medium leading-relaxed">
+                  No active projects detected. Import your first codebase from GitHub to activate zero-config container deployments.
+                </p>
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -150,7 +184,6 @@ export default function DashboardHome() {
             </button>
             <button
               onClick={() => {
-                // Focus/Click the AI Floating Button to open
                 const aiBtn = document.querySelector(".fixed.bottom-6.right-6 button") as HTMLButtonElement;
                 if (aiBtn) aiBtn.click();
               }}
@@ -261,20 +294,46 @@ export default function DashboardHome() {
           </div>
 
           <div className="bg-card border border-border rounded-2xl p-4.5 space-y-4 shadow-sm">
-            {activities.map((act) => {
-              const DotColor = act.type === "success" ? "bg-success" : act.type === "warning" ? "bg-warning" : act.type === "security" ? "bg-primary" : "bg-info";
+            {loadingActivities ? (
+              <div className="flex items-center gap-2 text-foreground-muted font-medium py-4 text-xs justify-center">
+                <Loader2 size={14} className="animate-spin text-primary" /> Loading live operations logs...
+              </div>
+            ) : activities.length > 0 ? (
+              <div className="space-y-4">
+                {activities.slice(0, 5).map((act) => {
+                  const actDate = new Date(act.created_at);
+                  const dateStr = actDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                  const timeStr = actDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 
-              return (
-                <div key={act.id} className="flex gap-3 text-xs">
-                  <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${DotColor}`} />
-                  <div className="space-y-0.5 flex-1 min-w-0">
-                    <p className="font-bold text-foreground">{act.title}</p>
-                    <p className="text-[10px] text-foreground-muted leading-relaxed truncate">{act.detail}</p>
-                    <span className="text-[9px] text-foreground-muted/60 font-mono mt-0.5 block">{act.time}</span>
-                  </div>
-                </div>
-              );
-            })}
+                  const isHealed = act.action.toLowerCase().includes("healing") || act.action.toLowerCase().includes("rollback") || act.action.toLowerCase().includes("mitigated");
+                  const isFailure = act.action.toLowerCase().includes("failed") || act.action.toLowerCase().includes("error") || act.action.toLowerCase().includes("critical");
+                  const isDomain = act.action.toLowerCase().includes("domain");
+                  
+                  const dotColor = isFailure 
+                    ? "bg-danger" 
+                    : isHealed 
+                    ? "bg-warning" 
+                    : isDomain 
+                    ? "bg-primary" 
+                    : "bg-success";
+
+                  return (
+                    <div key={act.id} className="flex gap-3 text-xs leading-normal">
+                      <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${dotColor}`} />
+                      <div className="space-y-0.5 flex-1 min-w-0">
+                        <p className="font-bold text-foreground leading-snug">{act.action}</p>
+                        <p className="text-[10px] text-foreground-muted leading-relaxed truncate">{act.details}</p>
+                        <span className="text-[9px] text-foreground-muted/60 font-mono mt-0.5 block">{act.project_name} • {dateStr} at {timeStr}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-xs text-foreground-muted py-6 font-medium text-center">
+                No activity logs available.
+              </div>
+            )}
           </div>
         </div>
       </div>

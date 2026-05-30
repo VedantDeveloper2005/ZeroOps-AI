@@ -157,6 +157,8 @@ class Project(Base):
     status = Column(Text, default=ProjectStatus.active.value)
     last_deployed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    custom_domains = Column(JSON, default=list)
+    members = Column(JSON, default=list)
 
     # Relationships
     user = relationship("User", back_populates="projects")
@@ -321,6 +323,10 @@ class AIAnalysis(Base):
     start_commands = Column(Text, nullable=True)
     environment_variables = Column(JSON, default=list)
     explanation = Column(Text, nullable=True)
+    recommended_compute_tier = Column(Text, nullable=True)
+    estimated_cost = Column(Text, nullable=True)
+    recommended_region = Column(Text, nullable=True)
+    expected_traffic = Column(Text, nullable=True)
 
 
     # Relationships
@@ -504,6 +510,10 @@ class DeploymentRecommendation(Base):
     database_recommendation = Column(JSON, default=dict)
     estimated_deployment_time = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    recommended_compute_tier = Column(Text, nullable=True)
+    estimated_cost = Column(Text, nullable=True)
+    recommended_region = Column(Text, nullable=True)
+    expected_traffic = Column(Text, nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="deployment_recommendations")

@@ -467,18 +467,22 @@ function DeploymentsPageContent() {
   };
 
   const handleAutoFix = async () => {
-    if (isApplyingFix) return;
+    if (isApplyingFix || !deployId) return;
     setIsApplyingFix(true);
-    addToast("AI applying auto-remediation...", "info");
+    addToast("ZeroOps AI is patching your codebase and environment configuration...", "info");
     
-    // Simulate patch / remediation time
-    await new Promise(resolve => setTimeout(resolve, 1800));
-    
-    addToast("Remediation patch successfully applied. Re-starting deployment...", "success");
-    setIsApplyingFix(false);
-    
-    // Trigger redeploy
-    handleRedeploy();
+    try {
+      const res = await api.fixDeploymentAutomatically(deployId);
+      addToast(res.message || "Auto-fix applied. Redeployment initialized.", "success");
+      setIsApplyingFix(false);
+      
+      // Redirect to the new deployment pipeline
+      router.push(`/dashboard/deployments?id=${res.deployment_id}&repo=${encodeURIComponent(repoParam)}`);
+    } catch (err: any) {
+      console.error(err);
+      addToast(err.message || "Failed to apply AI auto-remediation.", "error");
+      setIsApplyingFix(false);
+    }
   };
 
   // Calculate progress percentage
