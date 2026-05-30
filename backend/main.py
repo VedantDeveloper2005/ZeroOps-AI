@@ -943,6 +943,7 @@ async def get_deployment(
                 line_number=log.line_number, level=log.level,
                 message=log.message, timestamp=format_dt(log.timestamp)
             ) for log in logs
+        ]
     )
 
 
