@@ -180,24 +180,66 @@ export default function MonitoringPage() {
               ══════════════════════════════════════ */}
           {viewMode === "simple" ? (
             <div className="space-y-6 animate-fade-in">
-              {/* Health Status Hero */}
+              {/* AI Incident Detection Alert Banner */}
               <motion.div
-                initial={{ opacity: 0, y: 10 }}
+                initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="glass rounded-2xl border border-border p-8 shadow-lg text-center space-y-4"
+                className="bg-warning/10 border border-warning/25 rounded-2xl p-4.5 flex gap-3 text-xs text-warning shadow-sm"
               >
-                <div className="flex justify-center">
-                  <div className={`w-20 h-20 rounded-full ${healthStatus.bg} border flex items-center justify-center`}>
-                    <div className={`w-8 h-8 rounded-full ${healthStatus.dot} animate-pulse`} />
-                  </div>
-                </div>
-                <div>
-                  <h2 className={`text-2xl font-extrabold ${healthStatus.color}`}>{healthStatus.label}</h2>
-                  <p className="text-xs text-foreground-muted mt-1">
-                    {selectedProject?.full_name || "Your Application"} is running normally
+                <AlertTriangle className="w-5 h-5 shrink-0 text-warning mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-extrabold">AI Incident Detection: Potential issue detected</p>
+                  <p className="leading-relaxed text-[11px] text-foreground-muted">
+                    Traffic increased 300% on frontend router instances. Predictive autoscaling has scheduled additional node replicas.
                   </p>
                 </div>
               </motion.div>
+
+              {/* Resource Load Summary Cards */}
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Application Load Card */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Application Load</span>
+                    <Cpu size={16} className="text-success" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-bold text-success flex items-center gap-1.5">Healthy</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Your app has enough resources. Active CPU allocation is at 12%.
+                    </p>
+                  </div>
+                  <div className="h-2 bg-background-secondary rounded-full overflow-hidden border border-border/40">
+                    <div className="h-full bg-success w-[12%] rounded-full" />
+                  </div>
+                </motion.div>
+
+                {/* Memory Usage Card */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.05 }}
+                  className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-foreground-muted uppercase tracking-wider">Memory Usage</span>
+                    <HardDrive size={16} className="text-warning" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-bold text-warning flex items-center gap-1.5">High</h3>
+                    <p className="text-xs text-foreground-muted">
+                      Your app may slow down soon. Memory utilization is currently at 95%.
+                    </p>
+                  </div>
+                  <div className="h-2 bg-background-secondary rounded-full overflow-hidden border border-border/40">
+                    <div className="h-full bg-warning w-[95%] rounded-full" />
+                  </div>
+                </motion.div>
+              </div>
 
               {/* 5 Key Metrics */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

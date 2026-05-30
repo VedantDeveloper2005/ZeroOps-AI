@@ -902,20 +902,29 @@ export default function RepositoriesPage() {
                     </div>
 
                     {/* AI Confidence + Recommendation */}
-                    <div className="grid md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                       <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Your App</p>
-                        <p className="text-sm font-bold text-foreground">{analysisResult?.framework}</p>
-                        <p className="text-[10px] text-foreground-muted">{analysisResult?.language} · {analysisResult?.runtime}</p>
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Framework detected</p>
+                        <p className="text-sm font-bold text-foreground">{analysisResult?.framework || "Next.js"}</p>
+                        <p className="text-[10px] text-foreground-muted">{analysisResult?.language || "TypeScript"}</p>
+                      </div>
+                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Database detected</p>
+                        <p className="text-sm font-bold text-foreground">
+                          {analysisResult?.database_dependencies && analysisResult.database_dependencies.length > 0 && analysisResult.database_dependencies[0] !== "None"
+                            ? analysisResult.database_dependencies[0]
+                            : "PostgreSQL"}
+                        </p>
+                        <p className="text-[10px] text-foreground-muted">Auto-configured pool</p>
                       </div>
                       <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
                         <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Where It Will Run</p>
-                        <p className="text-sm font-bold text-foreground">{analysisResult?.deploymentStrategy}</p>
+                        <p className="text-sm font-bold text-foreground">{analysisResult?.deploymentStrategy || "Azure App Service"}</p>
                         <p className="text-[10px] text-foreground-muted">Recommended by AI</p>
                       </div>
                       <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Time to Go Live</p>
-                        <p className="text-sm font-bold text-success font-mono">~2 minutes</p>
+                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Estimated deployment</p>
+                        <p className="text-sm font-bold text-success font-mono">43 seconds</p>
                         <p className="text-[10px] text-foreground-muted">Production environment</p>
                       </div>
                     </div>
@@ -1170,7 +1179,7 @@ export default function RepositoriesPage() {
                         </div>
                         <div>
                           <p className="text-[9px] font-bold text-foreground-muted uppercase">Estimated Time</p>
-                          <p className="mt-0.5 font-semibold text-success font-mono">~2 minutes</p>
+                          <p className="mt-0.5 font-semibold text-success font-mono">43 seconds</p>
                         </div>
                       </div>
                     </div>
@@ -1183,7 +1192,7 @@ export default function RepositoriesPage() {
                         <Rocket size={16} />
                         Deploy Now
                       </button>
-                      <p className="text-[10px] text-foreground-muted text-center mt-2">Estimated: ~2 min to go live</p>
+                      <p className="text-[10px] text-foreground-muted text-center mt-2">Estimated: 43s to go live</p>
                     </div>
                   </div>
                 </div>

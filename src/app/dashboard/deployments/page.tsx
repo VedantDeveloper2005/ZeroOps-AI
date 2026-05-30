@@ -16,7 +16,7 @@ import {
 } from "@/lib/demo-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 
-const stepIcons = [GitBranch, Brain, Box, Cloud, Shield, Rocket, Activity, Check];
+const stepIcons = [GitBranch, Brain, Box, Cloud, Shield, Rocket, Activity];
 
 // Local step type for the pipeline UI
 interface PipelineStep {

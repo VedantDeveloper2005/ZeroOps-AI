@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Brain, X, Send, Sparkles, Loader2, MessageSquare, Terminal, HelpCircle } from "lucide-react";
+import { Brain, X, Send, Sparkles, Loader2, MessageSquare, Terminal, HelpCircle, DollarSign, Cpu, Database } from "lucide-react";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -89,10 +89,12 @@ export function FloatingAssistant() {
   };
 
   const suggestions = [
-    { text: "Explain my architecture", icon: Brain },
-    { text: "Optimize cloud costs", icon: Sparkles },
-    { text: "What is my container port?", icon: Terminal },
-    { text: "Is my autoscaling active?", icon: HelpCircle },
+    { text: "Why did deployment fail?", icon: HelpCircle },
+    { text: "Optimize my application.", icon: Sparkles },
+    { text: "Reduce costs.", icon: DollarSign },
+    { text: "Scale automatically.", icon: Cpu },
+    { text: "Analyze logs.", icon: Terminal },
+    { text: "Fix database issues.", icon: Database },
   ];
 
   return (
