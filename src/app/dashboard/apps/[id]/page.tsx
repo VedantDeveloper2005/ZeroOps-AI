@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import {
   ArrowLeft,
   ExternalLink,
