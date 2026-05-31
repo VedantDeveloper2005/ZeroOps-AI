@@ -63,23 +63,44 @@ else:
 
 # Dependency to get db session in FastAPI routes
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    if not database_available or AsyncSessionLocal is None:
-        raise RuntimeError("Database connection is not available.")
+    global database_available
+    from fastapi import HTTPException
+    
+    if AsyncSessionLocal is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection is not configured."
+        )
+    
+    # If database is marked as not available, try to initialize it again
+    if not database_available:
+        logger.info("Database is marked unavailable. Attempting to re-initialize...")
+        success = await init_db()
+        if not success:
+            raise HTTPException(
+                status_code=503,
+                detail="Database connection is not available."
+            )
     
     async with AsyncSessionLocal() as session:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except Exception as e:
             await session.rollback()
-            raise
+            logger.error(f"Database session error: {e}")
+            database_available = False
+            raise HTTPException(
+                status_code=503,
+                detail="Database connection lost or failed to respond."
+            )
         finally:
             await session.close()
 
 # Startup database validation and DDL table creation
 async def init_db():
     global database_available
-    if not database_available or async_engine is None:
+    if async_engine is None:
         logger.error("Skipping DB initialization: Database engine is not configured.")
         return False
         
