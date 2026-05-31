@@ -52,7 +52,7 @@ export default function BillingPage() {
   const deploymentsPercent = Math.min(100, Math.round((totalDeployments / maxDeploymentsLimit) * 100));
 
   const usageStats = [
-    { name: "AKS CPU Hours", used: isPro ? "4,250" : "120", limit: isPro ? "10,000" : "500", unit: "hrs", percent: isPro ? 42.5 : 24, color: "bg-primary" },
+    { name: "Compute CPU Hours", used: isPro ? "4,250" : "120", limit: isPro ? "10,000" : "500", unit: "hrs", percent: isPro ? 42.5 : 24, color: "bg-primary" },
     { name: "Bandwidth Egress", used: isPro ? "324.5" : "15.2", limit: isPro ? "500" : "50", unit: "GB", percent: isPro ? 64.9 : 30.4, color: "bg-accent" },
     { name: "Container Deployments", used: String(totalDeployments), limit: String(maxDeploymentsLimit), unit: "builds", percent: deploymentsPercent, color: "bg-success" },
     { name: "AI Autopilot Actions", used: isPro ? "2,450" : "0", limit: isPro ? "5,000" : "100", unit: "actions", percent: isPro ? 49 : 0, color: "bg-info" },
@@ -88,7 +88,7 @@ export default function BillingPage() {
             <div className="border-t border-border/60 my-5" />
 
             <div className="grid md:grid-cols-3 gap-4">
-              {[(isPro ? "Unlimited Deployments" : "5 Deployments/mo"), (isPro ? "5 Active AKS Clusters" : "1 AKS Cluster"), "Autonomous AI Copilot"].map((feature) => (
+              {[(isPro ? "Unlimited Deployments" : "5 Deployments/mo"), (isPro ? "5 Active Environments" : "1 Active Environment"), "Autonomous AI Copilot"].map((feature) => (
                 <div key={feature} className="flex items-center gap-2 text-xs font-semibold text-foreground-muted">
                   <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
                     <Check size={12} className="text-success" />

@@ -709,7 +709,7 @@ export default function SettingsPage() {
                   <Shield size={16} className="text-success" /> Environment Variables (Vault Secrets)
                 </h3>
                 <p className="text-xs text-foreground-muted leading-normal">
-                  Secret values are served by the backend secret store and injected at application runtime. Azure Key Vault is used when configured.
+                  Secret values are served by the backend secret store and injected at application runtime. Secret variables are encrypted in the secure platform vault.
                 </p>
                 
                 {loadingSecrets ? (

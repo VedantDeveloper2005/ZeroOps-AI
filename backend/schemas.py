@@ -97,6 +97,7 @@ class DeploymentResponse(BaseModel):
     deployed_by: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    infrastructure_metadata: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -188,6 +189,17 @@ class AIAnalysisResponse(BaseModel):
     estimated_cost: Optional[str] = None
     recommended_region: Optional[str] = None
     expected_traffic: Optional[str] = None
+    
+    # Cost & vars detailed metadata
+    compute_cost: Optional[float] = None
+    database_cost: Optional[float] = None
+    platform_fee: Optional[float] = None
+    bandwidth_cost: Optional[float] = None
+    monitoring_cost: Optional[float] = None
+    total_cost: Optional[float] = None
+    projected_growth_cost: Optional[float] = None
+    why_this_plan: Optional[str] = None
+    detected_vars_detail: Optional[List[Any]] = None
 
     class Config:
         from_attributes = True
@@ -236,6 +248,8 @@ class FailureAnalysisResponse(BaseModel):
     severity: str
     recommended_fix: str
     step_by_step_resolution: List[str] = []
+    confidence: Optional[int] = 95
+    impact: Optional[str] = None
     created_at: Optional[str] = None
 
     class Config:
@@ -412,3 +426,28 @@ class ProjectDomainCreate(BaseModel):
 class ProjectMemberCreate(BaseModel):
     email: EmailStr
     role: str
+
+
+# ──────────────────────────────────────────────
+# DATABASE INSTANCE SCHEMAS
+# ──────────────────────────────────────────────
+
+class DatabaseInstanceResponse(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    type: str
+    db_name: str
+    username: str
+    host: str
+    port: int
+    connection_string: str
+    status: str
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SelfHealRequest(BaseModel):
+    action: str
+

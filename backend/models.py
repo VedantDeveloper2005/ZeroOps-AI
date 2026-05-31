@@ -169,6 +169,7 @@ class Project(Base):
     activity_events = relationship("ActivityEvent", back_populates="project", cascade="all, delete-orphan")
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="project", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="project", cascade="all, delete-orphan")
+    databases = relationship("DatabaseInstance", back_populates="project", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_projects_user_id", "user_id"),
@@ -327,6 +328,7 @@ class AIAnalysis(Base):
     estimated_cost = Column(Text, nullable=True)
     recommended_region = Column(Text, nullable=True)
     expected_traffic = Column(Text, nullable=True)
+    pricing_breakdown = Column(JSON, nullable=True)
 
 
     # Relationships
@@ -541,6 +543,8 @@ class FailureAnalysis(Base):
     severity = Column(Text, nullable=False)
     recommended_fix = Column(Text, nullable=False)
     step_by_step_resolution = Column(JSON, default=list)
+    confidence = Column(Integer, default=95)
+    impact = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -552,4 +556,31 @@ class FailureAnalysis(Base):
         Index("ix_failure_analyses_user_id", "user_id"),
         Index("ix_failure_analyses_project_id", "project_id"),
         Index("ix_failure_analyses_deployment_id", "deployment_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# MANAGED DATABASE INSTANCES
+# ──────────────────────────────────────────────
+
+class DatabaseInstance(Base):
+    __tablename__ = "database_instances"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    type = Column(Text, nullable=False)  # PostgreSQL, MySQL, MongoDB, Redis
+    db_name = Column(Text, nullable=False)
+    username = Column(Text, nullable=False)
+    password = Column(Text, nullable=False)
+    host = Column(Text, nullable=False)
+    port = Column(Integer, nullable=False)
+    connection_string = Column(Text, nullable=False)
+    status = Column(Text, default="provisioning")  # provisioning, available, failed
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    project = relationship("Project", back_populates="databases")
+
+    __table_args__ = (
+        Index("ix_database_instances_project_id", "project_id"),
     )

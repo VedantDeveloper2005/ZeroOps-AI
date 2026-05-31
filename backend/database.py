@@ -186,6 +186,13 @@ async def run_migrations():
         # Make project_id in ai_analyses nullable
         "ALTER TABLE ai_analyses ALTER COLUMN project_id DROP NOT NULL",
 
+        # Failure Analysis extra fields
+        "ALTER TABLE failure_analyses ADD COLUMN IF NOT EXISTS confidence INTEGER DEFAULT 95",
+        "ALTER TABLE failure_analyses ADD COLUMN IF NOT EXISTS impact TEXT",
+
+        # AI Analysis pricing breakdown
+        "ALTER TABLE ai_analyses ADD COLUMN IF NOT EXISTS pricing_breakdown JSON",
+
         # Indexes
         "CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)",
         "CREATE INDEX IF NOT EXISTS ix_repositories_user_id ON repositories(user_id)",

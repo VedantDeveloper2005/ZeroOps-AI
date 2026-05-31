@@ -20,7 +20,6 @@ const navSections = [
       { name: "Overview", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
       { name: "Deploy", icon: Rocket, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories", "/dashboard/deployments"] },
       { name: "Insights", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis", "/dashboard/security", "/dashboard/cost-optimization"] },
-      { name: "Monitor", icon: Activity, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring", "/dashboard/infrastructure", "/dashboard/autoscaling", "/dashboard/logs", "/dashboard/incidents"], isLockedIfNoDeploy: true },
       { name: "Settings", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings", "/dashboard/billing", "/dashboard/profile"] },
     ],
   },
@@ -42,18 +41,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const initials = firstName && lastName
     ? `${firstName[0].toUpperCase()}${lastName[0].toUpperCase()}`
     : firstName
-    ? firstName[0].toUpperCase()
-    : user?.email
-    ? user.email[0].toUpperCase()
-    : "VS";
+      ? firstName[0].toUpperCase()
+      : user?.email
+        ? user.email[0].toUpperCase()
+        : "VS";
 
   const fullName = firstName && lastName
     ? `${firstName} ${lastName}`
     : firstName
-    ? firstName
-    : user?.email
-    ? user.email.split("@")[0]
-    : "Vedant S.";
+      ? firstName
+      : user?.email
+        ? user.email.split("@")[0]
+        : "Vedant S.";
 
   const isActive = (activePaths: string[]) => {
     return activePaths.some(path => {
@@ -109,7 +108,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {section.items.map((item) => {
               const active = isActive(item.activePaths);
               const Icon = item.icon;
-              const isLocked = !hasDeployed && item.isLockedIfNoDeploy;
+              const isLocked = !hasDeployed && (item as any).isLockedIfNoDeploy;
               return (
                 <Link
                   key={item.href}

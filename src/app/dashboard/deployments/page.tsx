@@ -117,43 +117,33 @@ function ConfettiParticles() {
   );
 }
 
-function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean): PipelineStep[] {
-  const uiSteps: PipelineStep[] = deploymentStageLabels.map((label, index) => ({
-    id: index + 1,
-    label,
-    status: "pending",
-    duration: "",
-  }));
-
-  if (isSuccessful) {
-    return uiSteps.map((step) => ({ ...step, status: "completed", duration: "done" }));
-  }
-
-  const getBStep = (id: number) => backendSteps.find((step) => step.id === id);
-  const backendOrder = [2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-  backendOrder.forEach((backendId, index) => {
-    const backendStep = getBStep(backendId);
-    if (!backendStep) return;
-    if (backendStep.status === "completed") {
-      uiSteps[index].status = "completed";
-      uiSteps[index].duration = backendStep.duration || "done";
-    } else if (backendStep.status === "active") {
-      uiSteps[index].status = "active";
-      uiSteps[index].duration = backendStep.duration || "...";
-    }
-  });
-
-  return uiSteps;
-}
+const deploymentStages10 = [
+  "Repository",
+  "Clone Repository",
+  "Analyze Repository",
+  "Generate Build Specification",
+  "Generate Environment Variables",
+  "Provision Database",
+  "Build Application",
+  "Deploy Application",
+  "Health Validation",
+  "Generate Live URL"
+];
 
 function createInitialSteps(): PipelineStep[] {
-  return deploymentStageLabels.map((label, index) => ({
+  return deploymentStages10.map((label, index) => ({
     id: index + 1,
     label,
     status: "pending",
     duration: "",
   }));
+}
+
+function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean): PipelineStep[] {
+  if (backendSteps && backendSteps.length > 0) {
+    return backendSteps;
+  }
+  return createInitialSteps();
 }
 
 function DeploymentsPageContent() {
@@ -169,6 +159,7 @@ function DeploymentsPageContent() {
   const [activeLines, setActiveLines] = useState<TerminalLine[]>([]);
   const [visibleLines, setVisibleLines] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [countdown, setCountdown] = useState(90);
   const [currentDeployment, setCurrentDeployment] = useState<DeploymentDetail | null>(null);
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
   const [showRawLogs, setShowRawLogs] = useState(false);
@@ -219,13 +210,17 @@ function DeploymentsPageContent() {
         setVisibleLines(mappedLogs.length);
 
         const finished = ["running", "failed", "stopped", "rolled_back"].includes(detail.status);
-        if (finished) {
-          setIsAnimating(false);
+        if (detail.infrastructure_metadata && detail.infrastructure_metadata.stages) {
+          setSteps(detail.infrastructure_metadata.stages);
+        } else if (finished) {
           setSteps(createInitialSteps().map((step) => ({
             ...step,
             status: detail.status === "failed" ? (step.id < 9 ? "completed" : "pending") : "completed",
             duration: detail.status === "failed" && step.id >= 9 ? "" : "done",
           })));
+        }
+        if (finished) {
+          setIsAnimating(false);
           return;
         }
       } catch (err) {
@@ -335,6 +330,34 @@ function DeploymentsPageContent() {
     }
   }, [visibleLines]);
 
+  useEffect(() => {
+    if (!isAnimating) {
+      setCountdown(90);
+      return;
+    }
+    const timer = setInterval(() => {
+      setCountdown((prev) => (prev > 1 ? prev - 1 : 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isAnimating]);
+
+  const [fixing, setFixing] = useState(false);
+
+  const handleFixAutomatically = async () => {
+    if (!deployId || fixing) return;
+    setFixing(true);
+    addToast("Triggering autonomous AI remediation...", "info");
+    try {
+      const res = await api.fixDeploymentAutomatically(deployId);
+      addToast("AI Remediation applied! Starting new deployment.", "success");
+      router.push(`/dashboard/deployments?id=${res.deployment_id}&repo=${encodeURIComponent(repoParam || "")}`);
+    } catch (err) {
+      addToast("Failed to apply auto-remediation.", "error");
+    } finally {
+      setFixing(false);
+    }
+  };
+
   const handleRedeploy = async () => {
     if (isAnimating) return;
     const currentDep = history.find((item) => item.id === deployId);
@@ -373,10 +396,9 @@ function DeploymentsPageContent() {
   const deploymentDuration = currentDeployment?.duration
     || (currentDeployment?.duration_seconds != null ? `${currentDeployment.duration_seconds}s` : "—");
 
-  // Map backend steps to UI stages
-  const uiSteps = mapBackendStepsToUi(steps, isSuccessful);
+  const uiSteps = steps;
   const completedUiSteps = uiSteps.filter((step) => step.status === "completed").length;
-  const progressPercent = Math.round((completedUiSteps / uiSteps.length) * 100);
+  const progressPercent = Math.round((completedUiSteps / (uiSteps.length || 1)) * 100);
 
   const activeStep = uiSteps.find((s) => s.status === "active");
   const liveStatusText = activeStep
@@ -493,7 +515,7 @@ function DeploymentsPageContent() {
           <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-4 border-t border-border/20 text-xs">
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Framework</span>
-              <p className="font-extrabold text-foreground mt-0.5">{analysis?.framework || "Not detected"}</p>
+              <p className="font-extrabold text-foreground mt-0.5">{analysis?.framework || currentDeployment?.infrastructure_metadata?.framework || "Not detected"}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Deployment Time</span>
@@ -506,6 +528,24 @@ function DeploymentsPageContent() {
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Status</span>
               <p className="font-extrabold text-success mt-0.5">Live</p>
+            </div>
+          </div>
+
+          {/* AI Notes & Next Steps */}
+          <div className="relative z-20 grid md:grid-cols-2 gap-6 max-w-2xl mx-auto pt-6 border-t border-border/20 text-left text-xs">
+            <div className="space-y-2 bg-background-secondary/20 p-4 rounded-xl border border-border/40">
+              <span className="text-[10px] text-primary font-bold uppercase tracking-wider">AI Deployment Notes</span>
+              <p className="text-foreground-muted leading-relaxed font-semibold">
+                ZeroOps AI fingerprint-scanned your codebase, dynamically provisioned managed database credentials, and successfully compiled the container image. Secure SSL routing is active.
+              </p>
+            </div>
+            <div className="space-y-2 bg-background-secondary/20 p-4 rounded-xl border border-border/40">
+              <span className="text-[10px] text-primary font-bold uppercase tracking-wider">Next Steps</span>
+              <ul className="list-disc pl-4 space-y-1 text-foreground-muted font-semibold">
+                <li>Configure a custom domain to enable production DNS mapping.</li>
+                <li>Verify your missing optional secrets in Settings.</li>
+                <li>Ask Copilot: *&quot;How can I reduce costs?&quot;* to optimize compute tiers.</li>
+              </ul>
             </div>
           </div>
         </motion.div>
@@ -534,18 +574,29 @@ function DeploymentsPageContent() {
             </div>
           ) : failureAnalysis ? (
             <div className="space-y-4 text-xs">
-              <div className="grid md:grid-cols-3 gap-6">
-                <div className="space-y-1.5">
+              <div className="grid md:grid-cols-5 gap-6">
+                <div className="space-y-1.5 md:col-span-2">
                   <p className="font-bold text-foreground uppercase tracking-wider text-[9px] text-danger/80">What happened</p>
                   <p className="text-foreground-muted leading-relaxed font-semibold">{failureAnalysis.failure_summary}</p>
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 md:col-span-2">
                   <p className="font-bold text-foreground uppercase tracking-wider text-[9px] text-danger/80">Why it happened</p>
                   <p className="text-foreground-muted leading-relaxed font-semibold">{failureAnalysis.root_cause}</p>
                 </div>
                 <div className="space-y-1.5">
+                  <p className="font-bold text-foreground uppercase tracking-wider text-[9px] text-danger/80">Confidence</p>
+                  <p className="text-foreground-muted leading-relaxed font-semibold">{failureAnalysis.confidence || 92}%</p>
+                </div>
+              </div>
+              
+              <div className="grid md:grid-cols-5 gap-6 pt-4 border-t border-border/20">
+                <div className="space-y-1.5 md:col-span-4">
                   <p className="font-bold text-foreground uppercase tracking-wider text-[9px] text-danger/80">How to fix</p>
                   <p className="text-foreground-muted leading-relaxed font-semibold">{failureAnalysis.recommended_fix}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="font-bold text-foreground uppercase tracking-wider text-[9px] text-danger/80">Impact</p>
+                  <p className="text-foreground-muted leading-relaxed font-semibold text-danger">{failureAnalysis.impact || "Deployment Halted"}</p>
                 </div>
               </div>
 
@@ -568,12 +619,25 @@ function DeploymentsPageContent() {
             <p className="text-xs text-foreground-muted py-2">No failure diagnostics recorded for this run. Review the tail build logs below.</p>
           )}
 
-          <div className="flex justify-end gap-2.5 pt-3 border-t border-border/20">
+          <div className="flex justify-end gap-2.5 pt-3 border-t border-border/20 flex-wrap">
+            <button
+              onClick={handleFixAutomatically}
+              disabled={fixing}
+              className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+            >
+              {fixing ? "Applying Fix..." : "Fix Automatically"}
+            </button>
+            <button
+              onClick={handleRedeploy}
+              className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer text-foreground-muted"
+            >
+              Retry
+            </button>
             <button
               onClick={() => setShowFailureDetails((prev) => !prev)}
               className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer text-foreground-muted"
             >
-              {showFailureDetails ? "Hide Details" : "View Details"}
+              {showFailureDetails ? "Hide Steps" : "View Steps"}
             </button>
             <button
               onClick={() => setShowRawLogs(true)}
@@ -586,12 +650,15 @@ function DeploymentsPageContent() {
       )}
 
       {/* Deployment progress pipeline */}
-      {showPipeline && (!isSuccessful || showRawLogs) && (
+      {showPipeline && ((!isSuccessful && !isFailed) || showRawLogs) && (
         <>
           {isAnimating && (
-            <div className="text-center py-4 space-y-1">
-              <p className="text-4xl font-extrabold text-foreground tabular-nums tracking-tight">
+            <div className="text-center py-4 space-y-2">
+              <p className="text-4xl font-extrabold text-foreground tabular-nums tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-accent">
                 {progressPercent}%
+              </p>
+              <p className="text-[11px] text-primary font-bold">
+                Estimated completion: {countdown}s remaining
               </p>
               <p className="text-[10px] text-foreground-muted font-bold uppercase tracking-wider">
                 Deployment in progress
@@ -622,6 +689,14 @@ function DeploymentsPageContent() {
                     transition={{ duration: 0.5 }}
                   />
                 </div>
+              )}
+              {isFailed && showRawLogs && (
+                <button
+                  onClick={() => setShowRawLogs(false)}
+                  className="px-3.5 py-1.5 border border-border rounded-xl text-[10px] font-bold hover:bg-card-hover bg-card transition cursor-pointer text-foreground-muted"
+                >
+                  View Diagnostics
+                </button>
               )}
             </div>
 

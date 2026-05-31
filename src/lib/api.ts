@@ -81,6 +81,7 @@ export interface Deployment {
   deployed_by: string;
   started_at: string | null;
   completed_at: string | null;
+  infrastructure_metadata?: any;
 }
 
 export interface DeploymentLog {
@@ -170,6 +171,8 @@ export interface FailureAnalysis {
   severity: string;
   recommended_fix: string;
   step_by_step_resolution: string[];
+  confidence?: number;
+  impact?: string;
   created_at: string | null;
 }
 
@@ -627,6 +630,16 @@ export const api = {
     request<{ status: string; message: string; deployment_id: string; project_id: string }>(
       `/api/deployments/${deployId}/fix-auto`,
       { method: "POST" }
+    ),
+
+  selfHeal: (projectId: string, action: string) =>
+    request<{ status: string; message: string; deployment_id?: string }>(
+      `/api/projects/${projectId}/self-heal`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      }
     ),
 };
 

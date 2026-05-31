@@ -66,7 +66,7 @@ export function ArchitectureDiagram({
             <Cloud size={24} className="text-success" />
           </div>
           <div>
-            <p className="text-[11px] font-bold text-foreground">Azure App Service</p>
+            <p className="text-[11px] font-bold text-foreground">Production Environment</p>
             <p className="text-[9px] text-foreground-muted">{framework} ({runtime})</p>
           </div>
         </div>
@@ -101,7 +101,7 @@ export function ArchitectureDiagram({
               <Database size={24} className="text-purple-400" />
             </div>
             <div>
-              <p className="text-[11px] font-bold text-foreground">Azure Database</p>
+              <p className="text-[11px] font-bold text-foreground">Managed Database</p>
               <p className="text-[9px] text-foreground-muted">{database}</p>
             </div>
           </div>
