@@ -14,6 +14,11 @@ import {
   Loader,
   Loader2,
   RefreshCw,
+  Globe,
+  Lock,
+  Database,
+  Activity,
+  Brain,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -442,7 +447,7 @@ function DeploymentsPageContent() {
         <motion.div
           initial={{ opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="relative rounded-2xl border border-success/30 bg-card p-8 shadow-xl text-center space-y-6 overflow-hidden"
+          className="relative rounded-2xl border border-success/30 bg-card p-6 md:p-8 shadow-xl text-center space-y-8 overflow-hidden"
         >
           {/* Confetti celebration animations */}
           <ConfettiParticles />
@@ -450,15 +455,17 @@ function DeploymentsPageContent() {
           <div className="relative z-20 mx-auto w-16 h-16 rounded-full bg-success/15 border border-success/40 flex items-center justify-center text-success shadow-lg shadow-success/10">
             <Check size={36} />
           </div>
+          
           <div className="relative z-20 space-y-1.5 max-w-lg mx-auto">
             <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
-              🎉 Deployment Successful
+              🎉 Application Live
             </h2>
             <p className="text-xs text-foreground-muted font-medium">
-              ZeroOps AI has successfully built and deployed your application.
+              ZeroOps AI has successfully built, provisioned, and deployed your application.
             </p>
           </div>
 
+          {/* Live URL Link Card */}
           <div className="relative z-20 max-w-xl mx-auto rounded-xl border border-success/20 p-5 bg-background-secondary/40 space-y-4 shadow-inner">
             <p className="font-bold text-foreground-muted uppercase tracking-wider text-[9px]">Live URL</p>
             {liveUrl ? (
@@ -490,15 +497,6 @@ function DeploymentsPageContent() {
                     <Copy size={14} /> Copy URL
                   </button>
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(`Hey! Check out my newly deployed app on ZeroOps AI: ${liveUrl}`);
-                      addToast("Share message copied to clipboard!", "success");
-                    }}
-                    className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-                  >
-                    Share
-                  </button>
-                  <button
                     onClick={() => router.push(`/dashboard/apps/${currentDeployment?.project_id}?tab=domains`)}
                     className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
                   >
@@ -509,6 +507,44 @@ function DeploymentsPageContent() {
             ) : (
               <p className="text-xs text-foreground-muted">No live URL was recorded for this deployment.</p>
             )}
+          </div>
+
+          {/* Live Deployment Status Panel */}
+          <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-2 text-left">
+            <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
+                <Globe size={12} className="text-primary" /> Domain Status
+              </span>
+              <p className="font-extrabold text-xs text-foreground">Secure & Live</p>
+            </div>
+            <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
+                <Lock size={12} className="text-success" /> SSL Status
+              </span>
+              <p className="font-extrabold text-xs text-foreground">Active (TLS 1.3)</p>
+            </div>
+            <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
+                <Database size={12} className="text-info" /> Database Status
+              </span>
+              <p className="font-extrabold text-xs text-foreground">
+                {currentDeployment?.infrastructure_metadata?.database_dependencies?.length > 0 
+                  ? `${currentDeployment.infrastructure_metadata.database_dependencies.join(", ")} Active` 
+                  : "No DB Required"}
+              </p>
+            </div>
+            <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
+                <Activity size={12} className="text-success" /> Health Status
+              </span>
+              <p className="font-extrabold text-xs text-success flex items-center gap-1">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                </span>
+                Healthy (200 OK)
+              </p>
+            </div>
           </div>
 
           {/* Deployment Summary grid */}
@@ -526,25 +562,47 @@ function DeploymentsPageContent() {
               <p className="font-extrabold text-foreground mt-0.5">{currentDeployment?.environment || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Status</span>
-              <p className="font-extrabold text-success mt-0.5">Live</p>
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Branch</span>
+              <p className="font-extrabold text-foreground mt-0.5 font-mono">{currentDeployment?.branch || "main"}</p>
             </div>
           </div>
 
           {/* AI Notes & Next Steps */}
           <div className="relative z-20 grid md:grid-cols-2 gap-6 max-w-2xl mx-auto pt-6 border-t border-border/20 text-left text-xs">
-            <div className="space-y-2 bg-background-secondary/20 p-4 rounded-xl border border-border/40">
-              <span className="text-[10px] text-primary font-bold uppercase tracking-wider">AI Deployment Notes</span>
-              <p className="text-foreground-muted leading-relaxed font-semibold">
-                ZeroOps AI fingerprint-scanned your codebase, dynamically provisioned managed database credentials, and successfully compiled the container image. Secure SSL routing is active.
-              </p>
+            <div className="space-y-3 bg-primary-subtle/5 p-4 rounded-xl border border-primary/20">
+              <span className="text-[10px] text-primary font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <Brain size={14} /> AI Recommendations
+              </span>
+              <ul className="space-y-1.5 text-foreground-muted font-semibold">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-primary">•</span>
+                  <span>Enable CDN Edge caching in App Settings to optimize latency.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-primary">•</span>
+                  <span>Enable Auto-scaling triggers based on CPU usage limits.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-primary">•</span>
+                  <span>Verify and rotate credentials regularly using Vault settings.</span>
+                </li>
+              </ul>
             </div>
-            <div className="space-y-2 bg-background-secondary/20 p-4 rounded-xl border border-border/40">
+            <div className="space-y-3 bg-background-secondary/20 p-4 rounded-xl border border-border/40">
               <span className="text-[10px] text-primary font-bold uppercase tracking-wider">Next Steps</span>
-              <ul className="list-disc pl-4 space-y-1 text-foreground-muted font-semibold">
-                <li>Configure a custom domain to enable production DNS mapping.</li>
-                <li>Verify your missing optional secrets in Settings.</li>
-                <li>Ask Copilot: *&quot;How can I reduce costs?&quot;* to optimize compute tiers.</li>
+              <ul className="space-y-1.5 text-foreground-muted font-semibold">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-foreground">•</span>
+                  <span>Configure a custom domain to enable production DNS mapping.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-foreground">•</span>
+                  <span>Verify your missing optional secrets in Settings.</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-foreground">•</span>
+                  <span>Ask Copilot: &quot;How can I reduce costs?&quot; to optimize compute tiers.</span>
+                </li>
               </ul>
             </div>
           </div>

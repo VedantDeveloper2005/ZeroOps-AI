@@ -19,8 +19,10 @@ except ImportError:
         NVIDIA_API_KEY, NVIDIA_ENDPOINT, NVIDIA_MODEL
     )
 
-def scan_codebase_for_env_vars(repo_path: str) -> list:
+def scan_codebase_for_env_vars(repo_path) -> list:
     """Scan JS/TS and Python files for references to environment variables."""
+    if isinstance(repo_path, dict):
+        return repo_path.get("scanned_vars", [])
     vars_found = set()
     js_pattern = re.compile(r'process\.env\.([A-Z0-9_]+)')
     py_pattern = re.compile(r'os\.(?:environ\.get|getenv)\(\s*[\'"]([A-Z0-9_]+)[\'"]')
@@ -58,8 +60,43 @@ def scan_codebase_for_env_vars(repo_path: str) -> list:
     return list(vars_found)
 
 
-def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
-    """Idempotent, deep local repository scanner when OpenAI is not configured."""
+def has_file(repo_source, filename: str) -> bool:
+    if isinstance(repo_source, dict):
+        if filename in repo_source.get("files_context", {}):
+            return True
+        files_list = repo_source.get("files_list", [])
+        if filename in files_list:
+            return True
+        for path in files_list:
+            if path == filename or path.endswith("/" + filename):
+                return True
+        return False
+    else:
+        return os.path.exists(os.path.join(repo_source, filename))
+
+
+def read_file_content(repo_source, filename: str) -> str:
+    if isinstance(repo_source, dict):
+        context = repo_source.get("files_context", {})
+        if filename in context:
+            return context[filename]
+        for path, content in context.items():
+            if path.endswith("/" + filename):
+                return content
+        return ""
+    else:
+        p = os.path.join(repo_source, filename)
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+        return ""
+
+
+def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
+    """Idempotent, deep repository scanner that supports both local paths and virtual contexts."""
     framework = "Next.js"
     version = "16.2.6"
     language = "TypeScript"
@@ -79,28 +116,28 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
     storage = "1Gi"
 
     # Check for Dockerfile
-    if os.path.exists(os.path.join(repo_path, "Dockerfile")):
+    if has_file(repo_path, "Dockerfile"):
         docker_support = True
 
     # Check for monorepo patterns
-    if os.path.exists(os.path.join(repo_path, "lerna.json")):
+    if has_file(repo_path, "lerna.json"):
         monorepo_structure = "Lerna"
-    elif os.path.exists(os.path.join(repo_path, "pnpm-workspace.yaml")):
+    elif has_file(repo_path, "pnpm-workspace.yaml"):
         monorepo_structure = "pnpm Workspaces"
-    elif os.path.exists(os.path.join(repo_path, "nx.json")):
+    elif has_file(repo_path, "nx.json"):
         monorepo_structure = "Nx"
 
     # Scan variables from codebase
     scanned_vars = scan_codebase_for_env_vars(repo_path)
 
     # Node.js Project Analysis
-    if os.path.exists(os.path.join(repo_path, "package.json")):
+    if has_file(repo_path, "package.json"):
         # Package manager detection
-        if os.path.exists(os.path.join(repo_path, "pnpm-lock.yaml")):
+        if has_file(repo_path, "pnpm-lock.yaml"):
             package_manager = "pnpm"
             build_commands = "pnpm run build"
             start_commands = "pnpm start"
-        elif os.path.exists(os.path.join(repo_path, "yarn.lock")):
+        elif has_file(repo_path, "yarn.lock"):
             package_manager = "yarn"
             build_commands = "yarn build"
             start_commands = "yarn start"
@@ -110,8 +147,9 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
             start_commands = "npm start"
 
         try:
-            with open(os.path.join(repo_path, "package.json"), "r", encoding="utf-8") as f:
-                data = json.load(f)
+            pkg_content = read_file_content(repo_path, "package.json")
+            if pkg_content:
+                data = json.loads(pkg_content)
                 deps = data.get("dependencies", {})
                 dev_deps = data.get("devDependencies", {})
                 scripts = data.get("scripts", {})
@@ -170,7 +208,7 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
             pass
             
     # Python Project Analysis
-    elif os.path.exists(os.path.join(repo_path, "requirements.txt")):
+    elif has_file(repo_path, "requirements.txt"):
         language = "Python"
         runtime = "Python 3.10"
         package_manager = "pip"
@@ -181,8 +219,9 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         dependencies = []
 
         try:
-            with open(os.path.join(repo_path, "requirements.txt"), "r", encoding="utf-8") as f:
-                lines = f.read().splitlines()
+            reqs_content = read_file_content(repo_path, "requirements.txt")
+            if reqs_content:
+                lines = reqs_content.splitlines()
                 for line in lines[:10]:
                     line = line.strip()
                     if line and not line.startswith("#"):
@@ -403,6 +442,12 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         "recommended_region": "East US Core",
         "expected_traffic": expected_traffic,
         
+        # Extra blueprint fields
+        "application_type": f"{framework} SaaS Platform" if "next" in framework.lower() else f"{framework} Web Service",
+        "estimated_build_time": "90s",
+        "production_readiness_score": 94 if not vulnerabilities else 85,
+        "detected_services": [framework] + ([database_dependencies[0]] if database_dependencies else []),
+
         # Breakdown costs
         "pricing_breakdown": pricing_breakdown
     }
@@ -444,8 +489,9 @@ def log_ai_request(provider: str, model: str, latency_s: float, success: bool,
     )
 
 
-def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
-    """Analyze a cloned repository using GitHub Models GPT-4.1 (gpt-4o) or OpenAI.
+def analyze_repository(repo_path, project_id: str = "default") -> dict:
+    """Analyze a repository using GitHub Models GPT-4.1 (gpt-4o) or OpenAI.
+    Supports both local folder paths and pre-fetched virtual file dictionaries.
     
     Raises ValueError if no AI API key is configured.
     Raises RuntimeError if the AI API call fails.
@@ -463,18 +509,21 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
         )
 
     # Read files in the workspace (up to 3kb each) to send to AI
-    files_context = {}
-    target_files = ["package.json", "requirements.txt", "pyproject.toml", "Dockerfile", "docker-compose.yml", "README.md"]
-    for filename in target_files:
-        p = os.path.join(repo_path, filename)
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    files_context[filename] = f.read()[:3000]
-            except Exception:
-                pass
-
-    repo_tree = generate_repo_tree(repo_path)
+    if isinstance(repo_path, dict):
+        files_context = repo_path.get("files_context", {})
+        repo_tree = repo_path.get("repo_tree", "")
+    else:
+        files_context = {}
+        target_files = ["package.json", "requirements.txt", "pyproject.toml", "Dockerfile", "docker-compose.yml", "README.md", ".env.example", ".env"]
+        for filename in target_files:
+            p = os.path.join(repo_path, filename)
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        files_context[filename] = f.read()[:3000]
+                except Exception:
+                    pass
+        repo_tree = generate_repo_tree(repo_path)
 
     prompt = f"""
     You are the ZeroOps AI repository analysis agent. Inspect the following repository contents:
@@ -521,6 +570,10 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
     33. "monitoring_cost": Monitoring cost as float (e.g., 0.0)
     34. "why_this_plan": Explanation of why this plan was selected and cost breakdown rationale in human language.
     35. "detected_vars_detail": A JSON array of environment variable metadata objects, where each object has "key", "type" ("required" | "optional"), "is_missing" (boolean), "has_default" (boolean), and "default_val" (string).
+    36. "application_type": Type of application (e.g., "Next.js SaaS Platform", "FastAPI Service", etc.)
+    37. "estimated_build_time": Estimated build time (e.g., "90s", "60s")
+    38. "production_readiness_score": Integer readiness score from 0 to 100 (e.g., 94)
+    39. "detected_services": Array of detected services (e.g., ["Next.js", "PostgreSQL"])
     
     Respond ONLY with valid JSON. No markdown codeblocks, no extra explanation text.
     """
@@ -635,6 +688,16 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
                     })
             data["detected_vars_detail"] = detected_vars_detail
 
+        # Support extra blueprint fields
+        if "application_type" not in data:
+            data["application_type"] = f"{data.get('framework', 'Web')} App"
+        if "estimated_build_time" not in data:
+            data["estimated_build_time"] = "90s"
+        if "production_readiness_score" not in data:
+            data["production_readiness_score"] = 100 - data.get("risk_score", 12)
+        if "detected_services" not in data:
+            data["detected_services"] = [data.get("framework", "Web")] + ([data.get("database")] if data.get("database") and data.get("database") != "None" else [])
+
         data["pricing_breakdown"] = {
             "compute_cost": float(data.get("compute_cost", 8.0)),
             "database_cost": float(data.get("database_cost", database_cost)),
@@ -644,7 +707,11 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
             "total_cost": float(data.get("total_cost", total_cost)),
             "projected_growth_cost": float(data.get("projected_growth_cost", total_cost * 2.2)),
             "why_this_plan": data.get("why_this_plan"),
-            "detected_vars_detail": data.get("detected_vars_detail")
+            "detected_vars_detail": data.get("detected_vars_detail"),
+            "application_type": data.get("application_type"),
+            "estimated_build_time": data.get("estimated_build_time"),
+            "production_readiness_score": data.get("production_readiness_score"),
+            "detected_services": data.get("detected_services")
         }
             
         return data

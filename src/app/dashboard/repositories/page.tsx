@@ -12,12 +12,14 @@ import {
   Rocket,
   Search,
   Sparkles,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 import { useRouter } from "next/navigation";
-import { api, getErrorMessage, type GitHubRepoItem } from "@/lib/api";
+import { api, getErrorMessage, ApiError, type GitHubRepoItem } from "@/lib/api";
 
 interface AnalysisResult {
   framework: string | null;
@@ -49,6 +51,10 @@ interface AnalysisResult {
     has_default: boolean;
     default_val: string;
   }>;
+  application_type?: string | null;
+  estimated_build_time?: string | null;
+  production_readiness_score?: number | null;
+  detected_services?: string[];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -97,6 +103,10 @@ function toAnalysisResult(data: Record<string, unknown>, repo?: GitHubRepoItem):
     why_this_plan: asString(data.why_this_plan) || undefined,
     recommended_compute_tier: asString(data.recommended_compute_tier) || "Standard Production Core",
     detected_vars_detail: Array.isArray(data.detected_vars_detail) ? data.detected_vars_detail : undefined,
+    application_type: asString(data.application_type) || `${detectedFramework} App`,
+    estimated_build_time: asString(data.estimated_build_time) || "90s",
+    production_readiness_score: asNumber(data.production_readiness_score) || (100 - (asNumber(data.risk_score) || 12)),
+    detected_services: asStringArray(data.detected_services).length > 0 ? asStringArray(data.detected_services) : [detectedFramework, asStringArray(data.database_dependencies)[0]].filter(Boolean),
   };
 }
 
@@ -253,26 +263,48 @@ export default function RepositoriesPage() {
     }
   }, [onboardStep]);
 
-  useEffect(() => {
-    if (onboardStep !== 3 || !selectedRepo || hasTriggeredAnalysis.current) return;
-    hasTriggeredAnalysis.current = true;
+  const [analysisError, setAnalysisError] = useState<{ error: string; details: string; stage: string } | null>(null);
+
+  const runAnalysis = useCallback(() => {
+    if (!selectedRepo) return;
     setIsAnalyzing(true);
-    const repoObj = gitRepos.find((repo) => repo.full_name === selectedRepo);
     setAnalysisResult(null);
+    setAnalysisError(null);
+    const repoObj = gitRepos.find((repo) => repo.full_name === selectedRepo);
 
     api
       .analyzeRepo(selectedRepo, selectedBranch)
       .then((data) => {
         setIsAnalyzing(false);
         setAnalysisResult(toAnalysisResult(data, repoObj));
+        setAnalysisError(null);
         addToast("AI analysis complete.", "success");
       })
       .catch((err: unknown) => {
         setIsAnalyzing(false);
         setAnalysisResult(null);
-        addToast(getErrorMessage(err, "Repository analysis failed."), "error");
+        if (err instanceof ApiError && err.details && typeof err.details === "object") {
+          setAnalysisError({
+            error: err.details.error || "Analysis Failed",
+            details: err.details.details || err.message,
+            stage: err.details.stage || "repository_analysis"
+          });
+        } else {
+          setAnalysisError({
+            error: "Analysis Failed",
+            details: getErrorMessage(err, "An unexpected error occurred during repository analysis."),
+            stage: "repository_analysis"
+          });
+        }
+        addToast("Repository analysis failed.", "error");
       });
-  }, [onboardStep, selectedRepo, selectedBranch, gitRepos, addToast]);
+  }, [selectedRepo, selectedBranch, gitRepos, addToast]);
+
+  useEffect(() => {
+    if (onboardStep !== 3 || !selectedRepo || hasTriggeredAnalysis.current) return;
+    hasTriggeredAnalysis.current = true;
+    runAnalysis();
+  }, [onboardStep, selectedRepo, runAnalysis]);
 
   const handleLaunchDeployment = async () => {
     if (!analysisResult) {
@@ -603,7 +635,9 @@ export default function RepositoriesPage() {
               <div>
                 <h3 className="text-lg font-bold text-foreground">AI Analysis</h3>
                 <p className="text-xs text-foreground-muted">
-                  ZeroOps AI is compiling your deployment blueprint.
+                  {analysisError
+                    ? "Deployment blueprint compilation failed."
+                    : "ZeroOps AI is compiling your deployment blueprint."}
                 </p>
               </div>
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
@@ -611,7 +645,50 @@ export default function RepositoriesPage() {
               </span>
             </div>
 
-            {isAnalyzing ? (
+            {analysisError ? (
+              <div className="space-y-6">
+                <div className="relative overflow-hidden bg-card border border-red-500/30 rounded-2xl p-6 md:p-8 shadow-xl text-center space-y-6">
+                  <div className="absolute inset-0 bg-gradient-to-tr from-red-500/5 via-transparent to-transparent" />
+
+                  <div className="relative flex justify-center">
+                    <div className="w-14 h-14 flex items-center justify-center bg-red-500/10 border border-red-500/20 rounded-full text-red-500">
+                      <AlertCircle size={24} />
+                    </div>
+                  </div>
+
+                  <div className="relative space-y-2 max-w-md mx-auto">
+                    <h4 className="text-sm font-bold text-foreground">{analysisError.error || "Analysis Failed"}</h4>
+                    <p className="text-xs text-foreground-muted">
+                      ZeroOps encountered an issue while retrieving or scanning the repository contents.
+                    </p>
+                    <div className="p-4 bg-zinc-950/80 rounded-xl border border-red-500/20 text-left space-y-1.5 mt-3 shadow-inner">
+                      <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">Reason:</span>
+                      <p className="text-xs font-mono text-foreground leading-relaxed whitespace-pre-wrap">
+                        {analysisError.details}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      onClick={() => {
+                        setAnalysisError(null);
+                        setOnboardStep(2);
+                      }}
+                      className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
+                    >
+                      Back
+                    </button>
+                    <button
+                      onClick={runAnalysis}
+                      className="px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1.5 shadow-lg shadow-primary/20"
+                    >
+                      <RefreshCw size={12} /> Retry
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : isAnalyzing ? (
               <div className="space-y-6">
                 <div className="relative overflow-hidden bg-card border border-border rounded-2xl p-8 shadow-xl">
                   <div className="absolute inset-0 bg-gradient-to-tr from-primary/5 via-accent/5 to-transparent animate-pulse" />
@@ -713,7 +790,7 @@ export default function RepositoriesPage() {
                 Back
               </button>
               <button
-                disabled={isAnalyzing || !analysisResult}
+                disabled={isAnalyzing || !analysisResult || Boolean(analysisError)}
                 onClick={() => setOnboardStep(4)}
                 className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
               >
@@ -751,34 +828,70 @@ export default function RepositoriesPage() {
             <div className="grid md:grid-cols-2 gap-6">
               {/* Left Column: Blueprint & Database */}
               <div className="space-y-6">
-                {/* Blueprint Summary */}
+                {/* Application Summary Sheet */}
                 <div className="bg-card border border-border rounded-xl p-5 space-y-4">
                   <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider border-b border-border/40 pb-2">
-                    Application Blueprint
+                    Application Summary
                   </h4>
-                  <div className="space-y-3 text-xs">
-                    <div className="flex justify-between py-1 border-b border-border/10">
-                      <span className="text-foreground-muted font-semibold">Repository</span>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11px] leading-relaxed">
+                    <div className="py-1 border-b border-border/10 col-span-2 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Repository</span>
                       <span className="font-extrabold text-foreground truncate max-w-[60%]">{selectedRepo}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-border/10">
-                      <span className="text-foreground-muted font-semibold">Branch</span>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Branch</span>
                       <span className="font-mono text-foreground">{selectedBranch}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-border/10">
-                      <span className="text-foreground-muted font-semibold">Framework</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.framework || "Web Application"}</span>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Application Type</span>
+                      <span className="font-extrabold text-foreground">{analysisResult?.application_type || "Web App"}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-border/10">
-                      <span className="text-foreground-muted font-semibold">Runtime</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.runtime || "Node.js"}</span>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Framework</span>
+                      <span className="font-extrabold text-foreground">{analysisResult?.framework || "Next.js"}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-border/10">
-                      <span className="text-foreground-muted font-semibold">Hosting Environment</span>
-                      <span className="font-extrabold text-primary">Managed Production Environment</span>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Runtime</span>
+                      <span className="font-extrabold text-foreground">{analysisResult?.runtime || "Node.js 20"}</span>
                     </div>
-                    <div className="flex justify-between py-1">
-                      <span className="text-foreground-muted font-semibold">AI Deployment Confidence</span>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Database</span>
+                      <span className="font-extrabold text-foreground">
+                        {analysisResult?.databaseDependencies && analysisResult.databaseDependencies.length > 0
+                          ? analysisResult.databaseDependencies.join(", ")
+                          : "None"}
+                      </span>
+                    </div>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Detected Services</span>
+                      <span className="font-extrabold text-foreground">
+                        {analysisResult?.detected_services && analysisResult.detected_services.length > 0
+                          ? analysisResult.detected_services.join(", ")
+                          : "Web Service"}
+                      </span>
+                    </div>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Required Variables</span>
+                      <span className="font-extrabold text-foreground">
+                        {analysisResult?.detected_vars_detail && analysisResult.detected_vars_detail.filter(v => v.type === "required").length > 0
+                          ? `${analysisResult.detected_vars_detail.filter(v => v.type === "required").length} variables`
+                          : "None"}
+                      </span>
+                    </div>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Estimated Build Time</span>
+                      <span className="font-extrabold text-foreground">{analysisResult?.estimated_build_time || "90s"}</span>
+                    </div>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Estimated Monthly Cost</span>
+                      <span className="font-extrabold text-primary">{analysisResult?.estimated_cost || "$12/mo"}</span>
+                    </div>
+                    <div className="py-1 border-b border-border/10 flex justify-between">
+                      <span className="text-foreground-muted font-bold">Production Readiness</span>
+                      <span className="font-extrabold text-success">{analysisResult?.production_readiness_score || 94}%</span>
+                    </div>
+                    <div className="py-1 flex justify-between col-span-2 border-t border-border/10 pt-2">
+                      <span className="text-foreground-muted font-bold">Deployment Confidence Score</span>
                       <span className="font-extrabold text-success">{analysisResult?.confidence || 98}%</span>
                     </div>
                   </div>

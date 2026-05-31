@@ -15,7 +15,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, body.detail || `Request failed: ${res.status}`);
+    const detail = body.detail;
+    const msg = typeof detail === "string" 
+      ? detail 
+      : (detail && typeof detail === "object" && "details" in detail && typeof detail.details === "string"
+        ? detail.details 
+        : (detail && typeof detail === "object" && "error" in detail && typeof detail.error === "string"
+          ? detail.error
+          : `Request failed: ${res.status}`));
+    throw new ApiError(res.status, msg, detail);
   }
 
   // Handle 204 No Content
@@ -25,9 +33,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  details?: any;
+  constructor(status: number, message: string, details?: any) {
     super(message);
     this.status = status;
+    this.details = details;
     this.name = "ApiError";
   }
 }
@@ -147,6 +157,12 @@ export interface AIAnalysis {
   start_commands: string | null;
   environment_variables: string[];
   explanation?: string | null;
+  
+  // New blueprint fields
+  application_type?: string | null;
+  estimated_build_time?: string | null;
+  production_readiness_score?: number | null;
+  detected_services?: string[];
 }
 
 export interface DeploymentRecommendation {

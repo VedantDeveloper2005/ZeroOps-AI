@@ -312,3 +312,174 @@ async def get_repo_branches(token: str, owner: str, repo: str) -> list[str]:
 
         branches = response.json()
         return [b.get("name", "") for b in branches if b.get("name")]
+
+
+# ──────────────────────────────────────────────
+# GITHUB REPO CONTENTS & TREES API (NO GIT CLONE)
+# ──────────────────────────────────────────────
+
+def build_tree_from_github_items(items: list[dict], max_depth: int = 3) -> str:
+    """Helper to convert GitHub git/trees recursive API response into a readable tree string."""
+    lines = []
+    filtered_items = []
+    for item in items:
+        path = item.get("path", "")
+        parts = path.split("/")
+        if len(parts) <= max_depth:
+            filtered_items.append(item)
+            
+    filtered_items.sort(key=lambda x: x.get("path", ""))
+    
+    for item in filtered_items:
+        path = item.get("path", "")
+        type_ = item.get("type", "")
+        parts = path.split("/")
+        indent = "  " * (len(parts) - 1)
+        name = parts[-1]
+        if type_ == "tree":
+            lines.append(f"{indent}📁 {name}/")
+        else:
+            lines.append(f"{indent}📄 {name}")
+    return "\n".join(lines)
+
+
+async def fetch_github_file_content(client: httpx.AsyncClient, token: str, owner: str, repo: str, path: str, branch: str) -> Optional[str]:
+    """Fetch raw file content from GitHub repository without local cloning."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3.raw",
+        "User-Agent": "ZeroOps-AI"
+    }
+    try:
+        response = await client.get(url, params={"ref": branch}, headers=headers, timeout=8.0)
+        if response.status_code == 200:
+            return response.text
+        return None
+    except Exception as e:
+        logger.warning(f"Error fetching file content for {path}: {e}")
+        return None
+
+
+def scan_context_for_env_vars(files_context: dict) -> list[str]:
+    """Scan loaded config files and .env files for references to environment variables."""
+    import re
+    vars_found = set()
+    js_pattern = re.compile(r'process\.env\.([A-Z0-9_]+)')
+    py_pattern = re.compile(r'os\.(?:environ\.get|getenv)\(\s*[\'"]([A-Z0-9_]+)[\'"]')
+    
+    for filename, content in files_context.items():
+        if not content:
+            continue
+        # If it's a .env or .env.example, parse lines
+        basename = filename.split("/")[-1]
+        if basename in [".env.example", ".env"]:
+            for line in content.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key = line.split("=", 1)[0].strip()
+                    if key:
+                        vars_found.add(key)
+        else:
+            # Run regex patterns
+            for match in js_pattern.finditer(content):
+                vars_found.add(match.group(1))
+            for match in py_pattern.finditer(content):
+                vars_found.add(match.group(1))
+    return list(vars_found)
+
+
+async def fetch_github_repo_context(token: str, repo_full_name: str, branch: Optional[str] = None) -> dict:
+    """Fetch all repository metadata, file tree structure, and select configuration contents.
+    Runs concurrently and does not require local git binary or disk clone.
+    """
+    import asyncio
+    parts = repo_full_name.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid repository full name format: '{repo_full_name}'")
+    owner, repo = parts
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ZeroOps-AI"
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # 1. Fetch default branch if not specified
+        if not branch:
+            repo_url = f"https://api.github.com/repos/{owner}/{repo}"
+            resp = await client.get(repo_url, headers=headers)
+            if resp.status_code != 200:
+                detail_msg = f"Failed to retrieve repository metadata: HTTP {resp.status_code}"
+                try:
+                    err_json = resp.json()
+                    if "message" in err_json:
+                        detail_msg = f"GitHub API error: {err_json['message']}"
+                except Exception:
+                    pass
+                raise RuntimeError(detail_msg)
+            
+            repo_data = resp.json()
+            branch = repo_data.get("default_branch", "main")
+
+        # 2. Get recursive tree
+        tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}"
+        tree_resp = await client.get(tree_url, params={"recursive": "1"}, headers=headers)
+        
+        if tree_resp.status_code != 200:
+            logger.warning(f"Recursive trees API failed for {repo_full_name} branch {branch}: HTTP {tree_resp.status_code}")
+            items = []
+        else:
+            items = tree_resp.json().get("tree", [])
+
+        # Filter file paths
+        files_list = [item["path"] for item in items if item.get("type") == "blob"]
+        
+        # 3. Build tree
+        repo_tree = build_tree_from_github_items(items, max_depth=3)
+        
+        # 4. Identify target files to download
+        target_basenames = {
+            "package.json", "requirements.txt", "pyproject.toml",
+            "Dockerfile", "docker-compose.yml", "README.md",
+            ".env.example", ".env", "next.config.js", "next.config.mjs"
+        }
+        
+        files_to_download = []
+        for file_path in files_list:
+            basename = file_path.split("/")[-1]
+            if basename in target_basenames:
+                files_to_download.append(file_path)
+            elif file_path.startswith(".github/workflows/") and file_path.endswith((".yml", ".yaml")):
+                # Limit workflows to avoid too many requests
+                if len([f for f in files_to_download if f.startswith(".github/workflows/")]) < 2:
+                    files_to_download.append(file_path)
+
+        # Limit overall downloads
+        files_to_download = files_to_download[:12]
+
+        # 5. Fetch contents concurrently
+        tasks = [
+            fetch_github_file_content(client, token, owner, repo, path, branch)
+            for path in files_to_download
+        ]
+        
+        contents = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        files_context = {}
+        for path, content in zip(files_to_download, contents):
+            if isinstance(content, str):
+                files_context[path] = content[:3000]
+
+        # 6. Scan variables
+        scanned_vars = scan_context_for_env_vars(files_context)
+
+        return {
+            "repo_tree": repo_tree,
+            "files_context": files_context,
+            "files_list": files_list,
+            "scanned_vars": scanned_vars,
+            "default_branch": branch
+        }
+
