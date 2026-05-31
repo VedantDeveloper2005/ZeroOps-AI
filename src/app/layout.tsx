@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { NotificationProvider } from "@/lib/NotificationContext";
 import { AuthProvider } from "@/lib/AuthContext";
 import { ToastContainer } from "@/components/ui/ToastContainer";
+import MobileBlocker from "@/components/MobileBlocker";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -56,6 +57,7 @@ export default function RootLayout({
         >
           <NotificationProvider>
             <AuthProvider>
+              <MobileBlocker />
               {children}
               <ToastContainer />
             </AuthProvider>

@@ -574,7 +574,6 @@ async def create_project(
         detected_databases = ["PostgreSQL"]
 
     import secrets
-    from backend.services import vault
     for db_type in detected_databases:
         db_name_lower = db_type.lower()
         secure_password = secrets.token_urlsafe(16)
@@ -756,7 +755,6 @@ async def self_heal_project(
 
     elif action == "regenerate-env":
         import secrets
-        from backend.services import vault
         env_result = await db.execute(
             select(models.Environment).filter(models.Environment.project_id == project.id, models.Environment.name == "production")
         )
@@ -1601,17 +1599,15 @@ async def analyze_repo(
     user_token = None
     if current_user.github_connected and current_user.github_access_token_encrypted:
         try:
-            from backend.services.github_oauth import decrypt_token
-            user_token = decrypt_token(current_user.github_access_token_encrypted)
+            user_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
         except Exception:
             pass
             
     clone_token = user_token or token or os.getenv("GITHUB_TOKEN")
     
     try:
-        from backend.services.github_oauth import fetch_github_repo_context
         # Fetch repository context via GitHub API (no cloning, no git binary)
-        repo_ctx = await fetch_github_repo_context(clone_token, req.repo, req.branch)
+        repo_ctx = await github_oauth.fetch_github_repo_context(clone_token, req.repo, req.branch)
     except Exception as e:
         logger.error(f"Error fetching GitHub repository context for {req.repo}: {e}")
         raise HTTPException(
