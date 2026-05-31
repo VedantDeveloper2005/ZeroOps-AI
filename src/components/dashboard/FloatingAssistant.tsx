@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Brain, X, Send, Sparkles, Loader2, MessageSquare, Terminal, HelpCircle, DollarSign, Cpu, Database } from "lucide-react";
+import { Brain, X, Send, Sparkles, Loader2, MessageSquare, HelpCircle, DollarSign, Activity, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -20,7 +20,7 @@ export function FloatingAssistant() {
     {
       id: "welcome",
       sender: "ai",
-      text: "Hi! I am your ZeroOps AI DevOps Assistant. Ask me anything about your deployments, logs, architecture, or configuration.",
+      text: "Hi! I’m your ZeroOps AI co-pilot. I automatically understand your project context and can help with deployments, performance, and reliability.",
       timestamp: new Date(),
     },
   ]);
@@ -95,12 +95,12 @@ export function FloatingAssistant() {
   };
 
   const suggestions = [
-    { text: "Why did deployment fail?", icon: HelpCircle },
-    { text: "Analyze logs.", icon: Terminal },
-    { text: "Reduce cost.", icon: DollarSign },
-    { text: "Optimize app.", icon: Sparkles },
-    { text: "Scale app.", icon: Cpu },
-    { text: "Fix infrastructure.", icon: Database },
+    { text: "Why is my deployment failing?", icon: HelpCircle },
+    { text: "Optimize my application.", icon: Sparkles },
+    { text: "Reduce cloud costs.", icon: DollarSign },
+    { text: "Analyze latest deployment.", icon: Activity },
+    { text: "Check application health.", icon: Activity },
+    { text: "Review security risks.", icon: ShieldCheck },
   ];
 
   return (

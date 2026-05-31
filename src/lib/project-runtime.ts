@@ -17,13 +17,12 @@ export function namespaceForProject(projectId: string) {
 
 export const deploymentStageLabels = [
   "Repository Connected",
-  "Source Cloned",
-  "AI Analysis Complete",
-  "Build Context Ready",
-  "Image Build",
-  "Infrastructure Generated",
-  "Cloud Resources Ready",
-  "Containers Deployed",
-  "Health Verified",
-  "Deployment Recorded",
+  "Analyzing Code",
+  "Preparing Build",
+  "Installing Dependencies",
+  "Building Application",
+  "Provisioning Infrastructure",
+  "Configuring SSL",
+  "Running Health Checks",
+  "Application Live",
 ];

@@ -4,7 +4,6 @@ import { motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import {
   AlertCircle,
-  Brain,
   Check,
   ChevronDown,
   ChevronUp,
@@ -14,13 +13,11 @@ import {
   FolderGit2,
   Loader,
   Loader2,
-  Maximize,
   RefreshCw,
-  Zap,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { api, getErrorMessage, type AIAnalysis, type Deployment, type DeploymentDetail, type FailureAnalysis } from "@/lib/api";
+import { api, type AIAnalysis, type Deployment, type DeploymentDetail, type FailureAnalysis } from "@/lib/api";
 import { deploymentStageLabels } from "@/lib/project-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -57,18 +54,8 @@ function isTerminalLineType(type: unknown): type is TerminalLine["type"] {
   return typeof type === "string" && terminalLineTypes.includes(type as TerminalLine["type"]);
 }
 
-const uiStageLabels = [
-  "Repository Connected",
-  "AI Analysis Complete",
-  "Build Complete",
-  "Infrastructure Provisioned",
-  "SSL Configured",
-  "Deployment Complete",
-  "Health Validation"
-];
-
 function ConfettiParticles() {
-  const [particles, setParticles] = useState<{ id: number; x: number; y: number; color: string; size: number; delay: number; duration: number }[]>([]);
+  const [particles, setParticles] = useState<{ id: number; x: number; y: number; color: string; size: number; delay: number; duration: number; drift: number; rotation: number; shape: string }[]>([]);
 
   useEffect(() => {
     const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
@@ -80,6 +67,9 @@ function ConfettiParticles() {
       size: Math.random() * 6 + 5,
       delay: Math.random() * 1.5,
       duration: Math.random() * 2.5 + 2,
+      drift: Math.random() * 20 - 10,
+      rotation: Math.random() > 0.5 ? 1 : -1,
+      shape: Math.random() > 0.5 ? "50%" : "2px",
     }));
     setParticles(pts);
   }, []);
@@ -92,8 +82,8 @@ function ConfettiParticles() {
           initial={{ y: "-10vh", x: `${p.x}vw`, rotate: 0, opacity: 1 }}
           animate={{
             y: "110vh",
-            x: `${p.x + (Math.random() * 20 - 10)}vw`,
-            rotate: 360 * (Math.random() > 0.5 ? 1 : -1),
+            x: `${p.x + p.drift}vw`,
+            rotate: 360 * p.rotation,
             opacity: 0,
           }}
           transition={{
@@ -106,7 +96,7 @@ function ConfettiParticles() {
             width: p.size,
             height: p.size,
             backgroundColor: p.color,
-            borderRadius: Math.random() > 0.5 ? "50%" : "2px",
+            borderRadius: p.shape,
           }}
         />
       ))}
@@ -114,8 +104,8 @@ function ConfettiParticles() {
   );
 }
 
-function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean, isFailed: boolean): PipelineStep[] {
-  const uiSteps: PipelineStep[] = uiStageLabels.map((label, index) => ({
+function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean): PipelineStep[] {
+  const uiSteps: PipelineStep[] = deploymentStageLabels.map((label, index) => ({
     id: index + 1,
     label,
     status: "pending",
@@ -123,85 +113,23 @@ function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean
   }));
 
   if (isSuccessful) {
-    return uiSteps.map(step => ({ ...step, status: "completed", duration: "done" }));
+    return uiSteps.map((step) => ({ ...step, status: "completed", duration: "done" }));
   }
 
-  const getBStep = (id: number) => backendSteps.find(s => s.id === id);
+  const getBStep = (id: number) => backendSteps.find((step) => step.id === id);
+  const backendOrder = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-  // Mappings
-  const b1 = getBStep(1);
-  const b2 = getBStep(2);
-  const b3 = getBStep(3);
-  const b4 = getBStep(4);
-  const b5 = getBStep(5);
-  const b6 = getBStep(6);
-  const b7 = getBStep(7);
-  const b8 = getBStep(8);
-  const b9 = getBStep(9);
-  const b10 = getBStep(10);
-
-  // Step 1: Connected
-  if (b2?.status === "completed") {
-    uiSteps[0].status = "completed";
-    uiSteps[0].duration = b2.duration || "done";
-  } else if (b1?.status === "active" || b2?.status === "active") {
-    uiSteps[0].status = "active";
-    uiSteps[0].duration = "...";
-  }
-
-  // Step 2: AI Analysis
-  if (b3?.status === "completed") {
-    uiSteps[1].status = "completed";
-    uiSteps[1].duration = b3.duration || "done";
-  } else if (b3?.status === "active") {
-    uiSteps[1].status = "active";
-    uiSteps[1].duration = "...";
-  }
-
-  // Step 3: Build
-  if (b5?.status === "completed") {
-    uiSteps[2].status = "completed";
-    uiSteps[2].duration = b5.duration || "done";
-  } else if (b4?.status === "active" || b5?.status === "active") {
-    uiSteps[2].status = "active";
-    uiSteps[2].duration = "...";
-  }
-
-  // Step 4: Infra Provisioned
-  if (b7?.status === "completed") {
-    uiSteps[3].status = "completed";
-    uiSteps[3].duration = b7.duration || "done";
-  } else if (b6?.status === "active" || b7?.status === "active") {
-    uiSteps[3].status = "active";
-    uiSteps[3].duration = "...";
-  }
-
-  // Step 5: SSL Configured
-  if (b8?.status === "completed") {
-    uiSteps[4].status = "completed";
-    uiSteps[4].duration = "done";
-  } else if (b7?.status === "completed" || b8?.status === "active") {
-    uiSteps[4].status = "active";
-    uiSteps[4].duration = "...";
-  }
-
-  // Step 6: Deploy
-  if (b8?.status === "completed") {
-    uiSteps[5].status = "completed";
-    uiSteps[5].duration = b8.duration || "done";
-  } else if (b8?.status === "active") {
-    uiSteps[5].status = "active";
-    uiSteps[5].duration = "...";
-  }
-
-  // Step 7: Health validation
-  if (b10?.status === "completed") {
-    uiSteps[6].status = "completed";
-    uiSteps[6].duration = b10.duration || "done";
-  } else if (b9?.status === "active" || b10?.status === "active") {
-    uiSteps[6].status = "active";
-    uiSteps[6].duration = "...";
-  }
+  backendOrder.forEach((backendId, index) => {
+    const backendStep = getBStep(backendId);
+    if (!backendStep) return;
+    if (backendStep.status === "completed") {
+      uiSteps[index].status = "completed";
+      uiSteps[index].duration = backendStep.duration || "done";
+    } else if (backendStep.status === "active") {
+      uiSteps[index].status = "active";
+      uiSteps[index].duration = backendStep.duration || "...";
+    }
+  });
 
   return uiSteps;
 }
@@ -233,10 +161,6 @@ function DeploymentsPageContent() {
   const [showRawLogs, setShowRawLogs] = useState(false);
   const [failureAnalysis, setFailureAnalysis] = useState<FailureAnalysis | null>(null);
   const [isLoadingFailureAnalysis, setIsLoadingFailureAnalysis] = useState(false);
-  const [isApplyingFix, setIsApplyingFix] = useState(false);
-  const [isScaleModalOpen, setIsScaleModalOpen] = useState(false);
-  const [scaleCount, setScaleCount] = useState(2);
-  const [remainingTime, setRemainingTime] = useState(43);
   const [showFailureDetails, setShowFailureDetails] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
 
@@ -398,17 +322,6 @@ function DeploymentsPageContent() {
     }
   }, [visibleLines]);
 
-  useEffect(() => {
-    if (!isAnimating) {
-      setRemainingTime(43);
-      return;
-    }
-    const timer = setInterval(() => {
-      setRemainingTime((t) => (t > 2 ? t - 1 : 2));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isAnimating]);
-
   const handleRedeploy = async () => {
     if (isAnimating) return;
     const currentDep = history.find((item) => item.id === deployId);
@@ -430,40 +343,6 @@ function DeploymentsPageContent() {
     }
   };
 
-  const executeScale = async () => {
-    setIsScaleModalOpen(false);
-    const currentDep = history.find((item) => item.id === deployId);
-    const targetProjectId = currentDep?.project_id || history[0]?.project_id;
-    if (!targetProjectId) {
-      addToast("No active project selected to scale.", "error");
-      return;
-    }
-    try {
-      await api.configureAutoscaling({
-        projectId: targetProjectId,
-        minReplicas: scaleCount,
-        maxReplicas: scaleCount,
-        cpuTarget: 80,
-      });
-      addToast(`Replica target updated to ${scaleCount}.`, "success");
-    } catch (err: unknown) {
-      addToast(getErrorMessage(err, "Failed to scale deployment."), "error");
-    }
-  };
-
-  const handleAutoFix = async () => {
-    if (isApplyingFix || !deployId) return;
-    setIsApplyingFix(true);
-    try {
-      const res = await api.fixDeploymentAutomatically(deployId);
-      router.push(`/dashboard/deployments?id=${res.deployment_id}&repo=${encodeURIComponent(repoParam)}`);
-    } catch (err: unknown) {
-      addToast(getErrorMessage(err, "Failed to apply AI auto-remediation."), "error");
-    } finally {
-      setIsApplyingFix(false);
-    }
-  };
-
   const lineColor = (type: string) => {
     switch (type) {
       case "command": return "text-white font-bold";
@@ -478,9 +357,11 @@ function DeploymentsPageContent() {
   const isSuccessful = currentDeployment?.status === "running";
   const isFailed = currentDeployment?.status === "failed";
   const liveUrl = currentDeployment?.live_url || "";
+  const deploymentDuration = currentDeployment?.duration
+    || (currentDeployment?.duration_seconds != null ? `${currentDeployment.duration_seconds}s` : "—");
 
-  // Map 10 backend steps to 7 UI steps
-  const uiSteps = mapBackendStepsToUi(steps, isSuccessful, isFailed);
+  // Map backend steps to UI stages
+  const uiSteps = mapBackendStepsToUi(steps, isSuccessful);
   const completedUiSteps = uiSteps.filter((step) => step.status === "completed").length;
   const progressPercent = Math.round((completedUiSteps / uiSteps.length) * 100);
 
@@ -510,20 +391,12 @@ function DeploymentsPageContent() {
         {history.length > 0 && (
           <div className="flex gap-2">
             <button
-              disabled={isAnimating || isApplyingFix}
+              disabled={isAnimating}
               onClick={handleRedeploy}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition cursor-pointer shadow-sm"
             >
               <RefreshCw size={14} className={isAnimating ? "animate-spin" : ""} />
               Redeploy
-            </button>
-            <button
-              disabled={isAnimating || isApplyingFix}
-              onClick={() => setIsScaleModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-background-secondary text-foreground hover:bg-card-hover border border-border disabled:opacity-50 transition cursor-pointer shadow-sm"
-            >
-              <Maximize size={14} />
-              Scale
             </button>
           </div>
         )}
@@ -607,19 +480,19 @@ function DeploymentsPageContent() {
           <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-4 border-t border-border/20 text-xs">
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Framework</span>
-              <p className="font-extrabold text-foreground mt-0.5">{analysis?.framework || "Next.js"}</p>
+              <p className="font-extrabold text-foreground mt-0.5">{analysis?.framework || "Not detected"}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Deployment Time</span>
-              <p className="font-extrabold text-foreground mt-0.5">{currentDeployment?.duration || "42 seconds"}</p>
+              <p className="font-extrabold text-foreground mt-0.5">{deploymentDuration}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Environment</span>
-              <p className="font-extrabold text-foreground mt-0.5">Production</p>
+              <p className="font-extrabold text-foreground mt-0.5">{currentDeployment?.environment || "—"}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Status</span>
-              <p className="font-extrabold text-success mt-0.5">Healthy & Live</p>
+              <p className="font-extrabold text-success mt-0.5">Live</p>
             </div>
           </div>
         </motion.div>
@@ -640,11 +513,6 @@ function DeploymentsPageContent() {
               <h3 className="text-base font-extrabold text-foreground">Issue Detected</h3>
               <p className="text-[10px] text-foreground-muted mt-0.5">Deployment halted due to system or application exception.</p>
             </div>
-            {failureAnalysis && (
-              <span className="ml-auto text-[9px] px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/20 font-bold uppercase">
-                AI Confidence: 94%
-              </span>
-            )}
           </div>
 
           {isLoadingFailureAnalysis ? (
@@ -700,14 +568,6 @@ function DeploymentsPageContent() {
             >
               View Logs
             </button>
-            <button
-              disabled={isApplyingFix}
-              onClick={handleAutoFix}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-danger hover:bg-danger/90 text-white disabled:opacity-50 transition cursor-pointer shadow-md shadow-danger/10"
-            >
-              {isApplyingFix ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-              Fix Automatically
-            </button>
           </div>
         </motion.div>
       )}
@@ -721,7 +581,7 @@ function DeploymentsPageContent() {
                 {progressPercent}%
               </p>
               <p className="text-[10px] text-foreground-muted font-bold uppercase tracking-wider">
-                Estimated remaining: {remainingTime}s
+                Deployment in progress
               </p>
             </div>
           )}
@@ -890,53 +750,6 @@ function DeploymentsPageContent() {
         )}
       </motion.div>
 
-      {/* Autoscaling modal */}
-      {isScaleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-card max-w-md w-full p-6 rounded-xl border border-border shadow-2xl relative"
-          >
-            <h3 className="text-lg font-bold mb-2">Scale Deployment</h3>
-            <p className="text-xs text-foreground-muted mb-6">
-              Adjust the replica target through the backend autoscaling endpoint.
-            </p>
-            <div className="flex items-center justify-between bg-card/40 border border-border rounded-lg p-4 mb-6">
-              <span className="text-sm font-semibold">Replica Count</span>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setScaleCount(Math.max(1, scaleCount - 1))}
-                  className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer"
-                >
-                  -
-                </button>
-                <span className="text-lg font-bold w-6 text-center">{scaleCount}</span>
-                <button
-                  onClick={() => setScaleCount(Math.min(20, scaleCount + 1))}
-                  className="w-8 h-8 rounded-lg bg-card border border-border hover:bg-card-hover transition flex items-center justify-center font-bold cursor-pointer"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setIsScaleModalOpen(false)}
-                className="px-4 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={executeScale}
-                className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition cursor-pointer"
-              >
-                Confirm Scale
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }
