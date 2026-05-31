@@ -55,6 +55,7 @@ function asStringArray(value: unknown): string[] {
 
 function toAnalysisResult(data: Record<string, unknown>, repo?: GitHubRepoItem): AnalysisResult {
   const recommendation = asRecord(data.deployment_recommendation);
+  const fallbackExplanation = `AI matched ${repo?.full_name || "this repository"} to the best-fit deployment profile based on detected dependencies, runtime, and build requirements.`;
   return {
     framework: asString(data.framework),
     runtime: asString(data.runtime),
@@ -70,7 +71,7 @@ function toAnalysisResult(data: Record<string, unknown>, repo?: GitHubRepoItem):
     buildCommands: asString(data.build_commands) || asString(data.build_command),
     startCommands: asString(data.start_commands) || asString(data.start_command),
     port: asString(data.port),
-    explanation: asString(data.explanation) || (repo?.name ? `AI matched ${repo.name} to the best-fit deployment profile based on detected dependencies, runtime, and build requirements.` : null),
+    explanation: asString(data.explanation) || fallbackExplanation,
   };
 }
 

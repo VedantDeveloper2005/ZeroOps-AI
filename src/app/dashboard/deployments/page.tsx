@@ -43,6 +43,19 @@ type DeploymentStreamEvent = {
   lineType?: unknown;
 };
 
+interface ConfettiParticle {
+  id: number;
+  x: number;
+  y: number;
+  color: string;
+  size: number;
+  delay: number;
+  duration: number;
+  drift: number;
+  rotation: number;
+  shape: string;
+}
+
 const pipelineStepStatuses: PipelineStep["status"][] = ["completed", "active", "pending"];
 const terminalLineTypes: TerminalLine["type"][] = ["command", "blank", "info", "success", "warning", "error"];
 
@@ -55,7 +68,7 @@ function isTerminalLineType(type: unknown): type is TerminalLine["type"] {
 }
 
 function ConfettiParticles() {
-  const [particles, setParticles] = useState<{ id: number; x: number; y: number; color: string; size: number; delay: number; duration: number; drift: number; rotation: number; shape: string }[]>([]);
+  const [particles, setParticles] = useState<ConfettiParticle[]>([]);
 
   useEffect(() => {
     const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
