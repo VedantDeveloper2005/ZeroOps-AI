@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { Circle, CheckCircle, XCircle, Loader2, RefreshCw } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, getErrorMessage } from "@/lib/api";
 
 export default function GitHubCallbackPage() {
   return (
@@ -53,6 +53,7 @@ function GitHubCallbackContent() {
 
     const processSession = async (sessionToken: string | null) => {
       try {
+        setStep(1);
         if (sessionToken) {
           // 1. Store JWT securely
           localStorage.setItem("session_token", sessionToken);
@@ -62,28 +63,41 @@ function GitHubCallbackContent() {
           document.cookie = `session_token=${sessionToken}; path=/; max-age=2592000; SameSite=Lax${isLocal ? "" : "; Secure"}`;
         }
 
-        // 2. Connecting GitHub Account - Fetch user profile
+        // Welcome to ZeroOps - Connect GitHub Account
         await refreshUser();
-        setStep(2); // Move to loading repositories
+        await new Promise((r) => setTimeout(r, 800));
 
-        // 3. Load repositories automatically
+        // Loading repositories...
+        setStep(2);
         try {
           await api.getGitHubRepos({ page: 1, per_page: 10 });
         } catch (err) {
           console.error("Repository pre-load failed or fetch error:", err);
-          // Proceed anyway to repository page if authentication is valid
         }
+        await new Promise((r) => setTimeout(r, 800));
 
-        setStep(3); // Successfully loaded
+        // Analyzing account...
+        setStep(3);
+        try {
+          await api.getSettings();
+        } catch (err) {
+          console.error("Settings analysis pre-load failed:", err);
+        }
+        await new Promise((r) => setTimeout(r, 800));
+
+        // Preparing deployment workspace...
+        setStep(4);
+        await new Promise((r) => setTimeout(r, 800));
+
         setStatus("success");
         
         setTimeout(() => {
           router.push("/dashboard/repositories");
-        }, 1200);
+        }, 1000);
 
-      } catch (e: any) {
+      } catch (e: unknown) {
         setStatus("error");
-        setErrorMessage(e.message || "An error occurred while setting up your session.");
+        setErrorMessage(getErrorMessage(e, "An error occurred while setting up your session."));
       }
     };
 
@@ -127,12 +141,16 @@ function GitHubCallbackContent() {
               </div>
               <div>
                 <h2 className="text-sm font-bold text-foreground">
-                  {step === 1 ? "Connecting GitHub Account" : "Loading GitHub Repositories"}
+                  {step === 1 && "Welcome to ZeroOps"}
+                  {step === 2 && "Loading repositories..."}
+                  {step === 3 && "Analyzing account..."}
+                  {step === 4 && "Preparing deployment workspace..."}
                 </h2>
                 <p className="text-xs text-foreground-muted mt-1">
-                  {step === 1 
-                    ? "Securing your authentication session..." 
-                    : "Fetching and syncing your repository catalog..."}
+                  {step === 1 && "Securing your authentication session..."}
+                  {step === 2 && "Syncing your repository catalog..."}
+                  {step === 3 && "Running machine intelligence analysis..."}
+                  {step === 4 && "Configuring your personal cloud console..."}
                 </p>
               </div>
 
@@ -141,11 +159,13 @@ function GitHubCallbackContent() {
                 <div className="flex items-center gap-3 text-xs">
                   {step > 1 ? (
                     <CheckCircle size={14} className="text-success" />
-                  ) : (
+                  ) : step === 1 ? (
                     <Loader2 size={14} className="text-primary animate-spin" />
+                  ) : (
+                    <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 1 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Connecting GitHub Account
+                    Welcome to ZeroOps
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
@@ -157,17 +177,31 @@ function GitHubCallbackContent() {
                     <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 2 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Loading repositories
+                    Loading repositories...
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                   {step > 3 ? (
                     <CheckCircle size={14} className="text-success" />
+                  ) : step === 3 ? (
+                    <Loader2 size={14} className="text-primary animate-spin" />
                   ) : (
                     <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 3 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Entering workspace
+                    Analyzing account...
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  {step > 4 ? (
+                    <CheckCircle size={14} className="text-success" />
+                  ) : step === 4 ? (
+                    <Loader2 size={14} className="text-primary animate-spin" />
+                  ) : (
+                    <Circle size={14} className="text-border" />
+                  )}
+                  <span className={`font-semibold ${step >= 4 ? "text-foreground" : "text-foreground-muted"}`}>
+                    Preparing deployment workspace...
                   </span>
                 </div>
               </div>
@@ -198,7 +232,7 @@ function GitHubCallbackContent() {
                   className="h-full bg-success rounded-full"
                   initial={{ width: "0%" }}
                   animate={{ width: "100%" }}
-                  transition={{ duration: 1.2, ease: "easeInOut" }}
+                  transition={{ duration: 1.0, ease: "easeInOut" }}
                 />
               </div>
             </motion.div>

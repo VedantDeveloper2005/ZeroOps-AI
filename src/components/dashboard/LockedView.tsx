@@ -18,12 +18,12 @@ export function LockedView({
 
   return (
     <div className="relative w-full min-h-[450px] rounded-2xl overflow-hidden glass p-8 flex flex-col items-center justify-center text-center space-y-6 border border-border/40 shadow-2xl">
-      {/* Blurred background mock elements */}
+      {/* Blurred background preview elements */}
       <div className="absolute inset-0 bg-background/40 backdrop-blur-md z-10" />
       <div className="absolute -top-10 -left-10 w-48 h-48 bg-primary/20 rounded-full blur-3xl opacity-50" />
       <div className="absolute -bottom-10 -right-10 w-48 h-48 bg-accent/20 rounded-full blur-3xl opacity-50" />
       
-      {/* Background decoration representing mock logs/charts */}
+      {/* Background decoration representing locked logs/charts */}
       <div className="absolute inset-0 flex flex-col justify-around p-8 opacity-10 pointer-events-none select-none font-mono text-left text-[10px]">
         <div>[09:04:12] INFO auth-service - JWT token validated for user_id=usr_2847</div>
         <div>[09:04:15] WARN payments-service - DB connection pool at 82% capacity</div>

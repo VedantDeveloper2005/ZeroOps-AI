@@ -211,7 +211,7 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         "framework": framework,
         "version": version,
         "language": language,
-        "confidence": 95,
+        "confidence": 0,
         "resources": {
             "cpu": cpu,
             "memory": memory,
@@ -219,7 +219,7 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         },
         "risk_score": 12 if not vulnerabilities else 22,
         "dependencies": dependencies,
-        "vulnerabilities": vulnerabilities or ["Vulnerability checks passed successfully."],
+        "vulnerabilities": vulnerabilities,
         "dockerfile": dockerfile,
         "kubernetes_manifest": k8s_manifest,
         
@@ -228,16 +228,16 @@ def analyze_repo_local(repo_path: str, project_id: str = "default") -> dict:
         "package_manager": package_manager,
         "docker_support": docker_support,
         "monorepo_structure": monorepo_structure,
-        "database_dependencies": database_dependencies or ["None"],
+        "database_dependencies": database_dependencies,
         "deployment_strategy": deployment_strategy,
         "build_commands": build_commands,
         "start_commands": start_commands,
         "environment_variables": environment_variables,
-        "explanation": f"This is a {framework} application built with {language}. It utilizes {package_manager} for package management and dependencies. ZeroOps AI has configured high-availability container delivery on Azure App Service with auto-scaling limits.",
-        "recommended_compute_tier": "Azure App Service B1",
-        "estimated_cost": "$13/month",
-        "recommended_region": "Central India",
-        "expected_traffic": "50,000 requests/month"
+        "explanation": f"Local repository analysis detected a {framework} application built with {language} using {package_manager}. No cloud cost, region, or traffic estimate was generated.",
+        "recommended_compute_tier": None,
+        "estimated_cost": None,
+        "recommended_region": None,
+        "expected_traffic": None
     }
 
 
@@ -340,7 +340,7 @@ def analyze_repository(repo_path: str, project_id: str = "default") -> dict:
     24. "explanation": A plain English summary (2-3 sentences) explaining what this codebase is and what it does based on the file list and package files (e.g. 'This is a Next.js web application built with TypeScript...').
     25. "recommended_compute_tier": Recommended Azure compute tier (e.g., "Azure App Service B1", "Azure App Service B2", "Azure Container Apps Basic")
     26. "estimated_cost": Recommended monthly cost estimation as string (e.g., "$13/month", "$26/month")
-    27. "recommended_region": Recommended Azure region close to major traffic (e.g., "Central India", "East US", "West Europe")
+    27. "recommended_region": Recommended Azure region close to major traffic (e.g., "East US", "West Europe")
     28. "expected_traffic": Expected traffic tier for the recommended compute setup as string (e.g., "50,000 requests/month", "100,000 requests/month")
     
     Respond ONLY with valid JSON. No markdown codeblocks, no extra explanation text.
@@ -694,21 +694,25 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
 
     # Context-aware local responder
     msg = message.lower()
-    framework = (project_metadata or {}).get("framework", "Next.js")
-    db = (project_metadata or {}).get("database", "PostgreSQL")
-    url = (project_metadata or {}).get("live_url", "https://app.zeroops.dev")
-    region = (project_metadata or {}).get("region", "East US")
+    metadata = project_metadata or {}
+    framework = metadata.get("framework") or "this project"
+    db = metadata.get("database")
+    latest_deployment = metadata.get("latest_deployment") or {}
+    url = latest_deployment.get("live_url") if isinstance(latest_deployment, dict) else None
+    region = metadata.get("region") or "no region recorded"
+    deployment_status = latest_deployment.get("status") if isinstance(latest_deployment, dict) else None
 
     if "arch" in msg or "diagram" in msg or "flow" in msg:
-        return f"Your {framework} application architecture is set up in {region} with isolated security containers. Pushing code initiates a secure build pipeline. The container runs on Azure App Service and automatically routes requests to your {db} instance. Traffic flows seamlessly through a TLS-secured Ingress controller directly to the app container."
+        return f"I can summarize the recorded metadata: framework={framework}, region={region}, database={db or 'not recorded'}, latest deployment status={deployment_status or 'not recorded'}. No provisioned architecture diagram has been recorded yet."
     elif "cost" in msg or "price" in msg or "optimize" in msg:
-        return f"Currently, your deployment is estimated to cost $12.40/month. You can optimize this by enabling idle pod scaling to 1 replica outside business hours, which reduces costs to approximately $8.20/month. No Kubernetes/cloud configuration is needed; ZeroOps scales pods dynamically."
+        return "No cost estimate has been recorded for this project yet. Connect cloud billing or cost telemetry before applying cost recommendations."
     elif "scale" in msg or "scaling" in msg or "replicas" in msg:
-        return f"Your app is configured to scale dynamically between 2 and 10 replica pods. ZeroOps monitors traffic and adjusts replica count when CPU utilization reaches 70%, preventing downtime during spikes. You can adjust limits in the settings."
+        return "Autoscaling configuration is only available when the backend records it for this project. Check the Autoscaling page for the current saved policy."
     elif "db" in msg or "database" in msg or "postgres" in msg:
-        return f"ZeroOps has provisioned a secure Azure Database for {db}. Connection pools are handled automatically and credentials are securely stored in the Vault. Direct external access is restricted to ensure production-grade security."
+        return f"Recorded database dependency: {db or 'none'}. I do not have a recorded database provisioning event for this project."
     elif "error" in msg or "logs" in msg or "fail" in msg:
-        return f"Your latest deployment logs show a clean startup. All health checks passed. If you see any runtime exceptions in your logs, NVIDIA Nemotron will automatically isolate the root cause and suggest an auto-remediation plan."
+        return "I can review recorded deployment logs and failure analysis when they exist. No clean-startup result is assumed without backend logs."
     else:
-        return f"Hi! I'm your ZeroOps AI DevOps engineer. I've deployed your {framework} application to Azure App Service at {url}. Everything is healthy, with auto-scaling and database replication fully automated. Let me know if you'd like me to explain your architecture, scaling configuration, or cost options!"
+        live_url = f" Live URL: {url}." if url else ""
+        return f"I can answer from recorded ZeroOps backend data for {framework}.{live_url} Ask about deployments, logs, scaling, database metadata, or cost telemetry."
 

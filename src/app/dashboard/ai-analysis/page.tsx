@@ -2,12 +2,12 @@
 
 import { motion } from "framer-motion";
 import {
-  Brain, ShieldCheck, Zap, TrendingUp, Cpu, Activity,
-  Clock, AlertTriangle, ArrowRight, Sparkles, Database, CheckCircle, Loader2, DollarSign
+  Brain, TrendingUp, Cpu, Activity,
+  ArrowRight, Sparkles, Loader2, DollarSign
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, Project, HealthScore, CostOptimization, TelemetryMetric } from "@/lib/api";
+import { api, type Project, type HealthScore, type CostOptimization, type TelemetryMetric } from "@/lib/api";
 import { AreaChart } from "@/components/ui/AreaChart";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 
@@ -71,43 +71,21 @@ export default function AIAnalysisPage() {
     loadAnalysisData();
   }, [selectedProjectId]);
 
-  const handleApplyOptimization = async (optTitle: string) => {
+  const handleApplyOptimization = (optTitle: string) => {
     setApplyingOpt(optTitle);
-    try {
-      // Simulate autonomous scaling/tuning event commit
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      addToast(`Autonomously applied: ${optTitle}. Re-evaluating system health.`, "success");
-      
-      // Refresh score
-      const score = await api.getHealthScore(selectedProjectId);
-      setHealthScore(score);
-    } catch (err) {
-      addToast("Failed to apply optimization", "error");
-    } finally {
-      setApplyingOpt(null);
-    }
+    addToast(`Automatic remediation is not connected for "${optTitle}" yet. Review the recorded recommendation before making changes.`, "warning");
+    setApplyingOpt(null);
   };
 
-  const selectedProject = projects.find(p => p.id === selectedProjectId);
-
-  // Fallback charts if telemetry not ready
-  const defaultCpuData = [
-    { time: "00:00", value: 12 },
-    { time: "04:00", value: 8 },
-    { time: "08:00", value: 15 },
-    { time: "12:00", value: 24 },
-    { time: "16:00", value: 18 },
-    { time: "20:00", value: 14 }
-  ];
-
-  const defaultMemoryData = [
-    { time: "00:00", value: 42 },
-    { time: "04:00", value: 41 },
-    { time: "08:00", value: 44 },
-    { time: "12:00", value: 45 },
-    { time: "16:00", value: 46 },
-    { time: "20:00", value: 43 }
-  ];
+  const score = healthScore?.score ?? 0;
+  const hasCostTelemetry = Boolean(costOpt && (
+    costOpt.current_cost > 0 ||
+    costOpt.recommended_cost > 0 ||
+    costOpt.savings > 0 ||
+    costOpt.recommendations.length > 0
+  ));
+  const hasCpuData = (telemetry?.cpu.length ?? 0) > 0;
+  const hasMemoryData = (telemetry?.memory.length ?? 0) > 0;
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-12">
@@ -157,17 +135,17 @@ export default function AIAnalysisPage() {
             >
               <h3 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">Application Health Score</h3>
               <GaugeChart 
-                value={healthScore?.score || 94} 
+                value={score} 
                 label="Health Index" 
                 size={140} 
-                color={(healthScore?.score || 94) >= 90 ? "var(--success)" : (healthScore?.score || 94) >= 75 ? "var(--warning)" : "var(--danger)"} 
+                color={score >= 90 ? "var(--success)" : score >= 75 ? "var(--warning)" : "var(--danger)"} 
               />
               <div className={`text-xs font-bold px-3 py-1 mt-1 border rounded-lg uppercase ${
-                (healthScore?.score || 94) >= 90 
+                score >= 90 
                   ? "text-success bg-success/10 border-success/20" 
                   : "text-warning bg-warning/10 border-warning/20"
               }`}>
-                {healthScore?.status || "Strong Reliability"} ✓
+                {healthScore?.status || "No data"}
               </div>
             </motion.div>
 
@@ -183,11 +161,11 @@ export default function AIAnalysisPage() {
               </h3>
               <div className="space-y-3.5">
                 {[
-                  { label: "Performance", score: healthScore?.breakdown.performance || 95, color: "bg-primary" },
-                  { label: "Security & Isolation", score: healthScore?.breakdown.security || 90, color: "bg-success" },
-                  { label: "Reliability & Uptime", score: healthScore?.breakdown.reliability || 94, color: "bg-info" },
-                  { label: "Scalability Bounds", score: healthScore?.breakdown.scalability || 88, color: "bg-accent" },
-                  { label: "Cost Efficiency", score: healthScore?.breakdown.cost || 93, color: "bg-purple-500" }
+                  { label: "Performance", score: healthScore?.breakdown.performance ?? 0, color: "bg-primary" },
+                  { label: "Security & Isolation", score: healthScore?.breakdown.security ?? 0, color: "bg-success" },
+                  { label: "Reliability & Uptime", score: healthScore?.breakdown.reliability ?? 0, color: "bg-info" },
+                  { label: "Scalability Bounds", score: healthScore?.breakdown.scalability ?? 0, color: "bg-accent" },
+                  { label: "Cost Efficiency", score: healthScore?.breakdown.cost ?? 0, color: "bg-purple-500" }
                 ].map((cat) => (
                   <div key={cat.label} className="text-xs">
                     <div className="flex justify-between font-semibold mb-1">
@@ -209,7 +187,7 @@ export default function AIAnalysisPage() {
           </div>
 
           {/* Cost Savings Overview Banner */}
-          {costOpt && (
+          {hasCostTelemetry && costOpt && (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
@@ -218,10 +196,10 @@ export default function AIAnalysisPage() {
             >
               <div className="space-y-1">
                 <h4 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
-                  <DollarSign size={16} className="text-primary animate-pulse" /> Autonomic Cost Audit Complete
+                  <DollarSign size={16} className="text-primary animate-pulse" /> Cost Signals Recorded
                 </h4>
                 <p className="text-xs text-foreground-muted leading-relaxed font-medium">
-                  We scanned container compute logs. ZeroOps AI identified potential downsizings to optimize your Azure billing.
+                  These values come from the backend cost optimization endpoint for the selected project.
                 </p>
               </div>
               <div className="flex items-center gap-4 text-xs font-bold border-l border-border/40 pl-4">
@@ -274,7 +252,7 @@ export default function AIAnalysisPage() {
                     onClick={() => handleApplyOptimization(rec.title)}
                     className="flex items-center gap-1.5 text-xs text-primary font-bold hover:underline w-fit cursor-pointer self-end disabled:opacity-50"
                   >
-                    {applyingOpt === rec.title ? "Applying Configuration..." : "Apply Optimization"} <ArrowRight size={14} />
+                    {applyingOpt === rec.title ? "Recording Review..." : "Review Recommendation"} <ArrowRight size={14} />
                   </button>
                 </motion.div>
               ))}
@@ -304,7 +282,7 @@ export default function AIAnalysisPage() {
                     onClick={() => handleApplyOptimization(rec)}
                     className="flex items-center gap-1.5 text-xs text-primary font-bold hover:underline w-fit cursor-pointer self-end disabled:opacity-50"
                   >
-                    {applyingOpt === rec ? "Tuning Clusters..." : "Apply Optimization"} <ArrowRight size={14} />
+                    {applyingOpt === rec ? "Recording Review..." : "Review Recommendation"} <ArrowRight size={14} />
                   </button>
                 </motion.div>
               ))}
@@ -331,7 +309,13 @@ export default function AIAnalysisPage() {
                     <span className="font-mono text-xs text-foreground-muted">{telemetry.cpu[telemetry.cpu.length - 1]?.value || 0}%</span>
                   )}
                 </div>
-                <AreaChart data={telemetry && telemetry.cpu.length > 0 ? telemetry.cpu : defaultCpuData} color="#3b82f6" height={150} />
+                {hasCpuData && telemetry ? (
+                  <AreaChart data={telemetry.cpu} color="#3b82f6" height={150} />
+                ) : (
+                  <div className="h-[150px] flex items-center justify-center rounded-lg border border-dashed border-border text-xs text-foreground-muted">
+                    No CPU data points recorded.
+                  </div>
+                )}
               </div>
 
               {/* Chart 2: Memory Usage */}
@@ -345,7 +329,13 @@ export default function AIAnalysisPage() {
                     <span className="font-mono text-xs text-foreground-muted">{telemetry.memory[telemetry.memory.length - 1]?.value || 0}%</span>
                   )}
                 </div>
-                <AreaChart data={telemetry && telemetry.memory.length > 0 ? telemetry.memory : defaultMemoryData} color="#8b5cf6" height={150} />
+                {hasMemoryData && telemetry ? (
+                  <AreaChart data={telemetry.memory} color="#8b5cf6" height={150} />
+                ) : (
+                  <div className="h-[150px] flex items-center justify-center rounded-lg border border-dashed border-border text-xs text-foreground-muted">
+                    No memory data points recorded.
+                  </div>
+                )}
               </div>
             </div>
 

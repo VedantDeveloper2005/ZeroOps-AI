@@ -1,11 +1,11 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Shield, Lock, Eye, ShieldCheck, AlertTriangle, Search } from "lucide-react";
 import { GaugeChart } from "@/components/ui/GaugeChart";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, type Project } from "@/lib/api";
+import { api } from "@/lib/api";
 import { LockedView } from "@/components/dashboard/LockedView";
 
 interface SecurityThreat {
@@ -33,7 +33,7 @@ type SecurityData = {
 const severityColor: Record<string, string> = { critical: "bg-danger/10 text-danger border-l-danger", high: "bg-warning/10 text-warning border-l-warning", medium: "bg-info/10 text-info border-l-info", low: "bg-foreground-muted/10 text-foreground-muted border-l-foreground-muted" };
 
 export default function SecurityPage() {
-  const { addToast, addNotification, hasDeployed } = useNotifications();
+  const { addToast, hasDeployed } = useNotifications();
   const [securityData, setSecurityData] = useState<SecurityData>({
     securityScore: 0,
     firewallStatus: "Unknown",
@@ -45,28 +45,11 @@ export default function SecurityPage() {
     namespaceIsolated: false,
     rbacEnabled: false
   });
-  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [securityThreats, setSecurityThreats] = useState<SecurityThreat[]>([]);
+  const [securityThreats] = useState<SecurityThreat[]>([]);
   const [isScanning, setIsScanning] = useState(false);
 
-  useEffect(() => {
-    async function loadProjects() {
-      try {
-        const projs = await api.getProjects();
-        setProjects(projs);
-        if (projs.length > 0) {
-          setSelectedProjectId(projs[0].id);
-          loadSecurityStatus(projs[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to load projects", err);
-      }
-    }
-    if (hasDeployed) loadProjects();
-  }, [hasDeployed]);
-
-  const loadSecurityStatus = async (projectId: string) => {
+  const loadSecurityStatus = useCallback(async (projectId: string) => {
     try {
       const data = await api.getSecurityStatus(projectId);
       setSecurityData(prev => ({
@@ -83,28 +66,35 @@ export default function SecurityPage() {
     } catch (err) {
       console.error("Failed to load security status:", err);
     }
-  };
+  }, []);
 
-  const handleSecurityScan = () => {
+  useEffect(() => {
+    async function loadProjects() {
+      try {
+        const projs = await api.getProjects();
+        if (projs.length > 0) {
+          setSelectedProjectId(projs[0].id);
+          loadSecurityStatus(projs[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to load projects", err);
+      }
+    }
+    if (hasDeployed) loadProjects();
+  }, [hasDeployed, loadSecurityStatus]);
+
+  const handleSecurityScan = async () => {
     if (isScanning) return;
     setIsScanning(true);
-    addToast("Initiating live cluster vulnerability scan...", "info");
-    
-    setTimeout(() => {
-      setIsScanning(false);
-      addToast("Security scan complete. All isolation checks passed.", "success");
-      addNotification({
-        title: "Security Scan Completed",
-        message: "Full compliance audit and key vault check completed. AKS namespace isolation is verified.",
-        type: "success",
-        category: "security",
-        action_url: "/dashboard/security"
-      });
-      
+    addToast("Refreshing recorded security status...", "info");
+    try {
       if (selectedProjectId) {
-        loadSecurityStatus(selectedProjectId);
+        await loadSecurityStatus(selectedProjectId);
       }
-    }, 1500);
+      addToast("Security status refreshed from backend data.", "success");
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const statusCards = [
@@ -133,7 +123,7 @@ export default function SecurityPage() {
           className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover disabled:opacity-50 transition shadow-sm cursor-pointer"
         >
           <Search size={16} className={isScanning ? "animate-spin" : ""} />
-          {isScanning ? "Scanning..." : "Run Security Scan"}
+          {isScanning ? "Refreshing..." : "Refresh Security Status"}
         </button>
       </div>
 

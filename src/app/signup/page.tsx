@@ -4,8 +4,8 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { getErrorMessage } from "@/lib/api";
 
 export default function SignupPage() {
   const { signup, loginWithGitHub } = useAuth();
@@ -19,7 +19,6 @@ export default function SignupPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -38,8 +37,8 @@ export default function SignupPage() {
         formData.password
       );
       // Success redirection is handled automatically by AuthContext
-    } catch (err: any) {
-      setError(err.message || "Failed to create account");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to create account"));
       setIsSubmitting(false);
     }
   };

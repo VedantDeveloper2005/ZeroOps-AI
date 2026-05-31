@@ -1,13 +1,23 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Shield, RefreshCw, Key, Globe, Bell, Activity,
   Loader2, Brain, CheckCircle, Plus, Trash2, Globe2, ShieldCheck, Settings, Users
 } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, Project, CustomDomain, ProjectMember, EnvVar } from "@/lib/api";
+import {
+  api,
+  getErrorMessage,
+  type CustomDomain,
+  type DeploymentHealth,
+  type EnvVar,
+  type HealthCheck,
+  type Project,
+  type ProjectMember,
+  type SystemHealth,
+} from "@/lib/api";
 
 type TabId = "general" | "domains" | "security" | "team" | "notifications" | "ai";
 
@@ -26,10 +36,10 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
 
   // Health check states
-  const [sysHealth, setSysHealth] = useState<any>(null);
-  const [dbHealth, setDbHealth] = useState<any>(null);
-  const [ghHealth, setGhHealth] = useState<any>(null);
-  const [depHealth, setDepHealth] = useState<any>(null);
+  const [sysHealth, setSysHealth] = useState<SystemHealth | null>(null);
+  const [dbHealth, setDbHealth] = useState<HealthCheck | null>(null);
+  const [ghHealth, setGhHealth] = useState<HealthCheck | null>(null);
+  const [depHealth, setDepHealth] = useState<DeploymentHealth | null>(null);
   const [loadingHealth, setLoadingHealth] = useState(true);
 
   // Domain states
@@ -64,7 +74,7 @@ export default function SettingsPage() {
     emailAlerts: true,
   });
 
-  const refreshHealthChecks = async () => {
+  const refreshHealthChecks = useCallback(async () => {
     setLoadingHealth(true);
     try {
       const [sys, db, gh, dep] = await Promise.allSettled([
@@ -82,7 +92,7 @@ export default function SettingsPage() {
     } finally {
       setLoadingHealth(false);
     }
-  };
+  }, []);
 
   // Load Projects on startup
   useEffect(() => {
@@ -101,7 +111,7 @@ export default function SettingsPage() {
     }
     loadProjects();
     refreshHealthChecks();
-  }, []);
+  }, [refreshHealthChecks]);
 
   // Load project-specific data when selected project changes
   useEffect(() => {
@@ -199,7 +209,7 @@ export default function SettingsPage() {
         category: "system",
         action_url: null
       });
-    } catch (err) {
+    } catch {
       setSettings(prev => ({ ...prev, [key]: !nextValue }));
       addToast(`Failed to update ${title}`, "error");
     }
@@ -217,7 +227,7 @@ export default function SettingsPage() {
       const data = await api.regenerateApiKey();
       setApiKey(data.apiKey);
       addToast("Regenerated CLI access token.", "success");
-    } catch (err) {
+    } catch {
       addToast("Failed to regenerate access key", "error");
     }
   };
@@ -232,8 +242,8 @@ export default function SettingsPage() {
       setDomains(res);
       addToast(`Domain ${newDomain} connected successfully. Complete DNS verification to activate SSL.`, "success");
       setNewDomain("");
-    } catch (err: any) {
-      addToast(err.message || "Failed to connect domain", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to connect domain"), "error");
     }
   };
 
@@ -244,8 +254,8 @@ export default function SettingsPage() {
       const res = await api.verifyDomain(selectedProjectId, domainName);
       setDomains(res);
       addToast(`DNS Verified and SSL/HTTPS activated for ${domainName}!`, "success");
-    } catch (err: any) {
-      addToast(err.message || "Verification failed. Check your DNS records.", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Verification failed. Check your DNS records."), "error");
     } finally {
       setVerifyingDomainName(null);
     }
@@ -258,8 +268,8 @@ export default function SettingsPage() {
       const res = await api.renewSSL(selectedProjectId, domainName);
       setDomains(res);
       addToast(`SSL Certificate for ${domainName} successfully renewed.`, "success");
-    } catch (err: any) {
-      addToast(err.message || "SSL renewal failed.", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "SSL renewal failed."), "error");
     } finally {
       setRenewingDomainName(null);
     }
@@ -271,8 +281,8 @@ export default function SettingsPage() {
       const res = await api.removeDomain(selectedProjectId, domainName);
       setDomains(res);
       addToast(`Domain ${domainName} removed.`, "warning");
-    } catch (err: any) {
-      addToast(err.message || "Failed to remove domain", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to remove domain"), "error");
     }
   };
 
@@ -292,8 +302,8 @@ export default function SettingsPage() {
       setNewSecretKey("");
       setNewSecretValue("");
       addToast(`Environment variable ${newSecretKey} saved successfully.`, "success");
-    } catch (err: any) {
-      addToast(err.message || "Failed to save environment variable", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to save environment variable"), "error");
     } finally {
       setSavingSecret(false);
     }
@@ -305,8 +315,8 @@ export default function SettingsPage() {
       await api.deleteEnvVar(selectedProjectId, varId);
       setSecrets(secrets.filter(s => s.id !== varId));
       addToast(`Variable ${keyName} deleted from production environment.`, "warning");
-    } catch (err: any) {
-      addToast(err.message || "Failed to delete variable", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to delete variable"), "error");
     }
   };
 
@@ -321,8 +331,8 @@ export default function SettingsPage() {
       setMembers(res);
       setNewMemberEmail("");
       addToast(`Member ${newMemberEmail} added successfully to the workspace.`, "success");
-    } catch (err: any) {
-      addToast(err.message || "Failed to add team member", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to add team member"), "error");
     } finally {
       setAddingMember(false);
     }
@@ -334,8 +344,8 @@ export default function SettingsPage() {
       const res = await api.removeMember(selectedProjectId, email);
       setMembers(res);
       addToast(`Member ${email} removed from workspace.`, "warning");
-    } catch (err: any) {
-      addToast(err.message || "Failed to remove member", "error");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to remove member"), "error");
     }
   };
 
@@ -447,9 +457,9 @@ export default function SettingsPage() {
                       <div className="space-y-1.5">
                         <label className="font-bold text-foreground-muted">Hosting Infrastructure</label>
                         <div className="bg-background-secondary/40 p-3.5 rounded-xl border border-border/40 font-mono text-[10px] text-foreground-muted flex items-center justify-between">
-                          <span>Azure App Service ({activeProject.region || "Central India"})</span>
+                          <span>Hosting target ({activeProject.region || "region not recorded"})</span>
                           <span className="text-[9px] bg-primary/10 border border-primary/20 text-primary px-2 py-0.2 rounded-full font-bold uppercase">
-                            {activeProject.status === "active" ? "Operational" : activeProject.status}
+                            {activeProject.status || "status not recorded"}
                           </span>
                         </div>
                       </div>
@@ -699,7 +709,7 @@ export default function SettingsPage() {
                   <Shield size={16} className="text-success" /> Environment Variables (Vault Secrets)
                 </h3>
                 <p className="text-xs text-foreground-muted leading-normal">
-                  Decrypted values are securely isolated in HSM-protected Azure Vault containers and injected only at application runtime.
+                  Secret values are served by the backend secret store and injected at application runtime. Azure Key Vault is used when configured.
                 </p>
                 
                 {loadingSecrets ? (
@@ -713,7 +723,7 @@ export default function SettingsPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-bold text-foreground">{sec.key}</span>
                           {sec.is_secret && (
-                            <span className="text-[8px] bg-success/15 border border-success/25 text-success font-semibold px-1 rounded uppercase">HSM Secret</span>
+                            <span className="text-[8px] bg-success/15 border border-success/25 text-success font-semibold px-1 rounded uppercase">Secret</span>
                           )}
                         </div>
                         <div className="flex items-center gap-3">
@@ -731,7 +741,7 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <div className="text-xs text-foreground-muted py-4 font-medium">
-                    No variables defined for this project's production environment.
+                    No variables defined for this project&apos;s production environment.
                   </div>
                 )}
 
@@ -904,11 +914,13 @@ export default function SettingsPage() {
                   <div className="flex items-start justify-between gap-3 border-t border-border/20 pt-4">
                     <div>
                       <p className="font-bold text-foreground">Discord Operations Integration</p>
-                      <p className="text-[10px] text-foreground-muted mt-0.5">Log live container failures and health probe violations to Discord</p>
+                      <p className="text-[10px] text-foreground-muted mt-0.5">Not connected in this MVP build</p>
                     </div>
                     <input
                       type="checkbox"
-                      defaultChecked
+                      checked={false}
+                      disabled
+                      readOnly
                       className="w-4.5 h-4.5 rounded border-border text-primary focus:ring-primary bg-card cursor-pointer"
                     />
                   </div>

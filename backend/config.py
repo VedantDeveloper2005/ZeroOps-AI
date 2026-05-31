@@ -1,4 +1,5 @@
 import os
+import secrets
 import subprocess
 from dotenv import load_dotenv
 
@@ -8,16 +9,21 @@ load_dotenv()
 # App settings
 PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
-APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
+APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+IS_PRODUCTION = APP_ENV == "production"
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"))
 ZEROOPS_BACKEND_URL = os.getenv("ZEROOPS_BACKEND_URL", "")
 
 DEFAULT_ALLOWED_ORIGINS = [
-    "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"
 ]
+
+if not IS_PRODUCTION:
+    DEFAULT_ALLOWED_ORIGINS.extend([
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ])
 
 def parse_csv_env(name: str, default_origins: list[str]) -> list[str]:
     raw = os.getenv(name, "")
@@ -90,10 +96,19 @@ K8S_AVAILABLE = check_kubernetes()
 
 # Database & Authentication configurations
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-DEFAULT_JWT_SECRET = "zeroops_super_secure_jwt_secret_2026"
-JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
+JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080")) # 7 days
+
+if IS_PRODUCTION and not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be configured when APP_ENV=production.")
+
+if IS_PRODUCTION and not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET must be configured when APP_ENV=production.")
+
+if not JWT_SECRET:
+    JWT_SECRET = secrets.token_urlsafe(48)
+    print("  WARNING: JWT_SECRET is not set. Generated an ephemeral local-development secret.")
 
 print(f"ZeroOps Backend Config:")
 print(f"  Docker Host Responsive: {DOCKER_AVAILABLE}")
@@ -104,8 +119,6 @@ print(f"  CORS Origins: {', '.join(CORS_ORIGINS)}")
 print(f"  Workspace Directory: {WORKSPACE_DIR}")
 print(f"  Database Configured: {bool(DATABASE_URL)}")
 print(f"  JWT Secret Configured: {bool(JWT_SECRET)}")
-if JWT_SECRET == DEFAULT_JWT_SECRET:
-    print("  WARNING: Running with default JWT_SECRET. Ensure this is overridden in production.")
 if not DATABASE_URL:
     print("  WARNING: DATABASE_URL is not set. Database storage features will be unavailable.")
 

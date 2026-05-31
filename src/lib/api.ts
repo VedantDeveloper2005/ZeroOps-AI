@@ -32,6 +32,19 @@ export class ApiError extends Error {
   }
 }
 
+export function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  return fallback;
+}
+
 // ──────────────────────────────────────────────
 // TYPES
 // ──────────────────────────────────────────────
@@ -140,10 +153,10 @@ export interface DeploymentRecommendation {
   project_id: string | null;
   repository_full_name: string;
   recommended_target: string | null;
-  azure_configuration: Record<string, any>;
+  azure_configuration: Record<string, unknown>;
   environment_variables: string[];
-  scaling_recommendation: Record<string, any>;
-  database_recommendation: Record<string, any>;
+  scaling_recommendation: Record<string, unknown>;
+  database_recommendation: Record<string, unknown>;
   estimated_deployment_time: string | null;
   created_at: string | null;
 }
@@ -304,6 +317,37 @@ export interface CostOptimization {
   }[];
 }
 
+export interface SystemHealth {
+  status: string;
+  service: string;
+  environment: string;
+  dockerAvailable: boolean;
+  kubernetesAvailable: boolean;
+  openAIConfigured: boolean;
+}
+
+export interface HealthCheck {
+  status: string;
+  details: string;
+}
+
+export interface DeploymentHealth {
+  status: string;
+  total_deployments: number;
+  active_deployments_running: number;
+}
+
+export interface ClusterResourceMetrics {
+  available: boolean;
+  message?: string;
+  cpu?: number | null;
+  memory?: number | null;
+  podsHealthy?: number;
+  podsTotal?: number;
+  traffic?: number | null;
+  errorRate?: number | null;
+}
+
 // ──────────────────────────────────────────────
 // API CLIENT
 // ──────────────────────────────────────────────
@@ -461,7 +505,7 @@ export const api = {
   // ── Monitoring ──
   getMetrics: (projectId?: string) => {
     const params = projectId ? `?project_id=${projectId}` : "";
-    return request<Record<string, unknown>>(`/api/monitoring/metrics${params}`);
+    return request<ClusterResourceMetrics>(`/api/monitoring/metrics${params}`);
   },
 
   // ── Secrets ──

@@ -5,18 +5,13 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, GitBranch, Rocket, Brain, DollarSign,
-  Shield, Activity, TrendingUp, Network, Terminal,
-  AlertTriangle, CreditCard, Settings, ChevronLeft, ChevronRight, LogOut,
-  Lock, Sparkles,
+  LayoutDashboard, Rocket, Brain,
+  Activity, Settings, ChevronLeft, ChevronRight, LogOut,
+  Lock,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
-
-const lockedRoutes = new Set([
-  "/dashboard/operations", // Operations category is locked if no deployment
-]);
 
 const navSections = [
   {

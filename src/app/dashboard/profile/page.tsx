@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
-import { User, Mail, Shield, Calendar, Key, RefreshCw, Eye, EyeOff, Layout, Terminal, Server, Check } from "lucide-react";
+import { User, Mail, Shield, Calendar, Key, RefreshCw, Eye, EyeOff, Layout, Server } from "lucide-react";
 import { api, type UserProfile } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -15,7 +15,9 @@ export default function ProfilePage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [apiKey, setApiKey] = useState("zo_live_84b72fd91c28c83e1a0b5a37f59b6c2d1e");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyLoading, setApiKeyLoading] = useState(true);
+  const [apiKeyRegenerating, setApiKeyRegenerating] = useState(false);
 
   useEffect(() => {
     async function loadProfile() {
@@ -32,6 +34,22 @@ export default function ProfilePage() {
     }
     loadProfile();
   }, []);
+
+  useEffect(() => {
+    async function loadApiKey() {
+      setApiKeyLoading(true);
+      try {
+        const data = await api.getApiKey();
+        setApiKey(data.apiKey);
+      } catch (err) {
+        console.error("Failed to load API key:", err);
+        addToast("Failed to load API key", "error");
+      } finally {
+        setApiKeyLoading(false);
+      }
+    }
+    loadApiKey();
+  }, [addToast]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,21 +71,25 @@ export default function ProfilePage() {
   };
 
   const copyApiKey = () => {
+    if (!apiKey) return;
     navigator.clipboard.writeText(apiKey);
     setCopied(true);
     addToast("Access token copied to clipboard!", "success");
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const regenerateApiKey = () => {
-    const chars = "abcdef0123456789";
-    let tokenSuffix = "";
-    for (let i = 0; i < 32; i++) {
-      tokenSuffix += chars[Math.floor(Math.random() * chars.length)];
+  const regenerateApiKey = async () => {
+    setApiKeyRegenerating(true);
+    try {
+      const data = await api.regenerateApiKey();
+      setApiKey(data.apiKey);
+      addToast("Regenerated CLI access token.", "success");
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to regenerate access key", "error");
+    } finally {
+      setApiKeyRegenerating(false);
     }
-    const newToken = `zo_live_${tokenSuffix}`;
-    setApiKey(newToken);
-    addToast("Regenerated CLI access token.", "success");
   };
 
   if (isLoading) {
@@ -88,7 +110,7 @@ export default function ProfilePage() {
         month: "long",
         day: "numeric",
       })
-    : "—";
+    : "Not recorded";
 
   return (
     <div className="space-y-6">
@@ -102,16 +124,16 @@ export default function ProfilePage() {
             className="bg-card border border-border rounded-xl p-6 text-center flex flex-col items-center justify-center relative overflow-hidden shadow-sm"
           >
             <div className="w-20 h-20 rounded-full bg-primary-subtle flex items-center justify-center text-3xl font-extrabold text-primary mb-4 border border-primary/20 shadow-inner">
-              {initials || "VS"}
+              {initials || "U"}
             </div>
             <h3 className="text-lg font-bold text-foreground">
-              {profile?.first_name ? `${profile.first_name} ${profile.last_name || ""}` : "Vedant S."}
+              {profile?.first_name ? `${profile.first_name} ${profile.last_name || ""}` : profile?.email || "Account"}
             </h3>
             <p className="text-xs text-foreground-muted mb-4">{profile?.email}</p>
             
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-subtle text-primary text-xs font-semibold uppercase tracking-wider">
               <Shield size={12} />
-              {profile?.plan || "Starter Plan"}
+              {profile?.plan || "No plan assigned"}
             </div>
 
             <div className="border-t border-border/60 w-full my-5" />
@@ -210,7 +232,7 @@ export default function ProfilePage() {
               <div className="flex gap-2">
                 <div className="flex-1 bg-background-secondary border border-border rounded-lg px-3 py-2 flex items-center justify-between min-w-0">
                   <span className="font-mono text-xs truncate select-none text-foreground-muted">
-                    {apiKeyVisible ? apiKey : "••••••••••••••••••••••••••••••••••••"}
+                    {apiKeyLoading ? "Loading..." : apiKeyVisible ? apiKey || "No key available" : "••••••••••••••••••••••••••••••••"}
                   </span>
                   <button
                     onClick={() => setApiKeyVisible(!apiKeyVisible)}
@@ -221,7 +243,8 @@ export default function ProfilePage() {
                 </div>
                 <button
                   onClick={copyApiKey}
-                  className="px-3 bg-primary hover:bg-primary-hover text-white text-xs font-bold rounded-lg transition cursor-pointer shadow-sm"
+                  disabled={!apiKey || apiKeyLoading}
+                  className="px-3 bg-primary hover:bg-primary-hover text-white text-xs font-bold rounded-lg transition cursor-pointer shadow-sm disabled:opacity-50"
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>
@@ -229,10 +252,11 @@ export default function ProfilePage() {
               
               <button 
                 onClick={regenerateApiKey}
-                className="w-full py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                disabled={apiKeyRegenerating}
+                className="w-full py-2 bg-background-secondary border border-border hover:bg-card-hover text-foreground text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
               >
-                <RefreshCw size={12} />
-                Regenerate Access Key
+                <RefreshCw size={12} className={apiKeyRegenerating ? "animate-spin" : ""} />
+                {apiKeyRegenerating ? "Regenerating..." : "Regenerate Access Key"}
               </button>
             </div>
           </motion.div>

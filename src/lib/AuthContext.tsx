@@ -117,7 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => router.push("/dashboard/repositories"));
     }
-  }, [user, loading, pathname, router]);
+  }, [user, loading, pathname, router, addToast]);
 
   // Login handler
   const login = async (email: string, password: string): Promise<User> => {

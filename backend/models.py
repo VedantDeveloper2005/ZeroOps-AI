@@ -148,8 +148,8 @@ class Project(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(Text, nullable=False)                  # e.g. "web-app"
-    full_name = Column(Text, nullable=False)              # e.g. "acme/web-app"
-    repo_url = Column(Text, nullable=True)                # https://github.com/acme/web-app
+    full_name = Column(Text, nullable=False)              # e.g. "owner/repository"
+    repo_url = Column(Text, nullable=True)                # https://github.com/owner/repository
     framework = Column(Text, default="Next.js")
     language = Column(Text, default="TypeScript")
     branch = Column(Text, default="main")

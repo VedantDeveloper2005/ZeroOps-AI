@@ -105,6 +105,20 @@ async def rate_limit_middleware(request: Request, call_next):
 
 async def self_healing_daemon():
     logger.info("Self-healing telemetry daemon started.")
+
+    async def has_pending_action(db: AsyncSession, project_id, action_type: str, message: str) -> bool:
+        result = await db.execute(
+            select(models.AIAction)
+            .filter(
+                models.AIAction.project_id == project_id,
+                models.AIAction.type == action_type,
+                models.AIAction.status == "pending",
+                models.AIAction.message == message,
+            )
+            .limit(1)
+        )
+        return result.scalars().first() is not None
+
     while True:
         await asyncio.sleep(20)
         try:
@@ -140,16 +154,17 @@ async def self_healing_daemon():
                     # Memory Spike check (e.g. Memory utilization exceeds 90%)
                     if latest_metric.memory_utilization > 90.0:
                         logger.warning(f"Self-Healing: Memory spike detected ({latest_metric.memory_utilization}%) on project {project.name}")
-                        
-                        # Fix memory metric back to stable so it doesn't loop
-                        latest_metric.memory_utilization = 54.2
+
+                        action_message = "Memory utilization exceeded threshold"
+                        if await has_pending_action(db, project.id, "scaling", action_message):
+                            continue
                         
                         # Add activity log
                         db.add(models.ActivityEvent(
                             user_id=project.user_id,
                             project_id=project.id,
-                            action="AI Scale-up: Out-of-Memory Mitigated",
-                            details="Upscaled container resources to 512Mi Memory to mitigate a memory utilization spike."
+                            action="AI Recommendation: Memory spike detected",
+                            details=f"Memory utilization reached {latest_metric.memory_utilization}%. Review resource limits or autoscaling before applying changes."
                         ))
                         
                         # Add AIAction
@@ -158,17 +173,17 @@ async def self_healing_daemon():
                             project_id=project.id,
                             type="scaling",
                             severity="warning",
-                            message="Autonomously upscaled container resources due to memory spike",
-                            recommendation="Memory limits expanded to 512Mi. Telemetry shows stable footprints now.",
-                            status="applied",
+                            message=action_message,
+                            recommendation="Review current memory limits and autoscaling policy for this project. Apply changes through the deployment pipeline after validation.",
+                            status="pending",
                             icon="Layers"
                         ))
                         
                         # Add Notification
                         db.add(models.Notification(
                             user_id=project.user_id,
-                            title="Memory Spike Resolved",
-                            message=f"ZeroOps AI autonomously expanded memory limits for {project.name} to 512Mi to prevent crash termination.",
+                            title="Memory Spike Detected",
+                            message=f"ZeroOps AI detected high memory utilization on {project.name}. A scaling recommendation is pending review.",
                             type="warning",
                             category="scaling"
                         ))
@@ -177,35 +192,17 @@ async def self_healing_daemon():
                     # Crash Loop check (e.g. error rate exceeds 15%)
                     elif latest_metric.error_rate > 15.0:
                         logger.warning(f"Self-Healing: Crash loop / high error rate ({latest_metric.error_rate}%) on project {project.name}")
-                        
-                        # Mark current deployment as rolled back / failed
-                        latest_dep.status = "rolled_back"
-                        
-                        # Find the previous stable deployment (if any)
-                        prev_dep_result = await db.execute(
-                            select(models.Deployment)
-                            .filter(
-                                models.Deployment.project_id == project.id,
-                                models.Deployment.id != latest_dep.id,
-                                models.Deployment.status == "running"
-                            )
-                            .order_by(desc(models.Deployment.started_at))
-                            .limit(1)
-                        )
-                        prev_dep = prev_dep_result.scalars().first()
-                        if prev_dep:
-                            prev_dep.status = "running"
-                            details = f"Autonomously rolled back from failed version {latest_dep.version} to stable version {prev_dep.version}."
-                        else:
-                            details = f"Detected high error rate on {latest_dep.version}. Initiated container restart healing action."
-                            latest_dep.status = "running" # reset status to running after restart
-                            latest_metric.error_rate = 0.0 # reset error rate
+
+                        action_message = "High error rate detected; rollback review needed"
+                        if await has_pending_action(db, project.id, "healing", action_message):
+                            continue
+                        details = f"Detected {latest_metric.error_rate}% error rate on {latest_dep.version or 'current deployment'}. Review logs and roll back through the deployment pipeline if needed."
                             
                         # Add activity log
                         db.add(models.ActivityEvent(
                             user_id=project.user_id,
                             project_id=project.id,
-                            action="AI Rollback: Crash loop resolved",
+                            action="AI Recommendation: High error rate detected",
                             details=details
                         ))
                         
@@ -215,17 +212,17 @@ async def self_healing_daemon():
                             project_id=project.id,
                             type="healing",
                             severity="critical",
-                            message="Autonomously executed rollback to keep application online",
-                            recommendation="Rolled back to previous stable container due to high liveness probe failures.",
-                            status="applied",
+                            message=action_message,
+                            recommendation="Inspect the failed request logs, verify the latest deployment, and trigger a validated rollback if the current release is unhealthy.",
+                            status="pending",
                             icon="Undo"
                         ))
                         
                         # Add Notification
                         db.add(models.Notification(
                             user_id=project.user_id,
-                            title="Application Auto-Rolled Back",
-                            message=f"ZeroOps AI detected a crash loop on {project.name} and autonomously rolled it back to the last stable deployment.",
+                            title="High Error Rate Detected",
+                            message=f"ZeroOps AI detected high error rates on {project.name}. A remediation recommendation is pending review.",
                             type="critical",
                             category="incident"
                         ))
@@ -747,46 +744,6 @@ async def get_project_metrics(
         )
         metrics = metrics_result.scalars().all()
 
-    # If we have less than 20 data points, let's pre-populate the database with a realistic timeseries
-    if len(metrics) < 20:
-        import random
-        from datetime import timedelta
-        now = datetime.utcnow()
-        
-        # Find the latest deployment to link to
-        latest_dep_result = await db.execute(
-            select(models.Deployment)
-            .filter(models.Deployment.project_id == project_id)
-            .order_by(models.Deployment.started_at.desc())
-            .limit(1)
-        )
-        latest_dep = latest_dep_result.scalars().first()
-        
-        if latest_dep:
-            new_metrics = []
-            for i in range(48):
-                time_point = now - timedelta(minutes=(47 - i) * 30)
-                # generate realistic values
-                cpu_val = round(15.0 + 10.0 * random.random() + 5.0 * (i % 6 == 0) + (12.0 if i > 30 else 0.0), 1)
-                mem_val = round(45.0 + 8.0 * random.random() + 3.0 * (i % 8 == 0), 1)
-                req_cnt = int(800 + 400 * random.random() + (500 if i > 30 else 0))
-                err_rate = round(0.1 * random.random() if random.random() > 0.9 else 0.0, 2)
-                resp_time = int(40 + 15 * random.random())
-                
-                db_metric = models.DeploymentMetric(
-                    deployment_id=latest_dep.id,
-                    cpu_utilization=cpu_val,
-                    memory_utilization=mem_val,
-                    request_count=req_cnt,
-                    error_rate=err_rate,
-                    response_time_ms=resp_time,
-                    timestamp=time_point
-                )
-                db.add(db_metric)
-                new_metrics.append(db_metric)
-            await db.commit()
-            metrics = new_metrics
-
     cpu_data = []
     mem_data = []
     for m in metrics:
@@ -794,9 +751,8 @@ async def get_project_metrics(
         cpu_data.append({"time": time_str, "value": m.cpu_utilization})
         mem_data.append({"time": time_str, "value": m.memory_utilization})
 
-    # Calculate aggregates based on metrics
-    avg_resp = "45ms"
-    avg_err = "0.0%"
+    avg_resp = "No data"
+    avg_err = "No data"
     total_reqs = 0
     if metrics:
         avg_resp = f"{int(sum(m.response_time_ms for m in metrics) / len(metrics))}ms"
@@ -806,7 +762,7 @@ async def get_project_metrics(
     return schemas.TelemetryMetricResponse(
         cpu=cpu_data,
         memory=mem_data,
-        uptime="99.99%",
+        uptime="No data",
         error_rate=avg_err,
         response_time=avg_resp,
         request_count=total_reqs
@@ -891,9 +847,16 @@ async def start_deploy(
     await db.commit()
     await db.refresh(deployment)
 
+    clone_token = None
+    if current_user.github_access_token_encrypted:
+        try:
+            clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
+        except Exception:
+            clone_token = None
+
     # Run pipeline in background via enqueuer dispatcher abstraction
     pipeline.enqueue_deployment(
-        str(deployment.id), project.full_name, req.branch, background_tasks
+        str(deployment.id), project.full_name, req.branch, background_tasks, clone_token
     )
 
     return {
@@ -1012,9 +975,16 @@ async def fix_deployment_automatically(
     await db.commit()
     await db.refresh(new_deployment)
     
+    clone_token = None
+    if current_user.github_access_token_encrypted:
+        try:
+            clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
+        except Exception:
+            clone_token = None
+
     # 4. Dispatch the new deployment pipeline
     pipeline.enqueue_deployment(
-        str(new_deployment.id), project.full_name, deployment.branch, background_tasks
+        str(new_deployment.id), project.full_name, deployment.branch, background_tasks, clone_token
     )
     
     return {
@@ -1292,10 +1262,10 @@ async def analyze_repo(
         start_commands=analysis.get("start_commands") or analysis.get("start_command"),
         environment_variables=analysis.get("environment_variables") or analysis.get("required_env_vars", []),
         explanation=analysis.get("explanation"),
-        recommended_compute_tier=analysis.get("recommended_compute_tier") or "Azure App Service B1",
-        estimated_cost=analysis.get("estimated_cost") or "$13/month",
-        recommended_region=analysis.get("recommended_region") or "Central India",
-        expected_traffic=analysis.get("expected_traffic") or "50,000 requests/month"
+        recommended_compute_tier=analysis.get("recommended_compute_tier"),
+        estimated_cost=analysis.get("estimated_cost"),
+        recommended_region=analysis.get("recommended_region"),
+        expected_traffic=analysis.get("expected_traffic")
     )
     db.add(db_analysis)
 
@@ -1305,28 +1275,24 @@ async def analyze_repo(
         user_id=current_user.id,
         project_id=project_id,
         repository_full_name=req.repo,
-        recommended_target=analysis.get("deployment_target") or analysis.get("deployment_strategy") or "Azure App Service",
+        recommended_target=analysis.get("deployment_target") or analysis.get("deployment_strategy"),
         azure_configuration={
-            "target": analysis.get("deployment_target") or analysis.get("deployment_strategy") or "Azure App Service",
-            "region": analysis.get("recommended_region") or "Central India",
-            "cpu_limit": analysis.get("cpu_recommendation") or analysis.get("resources", {}).get("cpu") or "200m",
-            "memory_limit": analysis.get("memory_recommendation") or analysis.get("resources", {}).get("memory") or "256Mi",
+            "target": analysis.get("deployment_target") or analysis.get("deployment_strategy"),
+            "region": analysis.get("recommended_region"),
+            "cpu_limit": analysis.get("cpu_recommendation") or analysis.get("resources", {}).get("cpu"),
+            "memory_limit": analysis.get("memory_recommendation") or analysis.get("resources", {}).get("memory"),
         },
         environment_variables=analysis.get("required_env_vars") or analysis.get("environment_variables", []),
-        scaling_recommendation={
-            "min_replicas": 2,
-            "max_replicas": 10,
-            "cpu_threshold": 70
-        },
+        scaling_recommendation=analysis.get("scaling_recommendation") or {},
         database_recommendation={
-            "primary": analysis.get("database", "None"),
-            "type": "Azure Database for PostgreSQL" if analysis.get("database") == "PostgreSQL" else "None"
+            "primary": analysis.get("database"),
+            "type": analysis.get("database_type")
         },
-        estimated_deployment_time="2 minutes",
-        recommended_compute_tier=analysis.get("recommended_compute_tier") or "Azure App Service B1",
-        estimated_cost=analysis.get("estimated_cost") or "$13/month",
-        recommended_region=analysis.get("recommended_region") or "Central India",
-        expected_traffic=analysis.get("expected_traffic") or "50,000 requests/month"
+        estimated_deployment_time=analysis.get("estimated_deployment_time"),
+        recommended_compute_tier=analysis.get("recommended_compute_tier"),
+        estimated_cost=analysis.get("estimated_cost"),
+        recommended_region=analysis.get("recommended_region"),
+        expected_traffic=analysis.get("expected_traffic")
     )
     db.add(db_recommendation)
     
@@ -1377,14 +1343,13 @@ async def ai_chat(
                 "language": project.language,
                 "region": project.region,
                 "status": project.status,
-                "live_url": f"https://{project.name}.zeroops.dev",
                 "custom_domains": project.custom_domains or []
             }
             if analysis:
-                project_metadata["runtime"] = analysis.runtime or "Node.js"
+                project_metadata["runtime"] = analysis.runtime
                 project_metadata["database"] = (analysis.database_dependencies[0] 
                                                 if (analysis.database_dependencies and len(analysis.database_dependencies) > 0 and analysis.database_dependencies[0] != "None")
-                                                else "PostgreSQL")
+                                                else None)
                 project_metadata["vulnerabilities_count"] = len(analysis.vulnerabilities) if (analysis.vulnerabilities and analysis.vulnerabilities[0] != "Vulnerability checks passed successfully.") else 0
 
             # 1. Fetch latest deployment details
@@ -1483,19 +1448,7 @@ async def get_project_recommendations(
     )
     rec = result.scalars().first()
     if not rec:
-        # Generate on the fly if not found
-        rec = models.DeploymentRecommendation(
-            id=uuid.uuid4(),
-            user_id=current_user.id,
-            project_id=project_id,
-            repository_full_name="acme/web-app",
-            recommended_target="Azure App Service",
-            azure_configuration={"target": "Azure App Service", "region": "eastus"},
-            environment_variables=["DATABASE_URL"],
-            scaling_recommendation={"min_replicas": 2, "max_replicas": 10},
-            database_recommendation={"primary": "PostgreSQL"},
-            estimated_deployment_time="2 minutes"
-        )
+        raise HTTPException(status_code=404, detail="No deployment recommendation recorded for this project.")
     return rec
 
 
@@ -2200,6 +2153,8 @@ async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSessi
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
+    if not k8s.K8S_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Kubernetes context is not available. Autoscaling cannot be configured.")
     ns_name = f"zeroops-{req.projectId}"
     name = req.projectId
     hpa_manifest = f"""apiVersion: autoscaling/v2
@@ -2222,12 +2177,11 @@ spec:
         type: Utilization
         averageUtilization: {req.cpuTarget}
 """
-    if k8s.K8S_AVAILABLE:
-        try:
-            for log in k8s.apply_manifests_to_cluster(hpa_manifest, ns_name):
-                print(log.strip())
-        except Exception as e:
-            print(f"Failed to update HPA: {e}")
+    try:
+        for log in k8s.apply_manifests_to_cluster(hpa_manifest, ns_name):
+            print(log.strip())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update HPA: {e}")
     return {"status": "success", "minReplicas": req.minReplicas, "maxReplicas": req.maxReplicas}
 
 
@@ -2246,16 +2200,33 @@ async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db
     proj_result = await db.execute(
         select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
     )
-    if not proj_result.scalars().first():
+    project = proj_result.scalars().first()
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     secrets = vault.get_project_secrets(project_id)
     secrets_count = len(secrets)
-    score = 96 if secrets_count > 0 else 92
+    verified_domain = any(
+        bool(domain.get("https_enabled") or domain.get("ssl"))
+        for domain in (project.custom_domains or [])
+        if isinstance(domain, dict)
+    )
+    score = 0
+    if secrets_count > 0:
+        score += 35
+    if verified_domain:
+        score += 35
+    if k8s.K8S_AVAILABLE:
+        score += 30
     return {
-        "securityScore": score, "firewallStatus": "Active", "httpsStatus": "Active",
-        "secretsManaged": secrets_count, "vulnerabilities": 0 if secrets_count > 0 else 2,
-        "soc2Status": "Compliant", "threatLevel": "Low",
-        "namespaceIsolated": True, "rbacEnabled": True
+        "securityScore": score,
+        "firewallStatus": "Managed" if k8s.K8S_AVAILABLE else "Unavailable",
+        "httpsStatus": "Active" if verified_domain else "Not configured",
+        "secretsManaged": secrets_count,
+        "vulnerabilities": 0,
+        "soc2Status": "Not assessed",
+        "threatLevel": "Unknown",
+        "namespaceIsolated": k8s.K8S_AVAILABLE,
+        "rbacEnabled": k8s.K8S_AVAILABLE
     }
 
 
@@ -2322,9 +2293,37 @@ async def get_project_health_score(
         )
         metrics = latest_metric_result.scalars().all()
     
-    avg_error_rate = sum(m.error_rate for m in metrics) / len(metrics) if metrics else 0.0
-    avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics) if metrics else 15.0
-    avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics) if metrics else 45.0
+    if not deps:
+        return {
+            "score": 0,
+            "status": "No deployments",
+            "breakdown": {
+                "performance": 0,
+                "security": 0,
+                "reliability": 0,
+                "scalability": 0,
+                "cost": 0
+            },
+            "recommendations": ["Deploy this project to begin collecting production health signals."]
+        }
+
+    if not metrics:
+        return {
+            "score": 0,
+            "status": "No telemetry",
+            "breakdown": {
+                "performance": 0,
+                "security": 0,
+                "reliability": max(0, 100 - (failed_count * 10)),
+                "scalability": 0,
+                "cost": 0
+            },
+            "recommendations": ["No deployment metrics have been recorded for this project yet."]
+        }
+
+    avg_error_rate = sum(m.error_rate for m in metrics) / len(metrics)
+    avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics)
+    avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics)
     
     analysis_result = await db.execute(
         select(models.AIAnalysis)
@@ -2343,7 +2342,7 @@ async def get_project_health_score(
     security = max(0, 100 - (vulnerabilities_count * 8))
     performance = max(0, 100 - int(max(0, avg_cpu - 50) * 0.5) - int(max(0, avg_mem - 80) * 1.0))
     scalability = 95 if len(deps) > 0 else 80
-    cost = 98 if avg_cpu > 5.0 else 90
+    cost = 0
     
     overall_score = int((reliability * 3 + security * 2 + performance * 2 + scalability * 1 + cost * 1) / 9)
     overall_score = max(0, min(100, overall_score))
@@ -2356,11 +2355,11 @@ async def get_project_health_score(
     if failed_count > 0:
         recommendations.append("Investigate recent deployment build logs to stabilize runtime startup.")
     if avg_cpu < 10.0:
-        recommendations.append("Enable caching or downscale compute tier resources to optimize monthly cost.")
+        recommendations.append("CPU utilization is low; review capacity settings after cost telemetry is connected.")
     if not project.custom_domains:
         recommendations.append("Connect a custom domain to enable production TLS routing.")
     if len(recommendations) == 0:
-        recommendations.append("All systems operational. Consider enabling global multi-region failover.")
+        recommendations.append("No immediate reliability or security issues found in recorded telemetry.")
 
     return {
         "score": overall_score,
@@ -2403,34 +2402,11 @@ async def get_project_cost_optimization(
         )
         metrics = metrics_result.scalars().all()
         
-    avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics) if metrics else 8.0
-    avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics) if metrics else 42.0
-
-    current_monthly_cost = 24.0
-    recommended_monthly_cost = 24.0
-    savings = 0.0
-    recommendations = []
-
-    if avg_cpu < 15.0:
-        recommended_monthly_cost = 16.0
-        savings = 8.0
-        recommendations.append({
-            "title": "Switch to smaller instance",
-            "description": f"Telemetry shows your average CPU is {round(avg_cpu, 1)}% and memory is {round(avg_mem, 1)}% (underutilization threshold < 15%). We recommend downsizing your Azure App Service compute tier to B1.",
-            "savings": 8.0
-        })
-    else:
-        recommendations.append({
-            "title": "Optimize instance tier",
-            "description": f"Telemetry shows your CPU utilization is stable ({round(avg_cpu, 1)}%). The current setup is correctly configured for your request volume.",
-            "savings": 0.0
-        })
-
     return {
-        "current_cost": current_monthly_cost,
-        "recommended_cost": recommended_monthly_cost,
-        "savings": savings,
-        "recommendations": recommendations
+        "current_cost": 0.0,
+        "recommended_cost": 0.0,
+        "savings": 0.0,
+        "recommendations": []
     }
 
 @app.get("/api/projects/{project_id}/domains")

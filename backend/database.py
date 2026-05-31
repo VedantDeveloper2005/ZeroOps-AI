@@ -131,7 +131,7 @@ async def init_db():
                 logger.error(f"Auto-creation of database 'zeroops' failed: {create_err}")
                 
         logger.error(f"PostgreSQL Database startup validation failed: {e}")
-        logger.warning("FastAPI backend starting in fallback mock mode. DB operations will be unavailable.")
+        logger.warning("FastAPI backend starting without database-backed features.")
         database_available = False
         return False
 

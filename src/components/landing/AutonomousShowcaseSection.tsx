@@ -1,80 +1,51 @@
 "use client";
 
-import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-interface AIActionShowcase {
-  id: string;
-  type: "scaling" | "security" | "deployment" | "optimization" | "healing" | "monitoring";
-  message: string;
-  timestamp: string;
-  severity: "info" | "warning" | "success" | "critical";
-  icon: string;
-}
+import { motion, useInView } from "framer-motion";
+import { Activity, BarChart3, RefreshCw, Shield, TrendingUp } from "lucide-react";
 
-const aiActions: AIActionShowcase[] = [
-  { id: "ai-001", type: "scaling", message: "AI optimized scaling for api-gateway — 3→5 pods", timestamp: "2s ago", severity: "info", icon: "TrendingUp" },
-  { id: "ai-002", type: "security", message: "Firewall rule applied: blocked 45.33.21.x (DDoS)", timestamp: "15s ago", severity: "critical", icon: "Shield" },
-  { id: "ai-003", type: "deployment", message: "Rollback triggered for payments-service v2.3.1", timestamp: "1m ago", severity: "warning", icon: "RotateCcw" },
-  { id: "ai-004", type: "security", message: "Suspicious traffic blocked from 103.42.89.x", timestamp: "2m ago", severity: "critical", icon: "AlertTriangle" },
-  { id: "ai-005", type: "healing", message: "Pod api-gateway-7d4f restarted (OOMKilled)", timestamp: "3m ago", severity: "warning", icon: "RefreshCw" },
-  { id: "ai-006", type: "healing", message: "Deployment healed: web-app scaled back to healthy", timestamp: "5m ago", severity: "success", icon: "Heart" },
-  { id: "ai-007", type: "optimization", message: "Cost optimization: idle pod detected in staging", timestamp: "8m ago", severity: "info", icon: "DollarSign" },
-  { id: "ai-008", type: "security", message: "SSL certificate renewed for web-app.zeroops.dev", timestamp: "12m ago", severity: "success", icon: "Lock" },
+const recordedActionTypes = [
+  { title: "Deployment Events", description: "Build, deploy, rollback, and failure records from the backend pipeline.", icon: RefreshCw, color: "text-success bg-success/10" },
+  { title: "Security Status", description: "Project-owned security status from authenticated API checks.", icon: Shield, color: "text-danger bg-danger/10" },
+  { title: "Scaling Recommendations", description: "Pending recommendations created from recorded telemetry thresholds.", icon: TrendingUp, color: "text-primary bg-primary/10" },
+  { title: "Monitoring Signals", description: "CPU, memory, error rate, and request metrics only when collected.", icon: BarChart3, color: "text-warning bg-warning/10" },
 ];
-import { TrendingUp, Shield, Rocket, Heart, DollarSign, Activity, RefreshCw, Lock, ShieldCheck, Cpu, AlertTriangle, BarChart3, Maximize, CheckCircle } from "lucide-react";
-
-const iconMap: Record<string, React.ElementType> = {
-  TrendingUp, Shield, RotateCcw: RefreshCw, AlertTriangle, RefreshCw, Heart, DollarSign, Lock, Activity, Rocket, BarChart3, Cpu, ShieldCheck, Maximize, CheckCircle,
-};
-
-const typeColors: Record<string, string> = {
-  scaling: "text-primary bg-primary/10",
-  security: "text-danger bg-danger/10",
-  deployment: "text-success bg-success/10",
-  optimization: "text-accent bg-accent/10",
-  healing: "text-info bg-info/10",
-  monitoring: "text-warning bg-warning/10",
-};
 
 export function AutonomousShowcaseSection() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, amount: 0.2 });
-  const showcaseActions = aiActions.slice(0, 8);
 
   return (
     <section ref={ref} className="py-24 px-4 relative overflow-hidden">
       <div className="max-w-4xl mx-auto">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={isInView ? { opacity: 1, y: 0 } : {}} transition={{ duration: 0.6 }} className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-bold mb-4">
-            The Platform That <span className="gradient-text">Never Sleeps</span>
+            Recorded Operations, <span className="gradient-text">Not Demo Noise</span>
           </h2>
-          <p className="text-foreground-muted text-lg">Watch autonomous AI actions happening across your infrastructure in real-time.</p>
+          <p className="text-foreground-muted text-lg">ZeroOps surfaces actions only after the backend records them for your projects.</p>
         </motion.div>
 
         <div className="relative">
-          {/* Glowing timeline line */}
           <div className="absolute left-8 top-0 bottom-0 w-px bg-gradient-to-b from-primary/30 via-accent/20 to-transparent" />
 
-          {showcaseActions.map((action, i) => {
-            const IconComp = iconMap[action.icon] || Activity;
-            const colors = typeColors[action.type] || "text-foreground-muted bg-card";
+          {recordedActionTypes.map((action, i) => {
+            const IconComp = action.icon || Activity;
+            const [textColor, bgColor] = action.color.split(" ");
             return (
               <motion.div
-                key={action.id}
+                key={action.title}
                 initial={{ opacity: 0, y: 20 }}
                 animate={isInView ? { opacity: 1, y: 0 } : {}}
                 transition={{ delay: i * 0.12, duration: 0.5 }}
                 className="flex items-start gap-4 mb-4 relative"
               >
-                {/* Icon dot */}
-                <div className={`w-16 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${colors.split(" ").slice(1).join(" ")}`}>
-                  <IconComp size={18} className={colors.split(" ")[0]} />
+                <div className={`w-16 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${bgColor}`}>
+                  <IconComp size={18} className={textColor} />
                 </div>
 
-                {/* Content */}
-                <div className="glass rounded-xl p-4 flex-1 hover:bg-card-hover/50 transition-colors">
-                  <p className="text-sm text-foreground">{action.message}</p>
-                  <p className="text-xs text-foreground-muted mt-1">{action.timestamp}</p>
+                <div className="glass rounded-xl p-4 flex-1 hover:bg-card-hover/50 transition-colors text-left">
+                  <p className="text-sm font-semibold text-foreground">{action.title}</p>
+                  <p className="text-xs text-foreground-muted mt-1">{action.description}</p>
                 </div>
               </motion.div>
             );

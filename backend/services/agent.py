@@ -226,6 +226,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         fix_text = fa.recommended_fix if fa else ""
         
         logger.info(f"Auto-Remediate: Analysis summary: '{summary_text}' | Suggested fix: '{fix_text}'")
+        fix_applied = False
         
         # 3. Check for dependency module issues (e.g. missing package)
         is_dep_issue = any(k in summary_text.lower() or k in fix_text.lower() for k in ["dependency", "package", "module", "npm install", "pip install", "not found", "syntaxerror"])
@@ -235,7 +236,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         
         if is_dep_issue and os.path.exists(repo_path):
             # Try to identify missing module/package
-            package_name = "framer-motion" # fallback default
+            package_name = None
             
             # Find quoted module name in error/summary/fix
             match = re.search(r"['\"]([^'\"]+)['\"]", summary_text + " " + fix_text)
@@ -244,6 +245,9 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
                 # Ensure it looks like a valid package name
                 if re.match(r"^[a-zA-Z0-9\-\/@_]+$", extracted):
                     package_name = extracted
+            if not package_name:
+                logger.warning("Auto-Remediate: No explicit package name found in failure analysis; refusing to guess a dependency.")
+                return False
             
             # Apply fix to package.json (Node/Nextjs)
             package_json_path = os.path.join(repo_path, "package.json")
@@ -257,6 +261,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
                         
                     # Inject package
                     data["dependencies"][package_name] = "latest"
+                    fix_applied = True
                     logger.info(f"Auto-Remediate: Injected dependency '{package_name}' into package.json")
                     
                     with open(package_json_path, "w", encoding="utf-8") as f:
@@ -279,6 +284,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
                 try:
                     with open(req_txt_path, "a", encoding="utf-8") as f:
                         f.write(f"\n{package_name}\n")
+                    fix_applied = True
                     logger.info(f"Auto-Remediate: Appended '{package_name}' to requirements.txt")
                     
                     db.add(models.ActivityEvent(
@@ -293,70 +299,35 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
                     
         # 4. Check for DATABASE_URL / missing env vars
         elif "database_url" in summary_text.lower() or "database_url" in fix_text.lower() or "db" in summary_text.lower():
-            # Add DATABASE_URL to project environment variables
-            env_result = await db.execute(
-                select(models.Environment)
-                .filter(models.Environment.project_id == project.id, models.Environment.name == "production")
-            )
-            env = env_result.scalars().first()
-            if not env:
-                env = models.Environment(project_id=project.id, name="production")
-                db.add(env)
-                await db.flush()
-                
-            # Verify if DATABASE_URL already exists
-            var_result = await db.execute(
-                select(models.EnvironmentVariable)
-                .filter(models.EnvironmentVariable.environment_id == env.id, models.EnvironmentVariable.key == "DATABASE_URL")
-            )
-            existing_var = var_result.scalars().first()
-            if not existing_var:
-                db_url = f"postgresql://postgres:postgres@localhost:5432/zeroops_{project.name.lower()}"
-                new_var = models.EnvironmentVariable(
-                    environment_id=env.id,
-                    key="DATABASE_URL",
-                    value=db_url,
-                    is_secret=True
-                )
-                db.add(new_var)
-                logger.info(f"Auto-Remediate: Created environment variable DATABASE_URL for project {project.name}")
-                
-                db.add(models.ActivityEvent(
-                    user_id=deployment.user_id,
-                    project_id=project.id,
-                    action="AI Auto-Fix: Database Credentials Injected",
-                    details="Autonomously generated and injected a secure DATABASE_URL connection variable."
-                ))
-                await db.commit()
+            db.add(models.ActivityEvent(
+                user_id=deployment.user_id,
+                project_id=project.id,
+                action="AI Auto-Fix: Database configuration required",
+                details="Deployment failed because database configuration appears missing. No DATABASE_URL was generated automatically."
+            ))
+            await db.commit()
+            return False
                 
         # 5. Check for Out Of Memory (OOM)
         elif "memory" in summary_text.lower() or "oom" in summary_text.lower():
-            # Fetch latest AI analysis and double resources limits
-            analysis_result = await db.execute(
-                select(models.AIAnalysis)
-                .filter(models.AIAnalysis.project_id == project.id)
-                .order_by(models.AIAnalysis.created_at.desc())
-                .limit(1)
-            )
-            analysis = analysis_result.scalars().first()
-            if analysis:
-                analysis.memory_recommendation = "512Mi"
-                analysis.cpu_recommendation = "500m"
-                logger.info(f"Auto-Remediate: Increased CPU/Memory limits for project {project.name} to 500m/512Mi")
-                
-                db.add(models.ActivityEvent(
-                    user_id=deployment.user_id,
-                    project_id=project.id,
-                    action="AI Auto-Fix: Resources Upscaled",
-                    details="Adjusted horizontal scaling limits to 500m CPU and 512Mi Memory to avoid container OOM termination."
-                ))
-                await db.commit()
+            db.add(models.ActivityEvent(
+                user_id=deployment.user_id,
+                project_id=project.id,
+                action="AI Auto-Fix: Resource review required",
+                details="Deployment failure references memory pressure. Resource limits were not changed automatically."
+            ))
+            await db.commit()
+            return False
+
+        if not fix_applied:
+            logger.warning("Auto-Remediate: No verified code change was applied.")
+            return False
                 
         # Register a notification of self-healing action
         db.add(models.Notification(
             user_id=deployment.user_id,
             title="Auto-Fix Executed",
-            message=f"ZeroOps AI has autonomously applied a corrective fix for {project.name} and initiated a new build run.",
+            message=f"ZeroOps AI applied a verified code-level fix for {project.name} and initiated a new build run.",
             type="success",
             category="ai"
         ))

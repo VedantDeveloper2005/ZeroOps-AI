@@ -396,10 +396,10 @@ class EnvVarCreate(BaseModel):
 class TelemetryMetricResponse(BaseModel):
     cpu: List[dict] = []
     memory: List[dict] = []
-    uptime: str = "99.99%"
-    error_rate: str = "0.0%"
-    response_time: str = "45ms"
-    request_count: int = 1200
+    uptime: str = "No data"
+    error_rate: str = "No data"
+    response_time: str = "No data"
+    request_count: int = 0
 
 
 # ──────────────────────────────────────────────
@@ -412,4 +412,3 @@ class ProjectDomainCreate(BaseModel):
 class ProjectMemberCreate(BaseModel):
     email: EmailStr
     role: str
-

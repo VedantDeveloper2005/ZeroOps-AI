@@ -56,14 +56,14 @@ AZURE_KEYVAULT_URL=https://<vault-name>.vault.azure.net/
 ZEROOPS_BACKEND_URL=https://<backend-app>.azurewebsites.net
 ```
 
-Missing optional settings keep fallback demo mode active. The backend will still analyze demo repositories, simulate deployments, stream logs, and complete deployment flows.
+Missing optional integrations are reported through health checks and empty or unavailable dashboard states. Deployment and log flows require the backend services they depend on.
 
 ## WebSocket Notes
 
 - Enable WebSockets in the backend App Service configuration.
 - Use `wss://<backend-app>.azurewebsites.net` in `NEXT_PUBLIC_WS_BASE_URL`.
 - Keep `WEB_CONCURRENCY=1` for the MVP because deployment event replay buffers are in memory.
-- If WebSockets are unavailable, the frontend automatically falls back to deterministic deployment and log simulation.
+- If WebSockets are unavailable, deployment and log views show the recorded backend state and an unavailable stream message.
 
 ## Health Checks
 
@@ -98,6 +98,6 @@ bash startup.sh
 
 - If `/api/*` calls fail from the frontend, verify `ZEROOPS_BACKEND_URL` and backend CORS settings.
 - If websocket streams fail, verify App Service WebSockets are enabled and `NEXT_PUBLIC_WS_BASE_URL` starts with `wss://`.
-- If AI analysis fails, verify `OPENAI_API_KEY`; otherwise fallback analysis should still render.
-- If AKS or Docker is unavailable, deployment simulation should still complete and show `https://web-app.zeroops.dev`.
+- If AI analysis fails, verify `OPENAI_API_KEY` or the configured local analyzer path.
+- If AKS or Docker is unavailable, deployment status should remain queued, failed, or unavailable instead of showing a synthetic live URL.
 - If deployment streams appear out of order under scale-out, keep backend `WEB_CONCURRENCY=1` or replace in-memory event buffers with shared storage before multi-instance production scale.

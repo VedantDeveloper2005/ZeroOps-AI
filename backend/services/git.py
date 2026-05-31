@@ -40,33 +40,9 @@ def clone_repo(full_name: str, token: str = None) -> str:
         if res.returncode == 0:
             print(f"Cloned successfully to {repo_path}")
             return repo_path
+        raise RuntimeError(res.stderr.strip() or f"git clone failed with exit code {res.returncode}")
     except Exception as e:
-        print(f"Git command failed: {e}")
-
-    # Fallback/Mock mode: Create a dummy repository structure to simulate cloning
-    print(f"Using high-fidelity mockup workspace for {full_name}")
-    os.makedirs(repo_path, exist_ok=True)
-    
-    # Create package.json to mimic a Next.js app for default detections
-    package_json_content = """{
-    "name": "zeroops-demo-app",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "next": "^16.2.6",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "framer-motion": "^12.40.0",
-    "tailwindcss": "^4.0.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0"
-  }
-}"""
-    with open(os.path.join(repo_path, "package.json"), "w") as f:
-        f.write(package_json_content)
-
-    return repo_path
+        raise RuntimeError(f"Unable to clone GitHub repository '{full_name}': {e}") from e
 
 def get_branches(full_name: str, token: str = None) -> list[str]:
     """Fetch remote branches for a repository."""
@@ -95,5 +71,4 @@ def get_branches(full_name: str, token: str = None) -> list[str]:
     except Exception:
         pass
 
-    # Mock list
-    return ["main", "develop", "feature/auth"]
+    return []

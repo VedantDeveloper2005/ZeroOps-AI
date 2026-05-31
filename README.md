@@ -2,7 +2,7 @@
 
 AI-powered autonomous cloud deployment platform for turning GitHub repositories into Kubernetes-ready deployments.
 
-## Demo Runbook
+## Local Runbook
 
 1. Install dependencies:
 
@@ -16,7 +16,7 @@ npm install
 npm run dev
 ```
 
-3. Optional backend:
+3. Start the backend:
 
 ```bash
 cd backend
@@ -24,14 +24,14 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-The frontend is demo-safe without the backend. If FastAPI, Docker, Kubernetes, Azure Key Vault, or OpenAI are unavailable, ZeroOps falls back to a guided autonomous deployment simulation with realistic repositories, AI analysis, pipeline logs, namespace isolation, HPA, ingress, HTTPS, monitoring, and security states.
+The dashboard expects the FastAPI backend for repository analysis, deployments, logs, monitoring, security status, and settings data. If Docker, Kubernetes, Azure Key Vault, or OpenAI are unavailable, the UI should show unavailable or empty states instead of synthetic production data.
 
 ## Primary Demo Flow
 
 - Landing page -> Dashboard
 - Repositories -> Connect Repository
 - Analyze -> AI repository analysis and Kubernetes plan
-- Deploy -> live pipeline or guided fallback
+- Deploy -> live backend pipeline
 - Logs, Monitoring, Autoscaling, Security, Infrastructure, and Incidents remain available as supporting proof points
 
 ## Verification

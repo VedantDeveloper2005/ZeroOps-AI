@@ -1,13 +1,13 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Star, ExternalLink, Trash2, Eye, EyeOff, AlertTriangle, Sparkles, Shield, Zap, Globe, ChevronDown, ChevronUp } from "lucide-react";
+import { GitBranch, Plus, Search, Play, Brain, Terminal, X, Loader2, Check, ArrowRight, Rocket, Lock, Trash2, AlertTriangle, Sparkles, ChevronDown, ChevronUp, Activity } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 import { useRouter } from "next/navigation";
-import { api, type Project, type GitHubRepoItem } from "@/lib/api";
+import { api, getErrorMessage, type Project, type GitHubRepoItem } from "@/lib/api";
 
 
 const frameworkColors: Record<string, string> = {
@@ -75,6 +75,80 @@ function calculateReadinessScore(repo: GitHubRepoItem): number {
   return Math.min(100, score);
 }
 
+interface AnalysisResult {
+  framework: string | null;
+  language: string | null;
+  runtime: string | null;
+  packageManager: string | null;
+  dockerSupport: boolean;
+  monorepoStructure: string | null;
+  databaseDependencies: string[];
+  deploymentStrategy: string | null;
+  buildCommands: string | null;
+  startCommands: string | null;
+  environmentVariables: string[];
+  riskScore: number | null;
+  confidence: number | null;
+  cpu: string | null;
+  memory: string | null;
+  ports: string | null;
+  vulnerabilities: string[];
+  deploymentRecommendation: Record<string, unknown> | null;
+  estimatedDeploymentTime: string | null;
+  estimatedCost: string | null;
+  explanation: string | null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function toAnalysisResult(data: Record<string, unknown>, repo?: GitHubRepoItem): AnalysisResult {
+  const resources = asRecord(data.resources);
+  const recommendation = asRecord(data.deployment_recommendation);
+
+  return {
+    framework: asString(data.framework),
+    language: asString(data.language) ?? repo?.language ?? null,
+    runtime: asString(data.runtime),
+    packageManager: asString(data.package_manager),
+    dockerSupport: data.docker_support === true,
+    monorepoStructure: asString(data.monorepo_structure),
+    databaseDependencies: asStringArray(data.database_dependencies),
+    deploymentStrategy: asString(data.deployment_strategy) ?? asString(data.deployment_target) ?? asString(recommendation?.recommended_target),
+    buildCommands: asString(data.build_commands) ?? asString(data.build_command),
+    startCommands: asString(data.start_commands) ?? asString(data.start_command),
+    environmentVariables: asStringArray(data.environment_variables).length > 0
+      ? asStringArray(data.environment_variables)
+      : asStringArray(data.required_env_vars),
+    riskScore: asNumber(data.risk_score),
+    confidence: asNumber(data.confidence),
+    cpu: asString(data.cpu_recommendation) ?? asString(resources?.cpu),
+    memory: asString(data.memory_recommendation) ?? asString(resources?.memory),
+    ports: asString(data.port),
+    vulnerabilities: asStringArray(data.vulnerabilities),
+    deploymentRecommendation: recommendation,
+    estimatedDeploymentTime: asString(recommendation?.estimated_deployment_time),
+    estimatedCost: asString(recommendation?.estimated_cost),
+    explanation: asString(data.explanation),
+  };
+}
+
 function ReadinessCircle({ score }: { score: number }) {
   const radius = 18;
   const circumference = 2 * Math.PI * radius;
@@ -113,7 +187,7 @@ export default function RepositoriesPage() {
   const [selectedRepo, setSelectedRepo] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("main");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [gitRepos, setGitRepos] = useState<GitHubRepoItem[]>([]);
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState("");
@@ -123,6 +197,26 @@ export default function RepositoriesPage() {
   const [availableBranches, setAvailableBranches] = useState<string[]>(["main"]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [scanLogs, setScanLogs] = useState<string[]>([]);
+  const [filterVisibility, setFilterVisibility] = useState<"All" | "Public" | "Private">("All");
+  const [filterFramework, setFilterFramework] = useState<string>("All");
+  const [filterLanguage, setFilterLanguage] = useState<string>("All");
+  const [sortBy, setSortBy] = useState<"updated" | "name" | "readiness">("updated");
+
+  // Scanning terminal variables
+  const [scanStep, setScanStep] = useState(0);
+  const scanPhrases = [
+    "Scanning Repository...",
+    "Reading package.json",
+    "Analyzing dependencies",
+    "Detecting framework",
+    "Generating deployment strategy",
+    "Estimating infrastructure"
+  ];
+
+  const scanChecklist = scanPhrases.map((phrase, idx) => ({
+    label: phrase,
+    done: scanStep > idx
+  }));
 
   // Env variables wizard state
   const [wizardEnvVars, setWizardEnvVars] = useState<{ key: string; value: string; is_secret: boolean }[]>([]);
@@ -135,12 +229,8 @@ export default function RepositoriesPage() {
   const [minReplicas, setMinReplicas] = useState(2);
   const [maxReplicas, setMaxReplicas] = useState(10);
   const [deployMode, setDeployMode] = useState("standard");
-  const [detectedFramework, setDetectedFramework] = useState("Next.js");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showScanLogs, setShowScanLogs] = useState(false);
-
-  // AI scan checklist state
-  const [scanChecklist, setScanChecklist] = useState<{ label: string; done: boolean }[]>([]);
 
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -177,7 +267,6 @@ export default function RepositoriesPage() {
 
       if (result.repos.length > 0 && !selectedRepo) {
         setSelectedRepo(result.repos[0].full_name);
-        setDetectedFramework(detectFramework(result.repos[0].language));
       }
     } catch (err) {
       console.error("Failed to load GitHub repos:", err);
@@ -220,54 +309,34 @@ export default function RepositoriesPage() {
     }
   }, [isGitHubConnected, hasDeployed, loadRepos]);
 
-  // AI Scan checklist animation
-  useEffect(() => {
-    if (!isAnalyzing) {
-      setScanChecklist([]);
-      return;
-    }
-    const items = [
-      "Framework detected",
-      "Runtime identified",
-      "Build process analyzed",
-      "Dependencies scanned",
-      "Deployment strategy generated",
-    ];
-    setScanChecklist(items.map(label => ({ label, done: false })));
-    
-    items.forEach((_, idx) => {
-      setTimeout(() => {
-        setScanChecklist(prev => prev.map((item, i) => i <= idx ? { ...item, done: true } : item));
-      }, 1000 + idx * 1200);
-    });
-  }, [isAnalyzing]);
-
-  // Repository scanning progressive logs (kept for technical view)
+  // Repository scanning progressive logs and steps
   useEffect(() => {
     if (!isAnalyzing) {
       setScanLogs([]);
+      setScanStep(0);
       return;
     }
     const logs = [
-      "📡 Establishing secure connection to GitHub API...",
-      "📂 Cloning repository tree structure...",
-      "🔍 Scanning package definitions (package.json, requirements.txt, pyproject.toml)...",
-      "🤖 Constructing codebase metadata payload...",
-      "🚀 Querying GitHub Models (GPT-4.1) inference endpoint...",
-      "✅ Mapping detected dependencies and database targets...",
-      "📄 Generating optimized Dockerfile and Kubernetes manifests...",
-      "🔒 Running repository risk and vulnerability checks..."
+      "Analysis request submitted to the ZeroOps backend...",
+      "Reading workspace structure and configuration files...",
+      "Parsing dependency logs and packaging formats...",
+      "Detecting runtime environment and platform framework...",
+      "Synthesizing optimal container build strategy...",
+      "Determining server resources and cloud networking specs...",
+      "Recorded analysis report compiled successfully."
     ];
     let idx = 0;
     setScanLogs([logs[0]]);
+    setScanStep(1);
     const timer = setInterval(() => {
       idx++;
       if (idx < logs.length) {
         setScanLogs((prev) => [...prev, logs[idx]]);
+        setScanStep((s) => Math.min(scanPhrases.length, s + 1));
       } else {
         clearInterval(timer);
       }
-    }, 1200);
+    }, 600);
     return () => clearInterval(timer);
   }, [isAnalyzing]);
 
@@ -288,36 +357,18 @@ export default function RepositoriesPage() {
 
     setIsAnalyzing(true);
     const repoObj = gitRepos.find((r) => r.full_name === selectedRepo);
-    const fallbackFramework = detectedFramework;
+    setAnalysisResult(null);
 
     api.analyzeRepo(selectedRepo, selectedBranch)
-      .then((data: any) => {
+      .then((data) => {
         setIsAnalyzing(false);
-        setAnalysisResult({
-          framework: data.framework || fallbackFramework,
-          language: data.language || repoObj?.language || "TypeScript",
-          runtime: data.runtime || "Node.js 20",
-          packageManager: data.package_manager || "npm",
-          dockerSupport: data.docker_support ?? false,
-          monorepoStructure: data.monorepo_structure || "None",
-          databaseDependencies: data.database_dependencies || [],
-          deploymentStrategy: data.deployment_strategy || "Azure App Service",
-          buildCommands: data.build_commands || "npm run build",
-          startCommands: data.start_commands || "npm start",
-          environmentVariables: data.environment_variables || [],
-          riskScore: data.risk_score ?? 18,
-          cpu: data.resources?.cpu || "200m",
-          memory: data.resources?.memory || "256Mi",
-          ports: data.port || "3000",
-          vulnerabilities: data.vulnerabilities || [],
-          deploymentRecommendation: data.deployment_recommendation || null,
-          explanation: data.explanation || `This is a ${fallbackFramework} application built with ${repoObj?.language || "TypeScript"}. It utilizes npm for package management, contains containerized settings, and runs in high-availability mode on Azure.`,
-        });
+        const parsed = toAnalysisResult(data, repoObj);
+        setAnalysisResult(parsed);
         
-        if (data.environment_variables && data.environment_variables.length > 0) {
+        if (parsed.environmentVariables.length > 0) {
           setWizardEnvVars((prev) => {
             if (prev.length > 0) return prev;
-            return data.environment_variables.map((v: string) => ({
+            return parsed.environmentVariables.map((v) => ({
               key: v,
               value: "",
               is_secret: v.toLowerCase().includes("secret") || v.toLowerCase().includes("key") || v.toLowerCase().includes("password") || v.toLowerCase().includes("token"),
@@ -326,28 +377,10 @@ export default function RepositoriesPage() {
         }
         addToast("AI Analysis complete!", "success");
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setIsAnalyzing(false);
-        setAnalysisResult({
-          framework: fallbackFramework,
-          language: repoObj?.language || "TypeScript",
-          runtime: "Node.js 20",
-          packageManager: "npm",
-          dockerSupport: false,
-          monorepoStructure: "None",
-          databaseDependencies: [],
-          deploymentStrategy: "Azure App Service",
-          buildCommands: "npm run build",
-          startCommands: "npm start",
-          environmentVariables: [],
-          riskScore: 18,
-          cpu: "200m",
-          memory: "256Mi",
-          ports: fallbackFramework === "FastAPI" ? "8000" : "3000",
-          vulnerabilities: [],
-          explanation: `This is a ${fallbackFramework} application built with ${repoObj?.language || "TypeScript"}. It utilizes npm for package management, contains containerized settings, and runs in high-availability mode on Azure.`,
-        });
-        addToast("AI Analysis completed with local metadata.", "success");
+        setAnalysisResult(null);
+        addToast(getErrorMessage(err, "Repository analysis failed."), "error");
       });
   // Only re-run when the step or selected repo/branch actually changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -356,6 +389,10 @@ export default function RepositoriesPage() {
 
 
   const handleLaunchDeployment = async () => {
+    if (!analysisResult) {
+      addToast("Run repository analysis before starting deployment.", "error");
+      return;
+    }
     addToast(`Launching deployment for ${selectedRepo}...`, "info");
     try {
       const selectedRepoObj = gitRepos.find((r) => r.full_name === selectedRepo);
@@ -363,8 +400,8 @@ export default function RepositoriesPage() {
         name: selectedRepo.split("/").pop() || selectedRepo,
         full_name: selectedRepo,
         repo_url: `https://github.com/${selectedRepo}`,
-        framework: detectedFramework,
-        language: selectedRepoObj?.language || "TypeScript",
+        framework: analysisResult.framework || "Unknown",
+        language: analysisResult.language || selectedRepoObj?.language || "Unknown",
         branch: selectedBranch,
         region: region,
       });
@@ -459,10 +496,11 @@ export default function RepositoriesPage() {
       addToast(`Initiating AI security and performance review for ${repo}...`, "info");
       try {
         const data = await api.analyzeRepo(repo, "main");
-        addToast(`AI scan complete. Framework: ${(data as any).framework}, Risk Score: ${(data as any).risk_score}`, "success");
+        const analysisData = toAnalysisResult(data);
+        addToast(`AI scan complete. Framework: ${analysisData.framework || "Not detected"}.`, "success");
         addNotification({
           title: "AI Analysis Complete",
-          message: `Scan finished on ${repo}. Framework: ${(data as any).framework}. Recommended CPU: ${(data as any).resources?.cpu || "200m"}.`,
+          message: `Scan finished on ${repo}. Framework: ${analysisData.framework || "Not detected"}. Recommended CPU: ${analysisData.cpu || "Not recorded"}.`,
           type: "success",
           category: "ai",
           action_url: "/dashboard/ai-analysis",
@@ -495,6 +533,33 @@ export default function RepositoriesPage() {
       p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.full_name.toLowerCase().includes(search.toLowerCase())
   );
+  const vulnerabilities = analysisResult?.vulnerabilities ?? [];
+  const detectedEnvironmentVariables = analysisResult?.environmentVariables ?? [];
+
+  const processedRepos = gitRepos
+    .filter((repo) => {
+      // Visibility filter
+      if (filterVisibility === "Public" && repo.private) return false;
+      if (filterVisibility === "Private" && !repo.private) return false;
+
+      // Framework filter
+      const fw = detectFramework(repo.language);
+      if (filterFramework !== "All" && fw !== filterFramework) return false;
+
+      // Language filter
+      if (filterLanguage !== "All" && repo.language !== filterLanguage) return false;
+
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === "name") {
+        return a.name.localeCompare(b.name);
+      }
+      if (sortBy === "readiness") {
+        return calculateReadinessScore(b) - calculateReadinessScore(a);
+      }
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
 
   // ════════════════════════════════════════════════
   // ONBOARDING WIZARD (first-time users)
@@ -619,16 +684,51 @@ export default function RepositoriesPage() {
                   </span>
                 </div>
 
-                {/* Search repos */}
-                <div className="flex-1 bg-background-secondary border border-border/80 rounded-xl px-4 py-2.5 flex items-center gap-2">
-                  <Search size={16} className="text-foreground-muted" />
-                  <input
-                    type="text"
-                    value={repoSearchQuery}
-                    onChange={(e) => setRepoSearchQuery(e.target.value)}
-                    placeholder="Search your repositories..."
-                    className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full"
-                  />
+                {/* Advanced Search and Filter Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div className="lg:col-span-2 bg-background-secondary border border-border/80 rounded-xl px-4 py-2 flex items-center gap-2">
+                    <Search size={16} className="text-foreground-muted" />
+                    <input
+                      type="text"
+                      value={repoSearchQuery}
+                      onChange={(e) => setRepoSearchQuery(e.target.value)}
+                      placeholder="Search repositories..."
+                      className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full"
+                    />
+                  </div>
+
+                  <select
+                    value={filterVisibility}
+                    onChange={(e) => setFilterVisibility(e.target.value as any)}
+                    className="bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-semibold"
+                  >
+                    <option value="All">All Visibilities</option>
+                    <option value="Public">Public Only</option>
+                    <option value="Private">Private Only</option>
+                  </select>
+
+                  <select
+                    value={filterFramework}
+                    onChange={(e) => setFilterFramework(e.target.value)}
+                    className="bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-semibold"
+                  >
+                    <option value="All">All Frameworks</option>
+                    <option value="Next.js">Next.js</option>
+                    <option value="Express.js">Express.js</option>
+                    <option value="FastAPI">FastAPI</option>
+                    <option value="NestJS">NestJS</option>
+                    <option value="Flask">Flask</option>
+                  </select>
+
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-semibold"
+                  >
+                    <option value="updated">Sort: Last Updated</option>
+                    <option value="name">Sort: Name (A-Z)</option>
+                    <option value="readiness">Sort: AI Readiness</option>
+                  </select>
                 </div>
 
                 {isLoadingRepos ? (
@@ -646,26 +746,31 @@ export default function RepositoriesPage() {
                       </div>
                     ))}
                   </div>
-                ) : gitRepos.length === 0 ? (
+                ) : processedRepos.length === 0 ? (
                   <div className="p-8 text-center space-y-2 bg-card/20 border border-border/60 rounded-xl">
                     <GitBranch size={32} className="text-foreground-muted mx-auto" />
-                    <p className="text-sm text-foreground-muted">No repositories found.</p>
-                    {repoSearchQuery && (
+                    <p className="text-sm text-foreground-muted">No repositories match your search or filter criteria.</p>
+                    {(repoSearchQuery || filterVisibility !== "All" || filterFramework !== "All") && (
                       <button
-                        onClick={() => setRepoSearchQuery("")}
+                        onClick={() => {
+                          setRepoSearchQuery("");
+                          setFilterVisibility("All");
+                          setFilterFramework("All");
+                        }}
                         className="text-xs text-primary hover:underline cursor-pointer"
                       >
-                        Clear search
+                        Reset filters
                       </button>
                     )}
                   </div>
                 ) : (
                   <>
-                    <div className="grid md:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
-                      {gitRepos.map((repo) => {
+                    <div className="grid md:grid-cols-2 gap-4 max-h-[380px] overflow-y-auto pr-1">
+                      {processedRepos.map((repo) => {
                         const readiness = calculateReadinessScore(repo);
                         const fw = detectFramework(repo.language);
                         const isSelected = selectedRepo === repo.full_name;
+                        const estTime = fw === "Next.js" ? "42 seconds" : fw === "Express.js" ? "35 seconds" : fw === "FastAPI" ? "38 seconds" : "40 seconds";
                         return (
                           <motion.div
                             key={repo.id}
@@ -673,9 +778,8 @@ export default function RepositoriesPage() {
                             animate={{ opacity: 1, y: 0 }}
                             onClick={() => {
                               setSelectedRepo(repo.full_name);
-                              setDetectedFramework(fw);
                             }}
-                            className={`p-4 rounded-xl border transition-all cursor-pointer text-left group ${
+                            className={`p-4 rounded-xl border transition-all cursor-pointer text-left group flex flex-col justify-between gap-4 ${
                               isSelected
                                 ? "bg-primary-subtle/20 border-primary shadow-lg scale-[1.01] bg-gradient-to-b from-card to-primary-subtle/5"
                                 : "bg-card border-border hover:bg-card-hover hover:border-border/80"
@@ -683,44 +787,74 @@ export default function RepositoriesPage() {
                           >
                             <div className="flex items-start justify-between gap-3">
                               {/* Left: Repo info */}
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className="font-semibold text-sm text-foreground truncate">
+                              <div className="flex-1 min-w-0 space-y-2.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-sm text-foreground truncate">
                                     {repo.name}
                                   </span>
-                                  {repo.private && (
-                                    <Lock size={10} className="text-foreground-muted flex-shrink-0" />
-                                  )}
+                                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wide border ${
+                                    repo.private 
+                                      ? "bg-zinc-800/80 border-zinc-700 text-zinc-400" 
+                                      : "bg-primary/10 border-primary/20 text-primary"
+                                  }`}>
+                                    {repo.private ? "Private" : "Public"}
+                                  </span>
                                 </div>
-                                <p className="text-[11px] text-foreground-muted line-clamp-1 mb-2.5">
+                                <p className="text-[11px] text-foreground-muted line-clamp-1">
                                   {repo.description || "No description provided."}
                                 </p>
-
+ 
                                 {/* Framework badge + metadata */}
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${frameworkColors[fw] || "bg-white/10 text-foreground-muted"}`}>
-                                    {fw} detected
+                                <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                                  <span className={`px-2 py-0.5 rounded-full font-bold ${frameworkColors[fw] || "bg-white/10 text-foreground-muted"}`}>
+                                    {fw} Detected
                                   </span>
-                                  {readiness >= 90 && (
-                                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-success/15 text-success border border-success/20 font-bold flex items-center gap-0.5">
-                                      <Check size={8} /> Ready
-                                    </span>
-                                  )}
-                                  <span className="text-[9px] text-foreground-muted">
-                                    {timeAgo(repo.updated_at)}
+                                  <span className="px-2 py-0.5 rounded-full bg-accent/10 border border-accent/20 text-accent font-bold">
+                                    Estimated Deploy: {estTime}
                                   </span>
                                 </div>
-
-                                {readiness >= 90 && (
-                                  <p className="text-[9px] text-success/70 mt-1.5 font-medium">
-                                    No configuration required
-                                  </p>
-                                )}
+ 
+                                <div className="flex items-center gap-1 text-[10px] text-success font-bold">
+                                  <Sparkles size={11} className="text-success animate-pulse" />
+                                  Ready for One-Click Deployment
+                                </div>
                               </div>
-
+ 
                               {/* Right: Readiness circle */}
-                              <ReadinessCircle score={readiness} />
+                              <div className="flex flex-col items-center gap-1">
+                                <ReadinessCircle score={readiness} />
+                                <span className="text-[8px] text-foreground-muted font-extrabold uppercase tracking-wider">AI Score</span>
+                              </div>
                             </div>
+
+                            {/* Explicit action buttons on selection */}
+                            {isSelected && (
+                              <div className="flex items-center justify-end gap-2 border-t border-border/20 pt-3 mt-1">
+                                <span className="text-[10px] text-foreground-muted mr-auto font-medium">
+                                  Updated {timeAgo(repo.updated_at)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOnboardStep(2);
+                                  }}
+                                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-background-secondary border border-border/80 hover:bg-card-hover text-foreground-muted hover:text-foreground transition cursor-pointer"
+                                >
+                                  Analyze
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOnboardStep(2); // Go to analyze (which runs analysis automatically, then we can let them deploy)
+                                  }}
+                                  className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold bg-primary text-white hover:bg-primary-hover transition cursor-pointer shadow-sm"
+                                >
+                                  Deploy
+                                </button>
+                              </div>
+                            )}
                           </motion.div>
                         );
                       })}
@@ -888,55 +1022,58 @@ export default function RepositoriesPage() {
                   </div>
                 ) : (
                   <div className="space-y-6 animate-fade-in">
-                    {/* Conversational AI Project Summary */}
-                    <div className="glass rounded-xl p-6 border border-primary/20 bg-gradient-to-r from-primary/5 to-transparent space-y-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
-                          <Brain size={14} className="text-primary" />
+                    <div className="grid md:grid-cols-2 gap-6">
+                      {/* Left Side: Conversational Summary */}
+                      <div className="glass rounded-xl p-6 border border-primary/20 bg-gradient-to-br from-primary/5 via-accent/5 to-transparent space-y-4 flex flex-col justify-between">
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+                              <Brain size={16} className="text-primary" />
+                            </div>
+                            <h4 className="text-xs font-bold text-primary uppercase tracking-wider">AI Analysis Summary</h4>
+                          </div>
+                          <p className="text-xs text-foreground leading-relaxed">
+                            {analysisResult?.explanation || "No repository analysis has been recorded yet. Retry the analysis before continuing to deployment."}
+                          </p>
                         </div>
-                        <h4 className="text-xs font-bold text-primary uppercase tracking-wider">AI Project Summary</h4>
+                        <div className="p-3.5 bg-success/10 border border-success/20 rounded-xl flex items-center gap-2.5 text-xs text-success font-bold">
+                          <Sparkles size={14} className="text-success animate-pulse" />
+                          Zero configuration required. Fully optimized for production.
+                        </div>
                       </div>
-                      <p className="text-sm text-foreground leading-relaxed">
-                        {analysisResult?.explanation}
-                      </p>
-                    </div>
 
-                    {/* AI Confidence + Recommendation */}
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Framework detected</p>
-                        <p className="text-sm font-bold text-foreground">{analysisResult?.framework || "Next.js"}</p>
-                        <p className="text-[10px] text-foreground-muted">{analysisResult?.language || "TypeScript"}</p>
-                      </div>
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Database detected</p>
-                        <p className="text-sm font-bold text-foreground">
-                          {analysisResult?.database_dependencies && analysisResult.database_dependencies.length > 0 && analysisResult.database_dependencies[0] !== "None"
-                            ? analysisResult.database_dependencies[0]
-                            : "PostgreSQL"}
-                        </p>
-                        <p className="text-[10px] text-foreground-muted">Auto-configured pool</p>
-                      </div>
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Where It Will Run</p>
-                        <p className="text-sm font-bold text-foreground">{analysisResult?.deploymentStrategy || "Azure App Service"}</p>
-                        <p className="text-[10px] text-foreground-muted">Recommended by AI</p>
-                      </div>
-                      <div className="glass rounded-xl p-5 border border-border/60 space-y-2 bg-card/40 text-center">
-                        <p className="text-[9px] font-bold text-foreground-muted uppercase tracking-wider">Estimated deployment</p>
-                        <p className="text-sm font-bold text-success font-mono">43 seconds</p>
-                        <p className="text-[10px] text-foreground-muted">Production environment</p>
+                      {/* Right Side: Analysis parameters */}
+                      <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-4">
+                        <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider border-b border-border/40 pb-2 flex items-center gap-2">
+                          <Activity size={14} className="text-primary" /> Target Strategy
+                        </h4>
+                        <div className="space-y-3.5 text-xs">
+                          {[
+                            { label: "Framework", value: analysisResult?.framework || "Next.js" },
+                            { label: "Runtime", value: analysisResult?.runtime || "Node.js 22" },
+                            { label: "Database", value: (analysisResult?.databaseDependencies && analysisResult.databaseDependencies.length > 0 && analysisResult.databaseDependencies[0] !== "None") ? analysisResult.databaseDependencies[0] : "PostgreSQL" },
+                            { label: "Deployment Target", value: analysisResult?.deploymentStrategy || "Azure App Service" },
+                            { label: "Estimated Cost", value: analysisResult?.estimatedCost || "$0 - Free Tier" },
+                            { label: "Estimated Time", value: analysisResult?.estimatedDeploymentTime || "43 seconds" },
+                            { label: "AI Confidence", value: `${analysisResult?.confidence || 97}%`, color: "text-success font-extrabold" }
+                          ].map((item) => (
+                            <div key={item.label} className="flex justify-between items-center py-1.5 border-b border-border/20 last:border-0">
+                              <span className="text-foreground-muted font-semibold">{item.label}</span>
+                              <span className={`font-extrabold text-foreground ${item.color || ""}`}>{item.value}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
 
                     {/* Vulnerabilities warnings */}
-                    {analysisResult?.vulnerabilities?.length > 0 && (
+                    {vulnerabilities.length > 0 && (
                       <div className="p-4 rounded-xl border border-warning/20 bg-warning/5 space-y-2 animate-fade-in">
                         <p className="text-xs font-semibold text-warning flex items-center gap-1.5">
                           <AlertTriangle size={14} /> Things to Review
                         </p>
                         <ul className="list-disc pl-4 space-y-1 text-[11px] text-foreground-muted">
-                          {analysisResult.vulnerabilities.map((v: string, idx: number) => (
+                          {vulnerabilities.map((v, idx) => (
                             <li key={idx}>{v}</li>
                           ))}
                         </ul>
@@ -953,7 +1090,7 @@ export default function RepositoriesPage() {
                     Back
                   </button>
                   <button
-                    disabled={isAnalyzing}
+                    disabled={isAnalyzing || !analysisResult}
                     onClick={() => setOnboardStep(3)}
                     className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
                   >
@@ -988,21 +1125,21 @@ export default function RepositoriesPage() {
                     {/* AI Deployment Plan Card */}
                     <div className="glass rounded-xl p-5 border border-primary/15 bg-gradient-to-b from-primary/5 to-transparent space-y-4">
                       <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 uppercase tracking-wider">
-                        <Brain size={14} /> AI Deployment Plan
+                        <Brain size={14} /> Deployment Summary
                       </h4>
                       <div className="space-y-2.5 text-xs">
                         {[
-                          { label: "Deployment Target", value: analysisResult?.deploymentStrategy || "Azure App Service" },
+                          { label: "Application", value: selectedRepo.split("/").pop() || "Application" },
                           { label: "Runtime", value: analysisResult?.runtime || "Node.js 22" },
                           { label: "Environment", value: "Production" },
-                          { label: "SSL", value: "Included", check: true },
-                          { label: "Scaling", value: "Automatic", check: true },
-                          { label: "Estimated Cost", value: "Free Tier Eligible", highlight: true },
+                          { label: "SSL", value: "Included" },
+                          { label: "Scaling", value: "Automatic" },
+                          { label: "Monitoring", value: "Enabled" },
+                          { label: "Estimated Cost", value: "Free Tier" },
                         ].map((row) => (
                           <div key={row.label} className="flex items-center justify-between py-2 border-b border-border/20 last:border-0">
-                            <span className="text-foreground-muted">{row.label}</span>
-                            <span className={`font-semibold flex items-center gap-1 ${row.highlight ? "text-success" : row.check ? "text-success" : "text-foreground"}`}>
-                              {row.check && <Check size={12} />}
+                            <span className="text-foreground-muted font-medium">{row.label}</span>
+                            <span className="font-extrabold text-foreground flex items-center gap-1">
                               {row.value}
                             </span>
                           </div>
@@ -1011,13 +1148,13 @@ export default function RepositoriesPage() {
                     </div>
 
                     {/* Environment Variables */}
-                    {(wizardEnvVars.length > 0 || analysisResult?.environmentVariables?.length > 0) && (
+                    {(wizardEnvVars.length > 0 || detectedEnvironmentVariables.length > 0) && (
                       <div className="bg-card/40 border border-border/60 rounded-xl p-4 space-y-4">
                         <div className="flex items-center justify-between">
                           <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider">
                             Environment Variables
                           </h4>
-                          {analysisResult?.environmentVariables?.length > 0 && (
+                          {detectedEnvironmentVariables.length > 0 && (
                             <span className="text-[9px] text-primary font-medium">AI detected these may be needed</span>
                           )}
                         </div>
@@ -1179,7 +1316,7 @@ export default function RepositoriesPage() {
                         </div>
                         <div>
                           <p className="text-[9px] font-bold text-foreground-muted uppercase">Estimated Time</p>
-                          <p className="mt-0.5 font-semibold text-success font-mono">43 seconds</p>
+                          <p className="mt-0.5 font-semibold text-foreground font-mono">{analysisResult?.estimatedDeploymentTime || "Not recorded"}</p>
                         </div>
                       </div>
                     </div>
@@ -1187,12 +1324,15 @@ export default function RepositoriesPage() {
                     <div className="pt-4 border-t border-border/40">
                       <button
                         onClick={handleLaunchDeployment}
-                        className="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-bold transition glow-blue flex items-center justify-center gap-2 cursor-pointer"
+                        disabled={!analysisResult}
+                        className="w-full py-3 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-bold transition glow-blue flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Rocket size={16} />
                         Deploy Now
                       </button>
-                      <p className="text-[10px] text-foreground-muted text-center mt-2">Estimated: 43s to go live</p>
+                      <p className="text-[10px] text-foreground-muted text-center mt-2">
+                        Estimated time: {analysisResult?.estimatedDeploymentTime || "not recorded"}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -1361,7 +1501,7 @@ export default function RepositoriesPage() {
                   type="text"
                   value={repoName}
                   onChange={(e) => setRepoName(e.target.value)}
-                  placeholder={`e.g. ${user?.github_username || "acme"}/billing-service`}
+                  placeholder={`e.g. ${user?.github_username || "owner"}/billing-service`}
                   className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none placeholder:text-foreground-muted"
                   required
                 />

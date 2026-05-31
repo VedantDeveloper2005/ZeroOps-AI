@@ -27,9 +27,15 @@ export function FloatingAssistant() {
   const [inputValue, setInputValue] = useState("");
   const [loading, setLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const messageCounterRef = useRef(0);
 
   const activeProject = projects[0];
   const projectId = activeProject?.id;
+
+  const nextMessageId = () => {
+    messageCounterRef.current += 1;
+    return `message-${messageCounterRef.current}`;
+  };
 
   // Auto scroll to bottom on new messages
   useEffect(() => {
@@ -42,7 +48,7 @@ export function FloatingAssistant() {
     if (!textToSend.trim() || loading) return;
 
     const userMessage: Message = {
-      id: Math.random().toString(),
+      id: nextMessageId(),
       sender: "user",
       text: textToSend,
       timestamp: new Date(),
@@ -56,7 +62,7 @@ export function FloatingAssistant() {
       const res = await api.sendChatRequest(textToSend, projectId);
       
       const aiMessage: Message = {
-        id: Math.random().toString(),
+        id: nextMessageId(),
         sender: "ai",
         text: res.reply || "Sorry, I encountered an issue processing your request.",
         timestamp: new Date(),
@@ -68,7 +74,7 @@ export function FloatingAssistant() {
       addToast("Failed to communicate with AI DevOps Assistant.", "error");
       
       const errorMessage: Message = {
-        id: Math.random().toString(),
+        id: nextMessageId(),
         sender: "ai",
         text: "I'm having trouble connecting to my models right now. Please verify your internet connection or check back in a moment.",
         timestamp: new Date(),
@@ -90,11 +96,11 @@ export function FloatingAssistant() {
 
   const suggestions = [
     { text: "Why did deployment fail?", icon: HelpCircle },
-    { text: "Optimize my application.", icon: Sparkles },
-    { text: "Reduce costs.", icon: DollarSign },
-    { text: "Scale automatically.", icon: Cpu },
     { text: "Analyze logs.", icon: Terminal },
-    { text: "Fix database issues.", icon: Database },
+    { text: "Reduce cost.", icon: DollarSign },
+    { text: "Optimize app.", icon: Sparkles },
+    { text: "Scale app.", icon: Cpu },
+    { text: "Fix infrastructure.", icon: Database },
   ];
 
   return (

@@ -100,14 +100,14 @@ class PipelineLogger:
 
 # Task Dispatcher for Background Job Architecture
 # In production, this can be swapped with a Celery task call or Azure Queue message.
-def enqueue_deployment(deploy_id: str, repo_name: str, branch: str, background_tasks):
+def enqueue_deployment(deploy_id: str, repo_name: str, branch: str, background_tasks, clone_token: str | None = None):
     """Enqueues deployment tasks to run asynchronously in the background."""
     # For MVP: Enqueue using FastAPI's background tasks
     # For Production: celery_app.send_task("run_deployment_pipeline", args=[deploy_id, repo_name, branch])
-    background_tasks.add_task(run_deployment_pipeline, deploy_id, repo_name, branch)
+    background_tasks.add_task(run_deployment_pipeline, deploy_id, repo_name, branch, clone_token)
 
 
-async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
+async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, clone_token: str | None = None):
     """Runs the full 10-stage deployment pipeline in an async background task."""
     print(f"Starting database-backed pipeline deployment {deploy_id} for {repo_name} (branch: {branch})")
     project_id = normalize_project_id(repo_name)
@@ -148,8 +148,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             await broadcast_message(deploy_id, {"type": "stage", "id": 1, "status": "active", "duration": "..."})
             await asyncio.sleep(1.0)
             
-            # Simple repo verification
-            await p_logger.log("  GitHub Webhook handshake successful", "success")
+            await p_logger.log("  Deployment record loaded and project ownership verified.", "success")
             await broadcast_message(deploy_id, {"type": "stage", "id": 1, "status": "completed", "duration": "1.0s"})
             await p_logger.flush_to_db(db)
 
@@ -158,9 +157,8 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             await p_logger.log(f"$ git clone --branch {branch} https://github.com/{repo_name}.git .", "command")
             await asyncio.sleep(1.0)
             
-            repo_path = git.clone_repo(repo_name)
-            await p_logger.log("  ✓ Repository cloned successfully to local container filesystem.", "success")
-            await p_logger.log("  Source code fetch complete: 12.4 MB", "success")
+            repo_path = git.clone_repo(repo_name, clone_token)
+            await p_logger.log("  Repository cloned successfully to local container filesystem.", "success")
             await broadcast_message(deploy_id, {"type": "stage", "id": 2, "status": "completed", "duration": "1.2s"})
             await p_logger.flush_to_db(db)
 
@@ -206,10 +204,10 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
                 build_commands=metadata.get("build_commands"),
                 start_commands=metadata.get("start_commands"),
                 environment_variables=metadata.get("environment_variables", []),
-                recommended_compute_tier=metadata.get("recommended_compute_tier") or "Azure App Service B1",
-                estimated_cost=metadata.get("estimated_cost") or "$13/month",
-                recommended_region=metadata.get("recommended_region") or "Central India",
-                expected_traffic=metadata.get("expected_traffic") or "50,000 requests/month"
+                recommended_compute_tier=metadata.get("recommended_compute_tier"),
+                estimated_cost=metadata.get("estimated_cost"),
+                recommended_region=metadata.get("recommended_region"),
+                expected_traffic=metadata.get("expected_traffic")
             )
             db.add(analysis)
             
@@ -219,35 +217,19 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             await broadcast_message(deploy_id, {"type": "stage", "id": 3, "status": "completed", "duration": "1.8s"})
             await p_logger.flush_to_db(db)
 
-            # Step 4: Installing Dependencies
+            # Step 4: Preparing Build Context
             await broadcast_message(deploy_id, {"type": "stage", "id": 4, "status": "active", "duration": "..."})
-            await p_logger.log("▸ Installing package dependencies...", "info")
-            if metadata.get("language") == "Python":
-                await p_logger.log("$ pip install -r requirements.txt", "command")
-                await asyncio.sleep(0.8)
-                await p_logger.log("  Collected 14 packages. Installed in 0.8s", "success")
-            else:
-                await p_logger.log("$ npm install", "command")
-                await asyncio.sleep(1.2)
-                await p_logger.log("  Downloaded 418 packages. Installed in 1.2s", "success")
+            await p_logger.log("Preparing container build context from cloned repository...", "info")
+            await p_logger.log("Dependency installation will run inside the Docker build.", "info")
             await broadcast_message(deploy_id, {"type": "stage", "id": 4, "status": "completed", "duration": "1.2s"})
             await p_logger.flush_to_db(db)
 
             # Step 5: Building Application
             await broadcast_message(deploy_id, {"type": "stage", "id": 5, "status": "active", "duration": "..."})
             build_start = time.time()
-            if metadata.get("language") == "Python":
-                await p_logger.log("$ python -m py_compile main.py", "command")
-                await asyncio.sleep(0.5)
-                await p_logger.log("  Compilation complete: 0 errors", "success")
-            else:
-                await p_logger.log("$ npm run build", "command")
-                await asyncio.sleep(1.5)
-                await p_logger.log("  Compilation complete: 0 errors, 4 warnings", "success")
-                
             await p_logger.log(f"$ docker build -t acr.azurecr.io/{project_id}:v1.0.0 .", "command")
             for log_line in builder.build_and_tag_image(repo_path, project_id, "v1.0.0"):
-                await p_logger.log(log_line.strip(), "success" if "✓" in log_line or "Successfully" in log_line else "info")
+                await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
                 await asyncio.sleep(0.05)
                 
             build_dur = f"{round(time.time() - build_start, 1)}s"
@@ -272,8 +254,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             for log in k8s.sync_secrets_to_namespace(project_id, secrets):
                 await p_logger.log(log.strip(), "info" if "Synchronizing" in log else "success")
                 await asyncio.sleep(0.05)
-            await p_logger.log("  Azure Database for PostgreSQL verified", "success")
-            await p_logger.log(f"  Isolated namespace '{ns_name}' created", "success")
             await broadcast_message(deploy_id, {"type": "stage", "id": 7, "status": "completed", "duration": "1.2s"})
             await p_logger.flush_to_db(db)
 
@@ -282,7 +262,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             await p_logger.log(f"$ kubectl apply -f manifests.yaml", "command")
             deploy_start = time.time()
             for log_line in k8s.apply_manifests(manifests):
-                await p_logger.log(log_line.strip(), "success" if ("✓" in log_line or "created" in log_line or "exposed" in log_line) else "info")
+                await p_logger.log(log_line.strip(), "success" if ("created" in log_line or "configured" in log_line or "applied successfully" in log_line.lower()) else "info")
                 await asyncio.sleep(0.05)
             deploy_dur = f"{round(time.time() - deploy_start, 1)}s"
             await broadcast_message(deploy_id, {"type": "stage", "id": 8, "status": "completed", "duration": deploy_dur})
@@ -290,23 +270,16 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
 
             # Step 9: Health Check Verification
             await broadcast_message(deploy_id, {"type": "stage", "id": 9, "status": "active", "duration": "..."})
-            await p_logger.log("▸ Health check probe GET /readyz - 200 OK (attempt 1/1)", "success")
-            await p_logger.log("  Liveness audit: 4/4 pods healthy", "success")
-            await asyncio.sleep(0.8)
+            for log_line in k8s.verify_rollout(project_id):
+                await p_logger.log(log_line.strip(), "success" if "success" in log_line.lower() else "info")
+                await asyncio.sleep(0.05)
             await broadcast_message(deploy_id, {"type": "stage", "id": 9, "status": "completed", "duration": "0.8s"})
             await p_logger.flush_to_db(db)
 
             # Step 10: Deployment Successful
             await broadcast_message(deploy_id, {"type": "stage", "id": 10, "status": "active", "duration": "..."})
-            await p_logger.log("▸ Binding ingress paths. Registering app DNS routing tables...", "info")
-            await asyncio.sleep(0.6)
-            await p_logger.log(f"  ✓ Port bindings exposed. Ingress rule: {project_id}.zeroops.dev -> {project_id}-svc", "success")
-            await p_logger.log("▸ Resolving SSL/TLS certification endpoints...", "info")
-            await asyncio.sleep(0.8)
-            await p_logger.log("  ✓ SSL certificate successfully verified and registered via Let's Encrypt CA.", "success")
-            await p_logger.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
-            await p_logger.log("✅ Deployment complete! Your service is active.", "success")
-            await p_logger.log(f"  URL:  {live_url}", "info")
+            await p_logger.log("Deployment rollout completed. Recording deployment state.", "success")
+            await p_logger.log(f"URL: {live_url}", "info")
             await broadcast_message(deploy_id, {"type": "stage", "id": 10, "status": "completed", "duration": "1.4s"})
             await p_logger.flush_to_db(db)
 
@@ -326,7 +299,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
             deployment.infrastructure_metadata = {
                 "namespace": ns_name,
                 "region": deployment.project.region or "eastus",
-                "replicas": 4,
+                "replicas": None,
                 "framework": metadata.get("framework"),
                 "language": metadata.get("language")
             }
@@ -347,17 +320,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str):
                 message=f"Project {repo_name} was successfully built and deployed to {live_url}.",
                 type="success",
                 category="deployment"
-            ))
-            
-            # Create real deployment metrics
-            db.add(models.DeploymentMetric(
-                deployment_id=deployment.id,
-                project_id=deployment.project_id,
-                cpu_utilization=15.4,
-                memory_utilization=64.2,
-                request_count=1240,
-                error_rate=0.0,
-                response_time_ms=47
             ))
             
             # Log activity event
