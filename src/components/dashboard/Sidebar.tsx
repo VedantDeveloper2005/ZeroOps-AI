@@ -6,14 +6,27 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Rocket, Brain,
-  Activity, Settings, ChevronLeft, ChevronRight, LogOut,
+  Settings, ChevronLeft, ChevronRight, LogOut,
   Lock,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
 
-const navSections = [
+type NavItem = {
+  name: string;
+  icon: React.ElementType;
+  href: string;
+  activePaths: string[];
+  isLockedIfNoDeploy?: boolean;
+};
+
+type NavSection = {
+  label: string;
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
   {
     label: "PLATFORM",
     items: [
@@ -108,7 +121,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {section.items.map((item) => {
               const active = isActive(item.activePaths);
               const Icon = item.icon;
-              const isLocked = !hasDeployed && (item as any).isLockedIfNoDeploy;
+              const isLocked = !hasDeployed && item.isLockedIfNoDeploy === true;
               return (
                 <Link
                   key={item.href}

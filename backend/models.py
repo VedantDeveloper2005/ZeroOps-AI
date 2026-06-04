@@ -109,6 +109,7 @@ class User(Base):
     github_avatar_url = Column(Text, nullable=True)
     github_access_token_encrypted = Column(Text, nullable=True)  # Fernet-encrypted
     github_connected = Column(Boolean, default=False)
+    google_id = Column(Text, nullable=True, unique=True, index=True)
 
     # Relationships
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
@@ -120,6 +121,9 @@ class User(Base):
     activity_events = relationship("ActivityEvent", back_populates="user", cascade="all, delete-orphan")
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="user", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="user", cascade="all, delete-orphan")
+    azure_connections = relationship("UserAzureConnection", back_populates="user", cascade="all, delete-orphan")
+    billing_operations = relationship("BillingOperation", back_populates="user", cascade="all, delete-orphan")
+    code_uploads = relationship("CodeUpload", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -155,6 +159,8 @@ class Project(Base):
     branch = Column(Text, default="main")
     region = Column(Text, default="eastus")
     status = Column(Text, default=ProjectStatus.active.value)
+    source_type = Column(Text, default="github")
+    source_path = Column(Text, nullable=True)
     last_deployed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     custom_domains = Column(JSON, default=list)
@@ -497,6 +503,78 @@ class RevokedToken(Base):
 # ──────────────────────────────────────────────
 # DEPLOYMENT RECOMMENDATIONS
 # ──────────────────────────────────────────────
+
+class UserAzureConnection(Base):
+    __tablename__ = "user_azure_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(Text, nullable=False)
+    subscription_id = Column(Text, nullable=False)
+    client_id = Column(Text, nullable=True)
+    client_secret_encrypted = Column(Text, nullable=True)
+    region = Column(Text, default="eastus")
+    resource_group = Column(Text, nullable=True)
+    acr_login_server = Column(Text, nullable=True)
+    aks_cluster_name = Column(Text, nullable=True)
+    namespace_prefix = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="azure_connections")
+
+    __table_args__ = (
+        Index("ix_user_azure_connections_user_id", "user_id"),
+    )
+
+
+class BillingOperation(Base):
+    __tablename__ = "billing_operations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    operation_type = Column(Text, nullable=False)
+    status = Column(Text, default="pending_payment")
+    amount_cents = Column(Integer, default=0)
+    currency = Column(Text, default="usd")
+    provider = Column(Text, nullable=True)
+    provider_reference = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    paid_at = Column(DateTime, nullable=True)
+    consumed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="billing_operations")
+
+    __table_args__ = (
+        Index("ix_billing_operations_user_id", "user_id"),
+        Index("ix_billing_operations_status", "status"),
+    )
+
+
+class CodeUpload(Base):
+    __tablename__ = "code_uploads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    original_filename = Column(Text, nullable=False)
+    storage_path = Column(Text, nullable=False)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    checksum_sha256 = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="code_uploads")
+    project = relationship("Project")
+
+    __table_args__ = (
+        Index("ix_code_uploads_user_id", "user_id"),
+        Index("ix_code_uploads_project_id", "project_id"),
+    )
+
 
 class DeploymentRecommendation(Base):
     __tablename__ = "deployment_recommendations"

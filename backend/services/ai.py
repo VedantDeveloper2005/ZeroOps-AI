@@ -97,19 +97,19 @@ def read_file_content(repo_source, filename: str) -> str:
 
 def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     """Idempotent, deep repository scanner that supports both local paths and virtual contexts."""
-    framework = "Next.js"
-    version = "16.2.6"
-    language = "TypeScript"
-    runtime = "Node.js 20"
-    package_manager = "npm"
+    framework = "Unknown"
+    version = None
+    language = "Unknown"
+    runtime = None
+    package_manager = None
     docker_support = False
     monorepo_structure = "None"
     database_dependencies = []
-    deployment_strategy = "Managed Production Environment"
-    build_commands = "npm run build"
-    start_commands = "npm start"
+    deployment_strategy = "Azure Kubernetes Service"
+    build_commands = None
+    start_commands = None
     
-    dependencies = ["next@16.2.6", "react@19.2.4"]
+    dependencies = []
     vulnerabilities = []
     cpu = "200m"
     memory = "256Mi"
@@ -326,46 +326,47 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 "key": "DATABASE_URL",
                 "type": "required",
                 "is_missing": "DATABASE_URL" not in scanned_vars,
-                "has_default": True,
-                "default_val": "postgresql://zeroops_user:****@managed-postgres-db.zeroops.internal:5432/zeroops_db"
+                            "has_default": False,
+                            "default_val": ""
             })
         elif "mysql" in db_lower:
             detected_vars_detail.append({
                 "key": "DATABASE_URL",
                 "type": "required",
                 "is_missing": "DATABASE_URL" not in scanned_vars,
-                "has_default": True,
-                "default_val": "mysql://zeroops_user:****@managed-mysql-db.zeroops.internal:3306/zeroops_db"
+                            "has_default": False,
+                            "default_val": ""
             })
         elif "mongo" in db_lower:
             detected_vars_detail.append({
                 "key": "MONGODB_URI",
                 "type": "required",
                 "is_missing": "MONGODB_URI" not in scanned_vars,
-                "has_default": True,
-                "default_val": "mongodb://mongo_user:****@managed-mongodb.zeroops.internal:27017/mongo_db"
+                            "has_default": False,
+                            "default_val": ""
             })
         elif "redis" in db_lower:
             detected_vars_detail.append({
                 "key": "REDIS_URL",
                 "type": "required",
                 "is_missing": "REDIS_URL" not in scanned_vars,
-                "has_default": True,
-                "default_val": "redis://default:****@managed-redis.zeroops.internal:6379"
+                            "has_default": False,
+                            "default_val": ""
             })
 
-    # Always inject JWT_SECRET as required
-    detected_vars_detail.append({
-        "key": "JWT_SECRET",
-        "type": "required",
-        "is_missing": "JWT_SECRET" not in scanned_vars,
-        "has_default": True,
-        "default_val": f"zo_sec_{import_secrets_token()}"
-    })
+    for local_secret in ["JWT_SECRET", "AUTH_SECRET", "NEXTAUTH_SECRET", "SESSION_SECRET"]:
+        if local_secret in scanned_vars:
+            detected_vars_detail.append({
+                "key": local_secret,
+                "type": "required",
+                "is_missing": False,
+                "has_default": True,
+                "default_val": "server-generated"
+            })
 
     # Find Recommended/Optional variables
     for var in scanned_vars:
-        if var in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL", "JWT_SECRET"]:
+        if var in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL", "JWT_SECRET", "AUTH_SECRET", "NEXTAUTH_SECRET", "SESSION_SECRET"]:
             continue
         
         var_lower = var.lower()
@@ -387,8 +388,11 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 "default_val": ""
             })
 
-    db_text = f"an auto-provisioned {database_dependencies[0]} database" if database_dependencies else "an isolated runtime tier"
-    why_this_plan = f"ZeroOps AI selected a {recommended_compute_tier} with {db_text} because the application code indicates it requires persistent computing layers. Cost breakdown includes fully-managed secure databases, 99.9% uptime orchestration, and platform edge routing."
+    db_text = f"{database_dependencies[0]} configuration" if database_dependencies else "no database dependency"
+    why_this_plan = (
+        f"ZeroOps detected {framework} with {db_text}. The estimate is a scanner heuristic only; "
+        "real Azure costs and resource names depend on the user's connected Azure subscription."
+    )
 
     # Build pricing breakdown dict
     pricing_breakdown = {
@@ -404,17 +408,13 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     }
 
     # Expected traffic tiering
-    expected_traffic = "100,000 requests/month"
-    if database_dependencies:
-        expected_traffic = "250,000 requests/month"
-    elif cpu_cores >= 0.5:
-        expected_traffic = "500,000 requests/month"
+    expected_traffic = None
 
     return {
         "framework": framework,
         "version": version,
         "language": language,
-        "confidence": 98,
+        "confidence": 75 if framework != "Unknown" else 0,
         "resources": {
             "cpu": cpu,
             "memory": memory,
@@ -432,21 +432,21 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         "docker_support": docker_support,
         "monorepo_structure": monorepo_structure,
         "database_dependencies": database_dependencies,
-        "deployment_strategy": "Managed Production Environment",
+        "deployment_strategy": deployment_strategy,
         "build_commands": build_commands,
         "start_commands": start_commands,
         "environment_variables": scanned_vars,
-        "explanation": f"ZeroOps AI analyzed your {framework} repository and detected a standard {runtime} runtime. This application can be deployed without manual configuration in a secure, autoscaling runtime environment with a target deploy time of 90 seconds.",
+        "explanation": f"ZeroOps scanned this repository and detected {framework} runtime metadata. Missing external services and secrets must be configured before deployment.",
         "recommended_compute_tier": recommended_compute_tier,
-        "estimated_cost": f"${int(total_cost)}/month",
-        "recommended_region": "East US Core",
+        "estimated_cost": f"${int(total_cost)}/month" if framework != "Unknown" else None,
+        "recommended_region": None,
         "expected_traffic": expected_traffic,
         
         # Extra blueprint fields
-        "application_type": f"{framework} SaaS Platform" if "next" in framework.lower() else f"{framework} Web Service",
-        "estimated_build_time": "90s",
-        "production_readiness_score": 94 if not vulnerabilities else 85,
-        "detected_services": [framework] + ([database_dependencies[0]] if database_dependencies else []),
+        "application_type": f"{framework} Web Service" if framework != "Unknown" else None,
+        "estimated_build_time": None,
+        "production_readiness_score": None,
+        "detected_services": ([framework] if framework != "Unknown" else []) + ([database_dependencies[0]] if database_dependencies else []),
 
         # Breakdown costs
         "pricing_breakdown": pricing_breakdown
@@ -616,47 +616,17 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
                 "storage": data.get("storage_recommendation", "1Gi")
             }
         if "version" not in data:
-            data["version"] = data.get("runtime", "1.0.0")
+            data["version"] = data.get("runtime")
 
-        # Set default values for pricing breakdown & why_this_plan
-        if "compute_cost" not in data:
-            data["compute_cost"] = 8.0
-        if "database_cost" not in data:
-            db_deps = data.get("database_dependencies", [])
-            data["database_cost"] = 5.0 if db_deps and "None" not in db_deps else 0.0
-        if "platform_fee" not in data:
-            data["platform_fee"] = 4.0
-        if "bandwidth_cost" not in data:
-            data["bandwidth_cost"] = 0.0
-        if "monitoring_cost" not in data:
-            data["monitoring_cost"] = 0.0
-        
-        compute_cost = data["compute_cost"]
-        database_cost = data["database_cost"]
-        platform_fee = data["platform_fee"]
-        total_cost = compute_cost + database_cost + platform_fee
-        
-        if "total_cost" not in data:
-            data["total_cost"] = total_cost
-        if "projected_growth_cost" not in data:
-            data["projected_growth_cost"] = total_cost * 2.2
-        if "estimated_cost" not in data:
-            data["estimated_cost"] = f"${int(total_cost)}/month"
-        if "deployment_target" not in data or "Azure" in str(data.get("deployment_target")):
-            data["deployment_target"] = "Managed Production Environment"
-        if "deployment_strategy" not in data or "Azure" in str(data.get("deployment_strategy")):
-            data["deployment_strategy"] = "Managed Production Environment"
-        if "recommended_compute_tier" not in data or "Azure" in str(data.get("recommended_compute_tier")):
-            data["recommended_compute_tier"] = "Standard Production Core"
-        if "recommended_region" not in data or "Azure" in str(data.get("recommended_region")):
-            data["recommended_region"] = "East US Core"
-        if "expected_traffic" not in data:
-            data["expected_traffic"] = "100,000 requests/month"
-
+        compute_cost = data.get("compute_cost") if isinstance(data.get("compute_cost"), (int, float)) else None
+        database_cost = data.get("database_cost") if isinstance(data.get("database_cost"), (int, float)) else None
+        platform_fee = data.get("platform_fee") if isinstance(data.get("platform_fee"), (int, float)) else None
+        bandwidth_cost = data.get("bandwidth_cost") if isinstance(data.get("bandwidth_cost"), (int, float)) else None
+        monitoring_cost = data.get("monitoring_cost") if isinstance(data.get("monitoring_cost"), (int, float)) else None
+        if "total_cost" not in data and compute_cost is not None and database_cost is not None and platform_fee is not None:
+            data["total_cost"] = compute_cost + database_cost + platform_fee
         if "why_this_plan" not in data:
-            db_dep = data.get("database") or ""
-            db_text = f"an auto-provisioned {db_dep} database" if db_dep and db_dep != "None" else "an isolated runtime tier"
-            data["why_this_plan"] = f"ZeroOps AI selected a Managed Production Environment with {db_text} because the application code indicates it requires persistent computing layers. Cost breakdown includes fully-managed secure databases, 99.9% uptime orchestration, and platform edge routing."
+            data["why_this_plan"] = "ZeroOps recorded detected repository signals. Azure resources and external services must be confirmed before deployment."
             
         if "detected_vars_detail" not in data:
             detected_vars_detail = []
@@ -667,23 +637,16 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
                     "key": "DATABASE_URL" if db_dep != "MongoDB" else "MONGODB_URI",
                     "type": "required",
                     "is_missing": True,
-                    "has_default": True,
-                    "default_val": f"{db_dep.lower()}://zeroops_user:****@managed-{db_dep.lower()}-db.zeroops.internal:5432/zeroops_db"
-                })
-            detected_vars_detail.append({
-                "key": "JWT_SECRET",
-                "type": "required",
-                "is_missing": True,
-                "has_default": True,
-                "default_val": "zo_sec_db84b72fd91c28c83e1a0b5a37f59b6c2d1e"
+                    "has_default": False,
+                    "default_val": ""
             })
             for var in env_vars:
-                if var not in ["DATABASE_URL", "MONGODB_URI", "JWT_SECRET"]:
+                if var not in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL"]:
                     detected_vars_detail.append({
                         "key": var,
-                        "type": "optional",
+                        "type": "required" if var in ["JWT_SECRET", "AUTH_SECRET", "NEXTAUTH_SECRET", "SESSION_SECRET"] else "optional",
                         "is_missing": False,
-                        "has_default": False,
+                        "has_default": var in ["JWT_SECRET", "AUTH_SECRET", "NEXTAUTH_SECRET", "SESSION_SECRET"],
                         "default_val": ""
                     })
             data["detected_vars_detail"] = detected_vars_detail
@@ -691,21 +654,17 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
         # Support extra blueprint fields
         if "application_type" not in data:
             data["application_type"] = f"{data.get('framework', 'Web')} App"
-        if "estimated_build_time" not in data:
-            data["estimated_build_time"] = "90s"
-        if "production_readiness_score" not in data:
-            data["production_readiness_score"] = 100 - data.get("risk_score", 12)
         if "detected_services" not in data:
             data["detected_services"] = [data.get("framework", "Web")] + ([data.get("database")] if data.get("database") and data.get("database") != "None" else [])
 
         data["pricing_breakdown"] = {
-            "compute_cost": float(data.get("compute_cost", 8.0)),
-            "database_cost": float(data.get("database_cost", database_cost)),
-            "platform_fee": float(data.get("platform_fee", platform_fee)),
-            "bandwidth_cost": float(data.get("bandwidth_cost", 0.0)),
-            "monitoring_cost": float(data.get("monitoring_cost", 0.0)),
-            "total_cost": float(data.get("total_cost", total_cost)),
-            "projected_growth_cost": float(data.get("projected_growth_cost", total_cost * 2.2)),
+            "compute_cost": compute_cost,
+            "database_cost": database_cost,
+            "platform_fee": platform_fee,
+            "bandwidth_cost": bandwidth_cost,
+            "monitoring_cost": monitoring_cost,
+            "total_cost": data.get("total_cost"),
+            "projected_growth_cost": data.get("projected_growth_cost"),
             "why_this_plan": data.get("why_this_plan"),
             "detected_vars_detail": data.get("detected_vars_detail"),
             "application_type": data.get("application_type"),
@@ -865,6 +824,8 @@ def analyze_failure_nemotron(logs: list, build_logs: list, events: list = None) 
         raise RuntimeError(f"NVIDIA Nemotron Failure Analysis API call failed: {e}") from e
 
 def generate_default_dockerfile(framework: str) -> str:
+    if not framework or framework == "Unknown":
+        return ""
     if framework == "FastAPI" or framework == "Flask":
         return """FROM python:3.9-slim
 WORKDIR /app
@@ -884,8 +845,10 @@ EXPOSE 3000
 CMD ["npm", "start"]"""
 
 def generate_default_k8s_manifest(framework: str, cpu: str, memory: str, project_id: str = "default") -> str:
+    if not framework or framework == "Unknown":
+        return ""
     port = 8080 if framework in ["FastAPI", "Flask"] else 3000
-    name = "fastapi-service" if framework in ["FastAPI", "Flask"] else "web-app"
+    name = project_id
     ns_name = f"zeroops-{project_id}"
     return f"""apiVersion: apps/v1
 kind: Deployment

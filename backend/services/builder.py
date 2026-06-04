@@ -20,6 +20,8 @@ def build_and_tag_image(repo_path: str, image_name: str, tag: str) -> Generator[
         except ImportError:
             from services.ai import analyze_repo_local
         metadata = analyze_repo_local(repo_path)
+        if not metadata.get("dockerfile"):
+            raise RuntimeError("No Dockerfile found and framework-specific Dockerfile generation is unavailable.")
         with open(dockerfile_path, "w", encoding="utf-8") as f:
             f.write(metadata["dockerfile"])
 
@@ -52,3 +54,32 @@ def build_and_tag_image(repo_path: str, image_name: str, tag: str) -> Generator[
         raise RuntimeError(f"Docker build failed for {full_image_tag}")
 
     yield f"Container image built successfully: {full_image_tag}\n"
+
+
+def push_image(image_ref: str) -> Generator[str, None, None]:
+    """Push a previously built image to the configured registry."""
+    if not DOCKER_AVAILABLE:
+        message = "Docker daemon is not available. Cannot push container image."
+        yield f"{message}\n"
+        raise RuntimeError(message)
+
+    yield f"Pushing container image: {image_ref}\n"
+    process = subprocess.Popen(
+        ["docker", "push", image_ref],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        shell=True,
+    )
+    while True:
+        line = process.stdout.readline() if process.stdout else ""
+        if not line and process.poll() is not None:
+            break
+        if line:
+            yield f"  {line.strip()}\n"
+
+    if process.returncode != 0:
+        yield f"Docker push failed with return code {process.returncode}\n"
+        raise RuntimeError("Docker push failed. Ensure the deployment worker is logged into the user's Azure Container Registry.")
+
+    yield "Container image pushed successfully.\n"

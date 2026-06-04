@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List
 from fastapi import WebSocket
@@ -11,11 +12,11 @@ from sqlalchemy.future import select
 try:
     from backend.services import git, ai, builder, k8s, vault
     from backend.database import AsyncSessionLocal
-    from backend import models
+    from backend import models, config
 except ImportError:
     from services import git, ai, builder, k8s, vault
     from database import AsyncSessionLocal
-    import models
+    import models, config
 
 # Active websockets registry: deploy_id -> list of WebSockets
 connections: Dict[str, List[WebSocket]] = {}
@@ -115,7 +116,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
     print(f"Starting database-backed pipeline deployment {deploy_id} for {repo_name} (branch: {branch})")
     project_id_raw = normalize_project_id(repo_name)
     ns_name = f"zeroops-{project_id_raw}"
-    live_url = f"https://{project_id_raw}.zeroops.app"
+    live_url = None
     
     # Instantiate logger
     p_logger = PipelineLogger(deploy_id)
@@ -178,6 +179,24 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             )
             deployment = result.scalars().first()
             project = deployment.project
+            azure_result = await db.execute(
+                select(models.UserAzureConnection)
+                .filter(models.UserAzureConnection.user_id == deployment.user_id, models.UserAzureConnection.is_active == True)
+                .order_by(models.UserAzureConnection.created_at.desc())
+                .limit(1)
+            )
+            azure_connection = azure_result.scalars().first()
+            if not azure_connection:
+                raise RuntimeError("Azure connection is not configured for this user.")
+            if not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
+                raise RuntimeError("Azure connection must include ACR login server and AKS cluster name.")
+
+            namespace_prefix = azure_connection.namespace_prefix or f"user-{str(deployment.user_id)[:8]}"
+            project_id_raw = normalize_project_id(f"{namespace_prefix}-{project.name}")
+            ns_name = f"zeroops-{project_id_raw}"
+            image_ref = deployment.image or f"{azure_connection.acr_login_server}/{project_id_raw}:{deployment.version or 'latest'}"
+            if config.ZEROOPS_PUBLIC_BASE_DOMAIN:
+                live_url = f"https://{project_id_raw}.{config.ZEROOPS_PUBLIC_BASE_DOMAIN}"
             
             # ──────────────────────────────────────────────
             # Stage 1: Repository Verification
@@ -199,10 +218,16 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             # ──────────────────────────────────────────────
             step_start = time.time()
             await update_stage(2, "active", "...")
-            await p_logger.log(f"$ git clone --branch {branch} https://github.com/{repo_name}.git .", "command")
-            await asyncio.sleep(0.5)
-            repo_path = git.clone_repo(repo_name, clone_token)
-            await p_logger.log("  ✓ Repository cloned successfully to local filesystem.", "success")
+            if getattr(project, "source_type", "github") == "upload":
+                if not project.source_path:
+                    raise RuntimeError("Uploaded source path is missing for this project.")
+                repo_path = project.source_path
+                await p_logger.log(f"$ zeroops source use-upload {project.full_name}", "command")
+            else:
+                await p_logger.log(f"$ git clone --branch {branch} https://github.com/{repo_name}.git .", "command")
+                await asyncio.sleep(0.5)
+                repo_path = git.clone_repo(repo_name, clone_token)
+            await p_logger.log("  Source prepared successfully on local filesystem.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(2, "completed", step_dur)
             await p_logger.flush_to_db(db)
@@ -331,7 +356,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                     await p_logger.log(f"  ◆ Injected secure default for required {v_key}", "success")
                 else:
                     if v_type == "required":
-                        await p_logger.log(f"  ⚠️ Required variable {v_key} is missing! Default placeholder generated.", "warning")
+                        await p_logger.log(f"  Required variable {v_key} is missing. Add it before deployment can succeed.", "warning")
                     elif v_type == "recommended":
                         await p_logger.log(f"  ⚠ Recommended variable {v_key} is missing.", "info")
             
@@ -347,6 +372,27 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await p_logger.log("▸ Scanning database dependencies...", "info")
             
             db_deps = metadata.get("database_dependencies", [])
+            if db_deps:
+                for db_dep in db_deps:
+                    db_type = str(db_dep).lower()
+                    if "postgres" in db_type or "mysql" in db_type:
+                        var_key = "DATABASE_URL"
+                    elif "mongo" in db_type:
+                        var_key = "MONGODB_URI"
+                    elif "redis" in db_type:
+                        var_key = "REDIS_URL"
+                    else:
+                        await p_logger.log(f"  Database dependency {db_dep} detected; no automatic provisioning rule exists.", "warning")
+                        continue
+
+                    if var_key not in existing_vars:
+                        raise RuntimeError(
+                            f"{db_dep} dependency detected but {var_key} is not configured. "
+                            "Add a real Azure database connection string before deploying."
+                        )
+                    await p_logger.log(f"  Database dependency {db_dep} will use configured {var_key}.", "info")
+                await p_logger.log("  Automatic database provisioning is disabled; using configured Azure resources only.", "info")
+                db_deps = []
             if db_deps:
                 for db_dep in db_deps:
                     db_type = db_dep.lower()
@@ -430,7 +476,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                     else:
                         await p_logger.log(f"  ◆ Using existing managed {db_dep} database instance.", "info")
             else:
-                await p_logger.log("  ◆ No persistent database dependencies detected. Storage provisioning skipped.", "info")
+                await p_logger.log("  Database provisioning skipped; external database resources are user-configured.", "info")
             
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(6, "completed", step_dur)
@@ -442,8 +488,13 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(7, "active", "...")
             build_start = time.time()
-            await p_logger.log(f"$ docker build -t acr.azurecr.io/{project_id_raw}:v1.0.0 .", "command")
-            for log_line in builder.build_and_tag_image(repo_path, project_id_raw, "v1.0.0"):
+            image_name, image_tag = image_ref.rsplit(":", 1) if ":" in image_ref else (image_ref, "latest")
+            await p_logger.log(f"$ docker build -t {image_ref} .", "command")
+            for log_line in builder.build_and_tag_image(repo_path, image_name, image_tag):
+                await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
+                await asyncio.sleep(0.01)
+            await p_logger.log(f"$ docker push {image_ref}", "command")
+            for log_line in builder.push_image(image_ref):
                 await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
                 await asyncio.sleep(0.01)
                 
@@ -471,6 +522,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             
             # Apply deployment manifests
             manifests = metadata.get("kubernetes_manifest", "")
+            if not manifests:
+                raise RuntimeError("No Kubernetes manifest could be generated for this project.")
+            manifests = re.sub(r"image:\s*\S+", f"image: {image_ref}", manifests, count=1)
             await p_logger.log(f"$ kubectl apply -f manifests.yaml", "command")
             deploy_start = time.time()
             for log_line in k8s.apply_manifests(manifests):
@@ -500,10 +554,12 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             # ──────────────────────────────────────────────
             step_start = time.time()
             await update_stage(10, "active", "...")
-            await p_logger.log("▸ Setting up SSL/TLS routing certificates via Let's Encrypt...", "info")
+            await p_logger.log("Resolving public route metadata...", "info")
             await asyncio.sleep(0.5)
-            await p_logger.log(f"  ✓ SSL issued successfully for {project_id_raw}.zeroops.app", "success")
-            await p_logger.log(f"  ✓ Domain route active: {live_url}", "success")
+            if live_url:
+                await p_logger.log(f"  Public route recorded: {live_url}", "success")
+            else:
+                await p_logger.log("  No public base domain configured; live URL will remain empty until ingress/domain setup is complete.", "warning")
             await p_logger.log("Deployment rollout completed. Recording deployment state.", "success")
             
             step_dur = f"{round(time.time() - step_start, 1)}s"
@@ -528,7 +584,14 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             meta = deployment.infrastructure_metadata or {}
             meta["stages"] = stages_metadata
             meta["namespace"] = ns_name
-            meta["region"] = deployment.project.region or "eastus"
+            meta["region"] = azure_connection.region or deployment.project.region or "eastus"
+            meta["image"] = image_ref
+            meta["azure"] = {
+                "subscription_id": azure_connection.subscription_id,
+                "resource_group": azure_connection.resource_group,
+                "acr_login_server": azure_connection.acr_login_server,
+                "aks_cluster_name": azure_connection.aks_cluster_name,
+            }
             meta["framework"] = metadata.get("framework")
             meta["language"] = metadata.get("language")
             deployment.infrastructure_metadata = meta
@@ -547,7 +610,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             db.add(models.Notification(
                 user_id=deployment.user_id,
                 title="Deployment Succeeded",
-                message=f"Project {repo_name} was successfully built and deployed to {live_url}.",
+                message=f"Project {repo_name} was successfully built and deployed." + (f" Public route: {live_url}." if live_url else ""),
                 type="success",
                 category="deployment"
             ))

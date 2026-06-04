@@ -173,8 +173,11 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_avatar_url TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_access_token_encrypted TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'github'",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_path TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS failure_reason TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS infrastructure_metadata JSON",
         
@@ -230,6 +233,11 @@ async def run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_failure_analyses_user_id ON failure_analyses(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_failure_analyses_project_id ON failure_analyses(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_failure_analyses_deployment_id ON failure_analyses(deployment_id)",
+        "CREATE INDEX IF NOT EXISTS ix_user_azure_connections_user_id ON user_azure_connections(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_billing_operations_user_id ON billing_operations(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_billing_operations_status ON billing_operations(status)",
+        "CREATE INDEX IF NOT EXISTS ix_code_uploads_user_id ON code_uploads(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_uploads_project_id ON code_uploads(project_id)",
 
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN

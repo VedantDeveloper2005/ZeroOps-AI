@@ -53,6 +53,25 @@ class ProjectCreate(BaseModel):
     branch: str = "main"
     region: str = "eastus"
 
+
+class AzureConnectionUpsert(BaseModel):
+    tenant_id: str
+    subscription_id: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    region: str = "eastus"
+    resource_group: Optional[str] = None
+    acr_login_server: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
+    namespace_prefix: Optional[str] = None
+
+
+class BillingOperationCreate(BaseModel):
+    operation_type: str
+    project_id: Optional[uuid.UUID] = None
+    deployment_id: Optional[uuid.UUID] = None
+    description: Optional[str] = None
+
 class ProjectResponse(BaseModel):
     id: uuid.UUID
     name: str
@@ -450,4 +469,3 @@ class DatabaseInstanceResponse(BaseModel):
 
 class SelfHealRequest(BaseModel):
     action: str
-

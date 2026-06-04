@@ -23,7 +23,6 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { api, type AIAnalysis, type Deployment, type DeploymentDetail, type FailureAnalysis } from "@/lib/api";
-import { deploymentStageLabels } from "@/lib/project-runtime";
 import { getWebSocketUrl } from "@/lib/runtime-config";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -144,11 +143,33 @@ function createInitialSteps(): PipelineStep[] {
   }));
 }
 
-function mapBackendStepsToUi(backendSteps: PipelineStep[], isSuccessful: boolean): PipelineStep[] {
+function mapBackendStepsToUi(backendSteps: PipelineStep[]): PipelineStep[] {
   if (backendSteps && backendSteps.length > 0) {
     return backendSteps;
   }
   return createInitialSteps();
+}
+
+function isPipelineStepArray(value: unknown): value is PipelineStep[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((item) => (
+    typeof item === "object" &&
+    item !== null &&
+    typeof (item as { id?: unknown }).id === "number" &&
+    typeof (item as { label?: unknown }).label === "string" &&
+    isPipelineStepStatus((item as { status?: unknown }).status) &&
+    typeof (item as { duration?: unknown }).duration === "string"
+  ));
+}
+
+function metadataString(metadata: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function metadataStringArray(metadata: Record<string, unknown> | null | undefined, key: string): string[] {
+  const value = metadata?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
 function DeploymentsPageContent() {
@@ -215,8 +236,9 @@ function DeploymentsPageContent() {
         setVisibleLines(mappedLogs.length);
 
         const finished = ["running", "failed", "stopped", "rolled_back"].includes(detail.status);
-        if (detail.infrastructure_metadata && detail.infrastructure_metadata.stages) {
-          setSteps(detail.infrastructure_metadata.stages);
+        const backendStages = detail.infrastructure_metadata?.stages;
+        if (isPipelineStepArray(backendStages)) {
+          setSteps(mapBackendStepsToUi(backendStages));
         } else if (finished) {
           setSteps(createInitialSteps().map((step) => ({
             ...step,
@@ -346,20 +368,23 @@ function DeploymentsPageContent() {
     return () => clearInterval(timer);
   }, [isAnimating]);
 
-  const [fixing, setFixing] = useState(false);
+  const [requestingPaidFix, setRequestingPaidFix] = useState(false);
 
-  const handleFixAutomatically = async () => {
-    if (!deployId || fixing) return;
-    setFixing(true);
-    addToast("Triggering autonomous AI remediation...", "info");
+  const handleRequestPaidFix = async () => {
+    if (!deployId || requestingPaidFix || !currentDeployment?.project_id) return;
+    setRequestingPaidFix(true);
     try {
-      const res = await api.fixDeploymentAutomatically(deployId);
-      addToast("AI Remediation applied! Starting new deployment.", "success");
-      router.push(`/dashboard/deployments?id=${res.deployment_id}&repo=${encodeURIComponent(repoParam || "")}`);
+      await api.createBillingOperation({
+        operation_type: "ai_code_fix",
+        project_id: currentDeployment.project_id,
+        deployment_id: deployId,
+        description: failureAnalysis?.recommended_fix || "AI remediation for failed deployment",
+      });
+      addToast("Paid remediation request created. Complete payment before AI changes code.", "info");
     } catch (err) {
-      addToast("Failed to apply auto-remediation.", "error");
+      addToast(`Failed to create paid remediation request: ${err instanceof Error ? err.message : "unknown error"}`, "error");
     } finally {
-      setFixing(false);
+      setRequestingPaidFix(false);
     }
   };
 
@@ -398,6 +423,9 @@ function DeploymentsPageContent() {
   const isSuccessful = currentDeployment?.status === "running";
   const isFailed = currentDeployment?.status === "failed";
   const liveUrl = currentDeployment?.live_url || "";
+  const infrastructureMetadata = currentDeployment?.infrastructure_metadata;
+  const databaseDependencies = metadataStringArray(infrastructureMetadata, "database_dependencies");
+  const frameworkLabel = analysis?.framework || metadataString(infrastructureMetadata, "framework") || "Not detected";
   const deploymentDuration = currentDeployment?.duration
     || (currentDeployment?.duration_seconds != null ? `${currentDeployment.duration_seconds}s` : "—");
 
@@ -515,22 +543,22 @@ function DeploymentsPageContent() {
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
                 <Globe size={12} className="text-primary" /> Domain Status
               </span>
-              <p className="font-extrabold text-xs text-foreground">Secure & Live</p>
+              <p className="font-extrabold text-xs text-foreground">{liveUrl ? "Recorded" : "Not recorded"}</p>
             </div>
             <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
                 <Lock size={12} className="text-success" /> SSL Status
               </span>
-              <p className="font-extrabold text-xs text-foreground">Active (TLS 1.3)</p>
+              <p className="font-extrabold text-xs text-foreground">{liveUrl ? "Depends on ingress" : "Not verified"}</p>
             </div>
             <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
                 <Database size={12} className="text-info" /> Database Status
               </span>
               <p className="font-extrabold text-xs text-foreground">
-                {currentDeployment?.infrastructure_metadata?.database_dependencies?.length > 0 
-                  ? `${currentDeployment.infrastructure_metadata.database_dependencies.join(", ")} Active` 
-                  : "No DB Required"}
+                {databaseDependencies.length > 0
+                  ? `${databaseDependencies.join(", ")} configured`
+                  : "Not recorded"}
               </p>
             </div>
             <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
@@ -542,7 +570,7 @@ function DeploymentsPageContent() {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
                 </span>
-                Healthy (200 OK)
+                {isSuccessful ? "Running" : isFailed ? "Failed" : "Pending"}
               </p>
             </div>
           </div>
@@ -551,7 +579,7 @@ function DeploymentsPageContent() {
           <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-4 border-t border-border/20 text-xs">
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Framework</span>
-              <p className="font-extrabold text-foreground mt-0.5">{analysis?.framework || currentDeployment?.infrastructure_metadata?.framework || "Not detected"}</p>
+              <p className="font-extrabold text-foreground mt-0.5">{frameworkLabel}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Deployment Time</span>
@@ -571,20 +599,20 @@ function DeploymentsPageContent() {
           <div className="relative z-20 grid md:grid-cols-2 gap-6 max-w-2xl mx-auto pt-6 border-t border-border/20 text-left text-xs">
             <div className="space-y-3 bg-primary-subtle/5 p-4 rounded-xl border border-primary/20">
               <span className="text-[10px] text-primary font-bold uppercase tracking-wider flex items-center gap-1.5">
-                <Brain size={14} /> AI Recommendations
+                <Brain size={14} /> Recorded Guidance
               </span>
               <ul className="space-y-1.5 text-foreground-muted font-semibold">
                 <li className="flex items-start gap-1.5">
                   <span className="text-primary">•</span>
-                  <span>Enable CDN Edge caching in App Settings to optimize latency.</span>
+                  <span>Review deployment logs and telemetry before requesting paid AI remediation.</span>
                 </li>
                 <li className="flex items-start gap-1.5">
                   <span className="text-primary">•</span>
-                  <span>Enable Auto-scaling triggers based on CPU usage limits.</span>
+                  <span>Connect a custom domain only after the deployment records a live ingress URL.</span>
                 </li>
                 <li className="flex items-start gap-1.5">
                   <span className="text-primary">•</span>
-                  <span>Verify and rotate credentials regularly using Vault settings.</span>
+                  <span>Store required runtime secrets in Vault before starting another production rollout.</span>
                 </li>
               </ul>
             </div>
@@ -679,11 +707,11 @@ function DeploymentsPageContent() {
 
           <div className="flex justify-end gap-2.5 pt-3 border-t border-border/20 flex-wrap">
             <button
-              onClick={handleFixAutomatically}
-              disabled={fixing}
+              onClick={handleRequestPaidFix}
+              disabled={requestingPaidFix}
               className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
             >
-              {fixing ? "Applying Fix..." : "Fix Automatically"}
+              {requestingPaidFix ? "Creating request..." : "Request Paid Fix"}
             </button>
             <button
               onClick={handleRedeploy}

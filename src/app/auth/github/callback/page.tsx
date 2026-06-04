@@ -31,6 +31,7 @@ function GitHubCallbackContent() {
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [step, setStep] = useState(1);
+  const provider = searchParams.get("provider") === "google" ? "Google" : "GitHub";
 
   useEffect(() => {
     const token = searchParams.get("token");
@@ -44,10 +45,11 @@ function GitHubCallbackContent() {
         invalid_state: "Security validation failed. Please try again.",
         token_exchange_failed: "Failed to authenticate with GitHub. Please try again.",
         github_user_fetch_failed: "Could not retrieve your GitHub profile.",
+        google_user_fetch_failed: "Could not retrieve your Google profile.",
         no_email: "No verified email found on your GitHub account. Please add a verified email to GitHub and try again.",
         server_error: "An internal database error occurred. Please try again.",
       };
-      setErrorMessage(messages[error] || `GitHub authentication failed: ${error}`);
+      setErrorMessage(messages[error] || `${provider} authentication failed: ${error}`);
       return;
     }
 
@@ -63,32 +65,31 @@ function GitHubCallbackContent() {
           document.cookie = `session_token=${sessionToken}; path=/; max-age=2592000; SameSite=Lax${isLocal ? "" : "; Secure"}`;
         }
 
-        // Welcome to ZeroOps - Connect GitHub Account
+        // Validate profile from the backend before showing connected state.
         await refreshUser();
-        await new Promise((r) => setTimeout(r, 800));
 
-        // Loading repositories...
         setStep(2);
-        try {
-          await api.getGitHubRepos({ page: 1, per_page: 10 });
-        } catch (err) {
-          console.error("Repository pre-load failed or fetch error:", err);
+        if (provider === "GitHub") {
+          try {
+            await api.getGitHubRepos({ page: 1, per_page: 10 });
+          } catch (err) {
+            console.error("Repository pre-load failed or fetch error:", err);
+          }
         }
-        await new Promise((r) => setTimeout(r, 800));
 
-        // Analyzing account...
         setStep(3);
         try {
           await api.getSettings();
         } catch (err) {
-          console.error("Settings analysis pre-load failed:", err);
+          console.error("Settings pre-load failed:", err);
         }
-        await new Promise((r) => setTimeout(r, 800));
 
-        // Preparing deployment workspace...
         setStep(4);
-        await new Promise((r) => setTimeout(r, 800));
 
+        localStorage.removeItem("zeroops.githubOAuth.pending");
+        localStorage.removeItem("zeroops.googleOAuth.pending");
+        sessionStorage.removeItem("zeroops.githubOAuth.pending");
+        sessionStorage.removeItem("zeroops.googleOAuth.pending");
         setStatus("success");
         
         setTimeout(() => {
@@ -110,7 +111,7 @@ function GitHubCallbackContent() {
       setStatus("error");
       setErrorMessage("Invalid callback parameters received from server.");
     }
-  }, [searchParams, router, refreshUser]);
+  }, [searchParams, router, refreshUser, provider]);
 
   return (
     <main className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -142,15 +143,15 @@ function GitHubCallbackContent() {
               <div>
                 <h2 className="text-sm font-bold text-foreground">
                   {step === 1 && "Welcome to ZeroOps"}
-                  {step === 2 && "Loading repositories..."}
-                  {step === 3 && "Analyzing account..."}
-                  {step === 4 && "Preparing deployment workspace..."}
+                  {step === 2 && (provider === "GitHub" ? "Loading repositories..." : "Preparing account...")}
+                  {step === 3 && "Loading settings..."}
+                  {step === 4 && "Preparing dashboard..."}
                 </h2>
                 <p className="text-xs text-foreground-muted mt-1">
                   {step === 1 && "Securing your authentication session..."}
-                  {step === 2 && "Syncing your repository catalog..."}
-                  {step === 3 && "Running machine intelligence analysis..."}
-                  {step === 4 && "Configuring your personal cloud console..."}
+                  {step === 2 && (provider === "GitHub" ? "Syncing your repository catalog..." : "Confirming account details...")}
+                  {step === 3 && "Loading your saved preferences..."}
+                  {step === 4 && "Finalizing your dashboard session..."}
                 </p>
               </div>
 
@@ -177,7 +178,7 @@ function GitHubCallbackContent() {
                     <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 2 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Loading repositories...
+                    {provider === "GitHub" ? "Loading repositories..." : "Preparing account..."}
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
@@ -189,7 +190,7 @@ function GitHubCallbackContent() {
                     <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 3 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Analyzing account...
+                    Loading settings...
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
@@ -201,7 +202,7 @@ function GitHubCallbackContent() {
                     <Circle size={14} className="text-border" />
                   )}
                   <span className={`font-semibold ${step >= 4 ? "text-foreground" : "text-foreground-muted"}`}>
-                    Preparing deployment workspace...
+                    Preparing dashboard...
                   </span>
                 </div>
               </div>
@@ -222,7 +223,7 @@ function GitHubCallbackContent() {
                   Session Established
                 </h2>
                 <p className="text-xs text-foreground-muted mt-1">
-                  GitHub connected successfully. Redirecting you...
+                  {provider} connected successfully. Redirecting you...
                 </p>
               </div>
 
@@ -264,7 +265,7 @@ function GitHubCallbackContent() {
                 </button>
                 <button
                   onClick={() => {
-                    window.location.href = `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/auth/github`;
+                    window.location.href = `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/auth/${provider === "Google" ? "google" : "github"}`;
                   }}
                   className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition cursor-pointer shadow-sm flex items-center gap-1.5"
                 >
@@ -278,7 +279,7 @@ function GitHubCallbackContent() {
 
         {/* Security Info Footer */}
         <p className="text-[10px] text-foreground-muted/60 max-w-xs mx-auto font-semibold">
-          Your credentials are encrypted and stored securely. ZeroOps never exposes raw GitHub tokens.
+          Your credentials are encrypted and stored securely. ZeroOps never exposes raw OAuth tokens.
         </p>
       </motion.div>
     </main>

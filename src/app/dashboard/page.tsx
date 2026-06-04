@@ -105,6 +105,19 @@ export default function DashboardHome() {
     ? `${Math.round(((totalDeploys - failedDeploys) / totalDeploys) * 100)}%`
     : "—";
 
+  const latestDeploymentByProject = useMemo(() => {
+    const byProject = new Map<string, Deployment>();
+    deployments.forEach((deployment) => {
+      const existing = byProject.get(deployment.project_id);
+      const deploymentTime = new Date(deployment.completed_at || deployment.started_at || 0).getTime();
+      const existingTime = existing ? new Date(existing.completed_at || existing.started_at || 0).getTime() : 0;
+      if (!existing || deploymentTime > existingTime) {
+        byProject.set(deployment.project_id, deployment);
+      }
+    });
+    return byProject;
+  }, [deployments]);
+
   if (contextLoading || loading) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
@@ -233,20 +246,17 @@ export default function DashboardHome() {
                       statusLabel = "Building";
                       statusClass = "bg-accent/15 text-accent border border-accent/20 animate-pulse";
                     } else if (isLive) {
-                      statusLabel = "Healthy & Live";
+                      statusLabel = "Running";
                       statusClass = "bg-success/15 text-success border border-success/20";
                     }
 
-                    // Simulated live URL
-                    const liveUrl = `https://${project.name}.zeroops.app`;
-
-                    // Generate a stable simulated latency based on project name
-                    const latency = `${(project.name.charCodeAt(0) % 15) + 12}ms`;
+                    const latestDeployment = latestDeploymentByProject.get(project.id);
+                    const liveUrl = latestDeployment?.live_url || "";
 
                     // Deploy health pills
-                    let healthLabel = "Healthy";
-                    let healthIcon = <CheckCircle2 size={12} className="text-success mr-1" />;
-                    let healthClass = "bg-success/10 text-success border border-success/20";
+                    let healthLabel = "No signal";
+                    let healthIcon = <AlertTriangle size={12} className="text-foreground-muted mr-1" />;
+                    let healthClass = "bg-muted text-foreground-muted border border-border/50";
 
                     if (project.latest_deployment_status === "failed") {
                       healthLabel = "Critical";
@@ -256,6 +266,10 @@ export default function DashboardHome() {
                       healthLabel = "Warning";
                       healthIcon = <AlertTriangle size={12} className="text-warning mr-1" />;
                       healthClass = "bg-warning/10 text-warning border border-warning/20";
+                    } else if (isLive) {
+                      healthLabel = "Running";
+                      healthIcon = <CheckCircle2 size={12} className="text-success mr-1" />;
+                      healthClass = "bg-success/10 text-success border border-success/20";
                     }
 
                     return (
@@ -268,7 +282,7 @@ export default function DashboardHome() {
                       >
                         <td className="py-4 px-5">
                           <div className="font-extrabold text-foreground">{project.name}</div>
-                          <div className="text-[10px] text-foreground-muted font-medium">{project.framework || "Static Site"} • {project.language || "JavaScript"}</div>
+                          <div className="text-[10px] text-foreground-muted font-medium">{project.framework || "Not detected"} • {project.language || "Not detected"}</div>
                         </td>
                         <td className="py-4 px-4">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${statusClass}`}>
@@ -276,15 +290,19 @@ export default function DashboardHome() {
                           </span>
                         </td>
                         <td className="py-4 px-4">
-                          <a
-                            href={liveUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center text-primary hover:underline font-semibold"
-                          >
-                            <span>{project.name}.zeroops.app</span>
-                            <ExternalLink size={10} className="ml-1" />
-                          </a>
+                          {liveUrl ? (
+                            <a
+                              href={liveUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center text-primary hover:underline font-semibold"
+                            >
+                              <span>{liveUrl.replace(/^https?:\/\//, "")}</span>
+                              <ExternalLink size={10} className="ml-1" />
+                            </a>
+                          ) : (
+                            <span className="text-foreground-muted font-semibold">Not recorded</span>
+                          )}
                         </td>
                         <td className="py-4 px-4 text-foreground-muted font-medium">
                           {formatDate(project.last_deployed_at)}
@@ -296,7 +314,7 @@ export default function DashboardHome() {
                           </span>
                         </td>
                         <td className="py-4 px-4 text-center text-foreground font-semibold">
-                          {latency}
+                          No data
                         </td>
                         <td className="py-4 px-4">
                           <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-muted text-foreground-muted text-[10px] font-bold border border-border/50">

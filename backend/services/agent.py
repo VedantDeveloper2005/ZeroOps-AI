@@ -128,10 +128,10 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
     ) -> Dict:
         logger.info(f"Agent planning autonomous deploy for {repository}...")
         return {
-            "status": "planned",
-            "action_id": "nim-deploy-plan-v1",
-            "recommended_target": "Azure Kubernetes Service",
-            "confidence": 98.4
+            "status": "requires_manual_review",
+            "action_id": "deploy-plan-pending",
+            "recommended_target": None,
+            "confidence": 0.0
         }
 
     async def provision_infrastructure(
@@ -141,9 +141,9 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
     ) -> Dict:
         logger.info(f"Agent planning resource provisioning: {requirements}...")
         return {
-            "status": "planned",
-            "resources": ["AKS namespace", "PostgreSQL database instance", "Cert-Manager Issuer"],
-            "manifests_compiled": True
+            "status": "requires_manual_review",
+            "resources": [],
+            "manifests_compiled": False
         }
 
     async def restart_failed_service(
@@ -152,9 +152,8 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         service_name: str, 
         reason: str
     ) -> bool:
-        logger.warning(f"Agent executing autonomous service restart on {service_name} due to: {reason}")
-        # Simulated agent task execution
-        return True
+        logger.warning(f"Agent restart requested for {service_name} due to: {reason}; no restart executor is configured.")
+        return False
 
     async def scale_resources(
         self, 
@@ -162,8 +161,8 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         min_replicas: int, 
         max_replicas: int
     ) -> bool:
-        logger.info(f"Agent adjusting HPA boundaries for {project_id}: [{min_replicas} - {max_replicas}]")
-        return True
+        logger.info(f"Agent scale request for {project_id}: [{min_replicas} - {max_replicas}]; no scaler executor is configured.")
+        return False
 
     async def analyze_incident(
         self, 
@@ -172,9 +171,9 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
     ) -> Dict:
         logger.info(f"Agent analyzing incident logs for project {project_id}...")
         return {
-            "root_cause": "OOM killer invoked on backend worker pod.",
-            "remediation_plan": "Increase pod memory limit from 256Mi to 512Mi.",
-            "severity": "critical"
+            "root_cause": "No incident analysis has been recorded.",
+            "remediation_plan": "Review deployment logs and metrics before requesting paid remediation.",
+            "severity": "unknown"
         }
 
     async def optimize_infrastructure_costs(
@@ -183,12 +182,9 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
     ) -> Dict:
         logger.info(f"Agent generating cost-optimization report for {project_id}...")
         return {
-            "current_cost_est": "$12.40/mo",
-            "optimized_cost_est": "$8.20/mo",
-            "actions": [
-                "Configure idle pod scale-down to 1 replica outside business hours.",
-                "Downsize CPU allocation from 200m to 100m."
-            ]
+            "current_cost_est": None,
+            "optimized_cost_est": None,
+            "actions": []
         }
 
     async def auto_remediate_failure(

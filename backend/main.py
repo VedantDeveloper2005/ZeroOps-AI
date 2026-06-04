@@ -3,27 +3,36 @@ import uuid
 import requests
 import threading
 import logging
+import os
+import shutil
+import zipfile
+import hashlib
 from datetime import datetime
 from typing import Optional, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 
 logger = logging.getLogger("zeroops.main")
 
 try:
+    import stripe
+except ImportError:
+    stripe = None
+
+try:
     from backend import config
     from backend.services import git, ai, k8s, pipeline, vault, agent
-    from backend.services import github_oauth
+    from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
     from services import git, ai, k8s, pipeline, vault, agent
-    from services import github_oauth
+    from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
     import models, schemas, auth
 
@@ -69,8 +78,8 @@ async def rate_limit_middleware(request: Request, call_next):
     elif path == "/api/auth/signup":
         category = "signup"
         limit = 5
-    elif path.startswith("/api/auth/github"):
-        category = "github"
+    elif path.startswith("/api/auth/github") or path.startswith("/api/auth/google"):
+        category = "oauth"
         limit = 20
     else:
         category = "default"
@@ -271,6 +280,124 @@ def format_dt(dt: Optional[datetime]) -> Optional[str]:
 # ──────────────────────────────────────────────
 # AUTHENTICATION
 # ──────────────────────────────────────────────
+
+def map_billing_operation(op: models.BillingOperation) -> dict:
+    return {
+        "id": str(op.id),
+        "operation_type": op.operation_type,
+        "status": op.status,
+        "amount_cents": op.amount_cents,
+        "currency": op.currency,
+        "description": op.description,
+        "project_id": str(op.project_id) if op.project_id else None,
+        "deployment_id": str(op.deployment_id) if op.deployment_id else None,
+        "provider": op.provider,
+        "provider_reference": op.provider_reference,
+        "created_at": format_dt(op.created_at),
+        "paid_at": format_dt(op.paid_at),
+        "consumed_at": format_dt(op.consumed_at),
+    }
+
+
+def create_stripe_checkout_session(op: models.BillingOperation, user: models.User):
+    if stripe is None:
+        raise HTTPException(status_code=500, detail="Stripe package is not installed on the backend.")
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Stripe secret key is not configured.")
+    stripe.api_key = config.STRIPE_SECRET_KEY
+    base_url = (config.FRONTEND_URL or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="FRONTEND_URL is required for Stripe checkout.")
+    return stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[{
+            "price_data": {
+                "currency": op.currency,
+                "product_data": {
+                    "name": "ZeroOps AI code remediation",
+                    "description": op.description or op.operation_type.replace("_", " "),
+                },
+                "unit_amount": op.amount_cents,
+            },
+            "quantity": 1,
+        }],
+        success_url=f"{base_url}/dashboard/billing?payment=success&operation_id={op.id}",
+        cancel_url=f"{base_url}/dashboard/billing?payment=cancelled&operation_id={op.id}",
+        metadata={
+            "operation_id": str(op.id),
+            "user_id": str(user.id),
+            "operation_type": op.operation_type,
+        },
+    )
+
+
+async def get_active_azure_connection(db: AsyncSession, user_id: uuid.UUID) -> Optional[models.UserAzureConnection]:
+    result = await db.execute(
+        select(models.UserAzureConnection)
+        .filter(models.UserAzureConnection.user_id == user_id, models.UserAzureConnection.is_active == True)
+        .order_by(desc(models.UserAzureConnection.created_at))
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def consume_paid_operation(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    operation_type: str,
+    project_id: Optional[uuid.UUID] = None,
+    deployment_id: Optional[uuid.UUID] = None,
+) -> models.BillingOperation:
+    query = (
+        select(models.BillingOperation)
+        .filter(
+            models.BillingOperation.user_id == user_id,
+            models.BillingOperation.operation_type == operation_type,
+            models.BillingOperation.status == "paid",
+            models.BillingOperation.consumed_at == None,
+        )
+        .order_by(models.BillingOperation.paid_at.asc())
+        .limit(1)
+    )
+    if project_id:
+        query = query.filter(models.BillingOperation.project_id == project_id)
+    if deployment_id:
+        query = query.filter(or_(models.BillingOperation.deployment_id == deployment_id, models.BillingOperation.deployment_id == None))
+
+    result = await db.execute(query)
+    operation = result.scalars().first()
+    if not operation:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Payment approval is required before ZeroOps AI can run code-changing "
+                "or redeployment remediation. Create and pay a billing operation first."
+            ),
+        )
+
+    operation.status = "consumed"
+    operation.consumed_at = datetime.utcnow()
+    return operation
+
+
+def safe_extract_zip(zip_path: str, target_dir: str):
+    target_abs = os.path.abspath(target_dir)
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            member_path = os.path.abspath(os.path.join(target_abs, member.filename))
+            if not member_path.startswith(target_abs + os.sep) and member_path != target_abs:
+                raise HTTPException(status_code=400, detail="Upload archive contains unsafe paths.")
+        archive.extractall(target_abs)
+
+
+def normalize_upload_root(path: str) -> str:
+    entries = [entry for entry in os.listdir(path) if not entry.startswith("__MACOSX")]
+    if len(entries) == 1:
+        only_path = os.path.join(path, entries[0])
+        if os.path.isdir(only_path):
+            return only_path
+    return path
+
 
 @app.post("/api/auth/signup", response_model=schemas.UserResponse)
 async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
@@ -562,98 +689,52 @@ async def create_project(
     if recommendation:
         recommendation.project_id = project.id
 
+    import secrets
     detected_databases = []
     if analysis and analysis.database_dependencies:
-        detected_databases = analysis.database_dependencies
+        detected_databases = [db_name for db_name in analysis.database_dependencies if db_name and db_name != "None"]
     elif recommendation and recommendation.database_recommendation:
         primary_db = recommendation.database_recommendation.get("primary")
         if primary_db and primary_db != "None":
             detected_databases = [primary_db]
-            
-    if not detected_databases and req.framework in ["Next.js", "NestJS", "Express.js"]:
-        detected_databases = ["PostgreSQL"]
 
-    import secrets
-    for db_type in detected_databases:
-        db_name_lower = db_type.lower()
-        secure_password = secrets.token_urlsafe(16)
-        db_inst_name = f"db_{project.name.replace('-', '_').lower()}"
-        db_user = f"user_{secrets.token_hex(4)}"
-        
-        if "postgres" in db_name_lower:
-            conn_key = "DATABASE_URL"
-            db_host = "managed-postgres-db.zeroops.internal"
-            db_port = 5432
-            conn_val = f"postgresql://{db_user}:{secure_password}@{db_host}:{db_port}/{db_inst_name}"
-            db_display_name = "Managed PostgreSQL Database"
-        elif "mongo" in db_name_lower:
-            conn_key = "MONGODB_URI"
-            db_host = "managed-mongodb.zeroops.internal"
-            db_port = 27017
-            conn_val = f"mongodb://{db_user}:{secure_password}@{db_host}:{db_port}/{db_inst_name}"
-            db_display_name = "Managed MongoDB Database"
-        elif "redis" in db_name_lower:
-            conn_key = "REDIS_URL"
-            db_host = "managed-redis.zeroops.internal"
-            db_port = 6379
-            conn_val = f"redis://default:{secure_password}@{db_host}:{db_port}"
-            db_display_name = "Managed Redis Cache"
-        elif "mysql" in db_name_lower:
-            conn_key = "DATABASE_URL"
-            db_host = "managed-mysql-db.zeroops.internal"
-            db_port = 3306
-            conn_val = f"mysql://{db_user}:{secure_password}@{db_host}:{db_port}/{db_inst_name}"
-            db_display_name = "Managed MySQL Database"
-        else:
-            continue
-            
-        db.add(models.DatabaseInstance(
-            project_id=project.id,
-            type=db_type,
-            db_name=db_inst_name,
-            username=db_user,
-            password=secure_password,
-            host=db_host,
-            port=db_port,
-            connection_string=conn_val,
-            status="available"
-        ))
-        
-        db.add(models.EnvironmentVariable(
-            environment_id=production_env.id,
-            key=conn_key,
-            value=conn_val,
-            is_secret=True
-        ))
-        
-        vault.set_project_secret(str(project.id), conn_key, conn_val)
-        
+    if detected_databases:
         db.add(models.Notification(
             user_id=current_user.id,
-            title=f"{db_display_name} Provisioned",
-            message=f"Automatically provisioned database for {req.name} and injected {conn_key} connection string.",
-            type="success",
-            category="ai"
+            title="Database Configuration Required",
+            message=(
+                f"{req.name} references {', '.join(detected_databases)}. "
+                "Add a real Azure database connection string before deployment."
+            ),
+            type="warning",
+            category="deployment"
         ))
-        
+
     required_vars = []
-    if analysis and analysis.environment_variables:
+    if analysis and analysis.pricing_breakdown:
+        required_vars = [
+            item.get("key")
+            for item in (analysis.pricing_breakdown.get("detected_vars_detail") or [])
+            if item.get("type") == "required" and item.get("key")
+        ]
+    if not required_vars and analysis and analysis.environment_variables:
         required_vars = analysis.environment_variables
-    elif recommendation and recommendation.environment_variables:
+    elif not required_vars and recommendation and recommendation.environment_variables:
         required_vars = recommendation.environment_variables
-        
-    if "JWT_SECRET" not in required_vars:
-        required_vars.append("JWT_SECRET")
-        
+
     for var_key in required_vars:
         if var_key in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL"]:
+            db.add(models.Notification(
+                user_id=current_user.id,
+                title=f"{var_key} Required",
+                message=f"Add {var_key} in project environment settings before deploying {req.name}.",
+                type="warning",
+                category="deployment"
+            ))
             continue
             
-        if var_key == "JWT_SECRET":
+        if var_key in ["JWT_SECRET", "AUTH_SECRET", "NEXTAUTH_SECRET", "SESSION_SECRET"]:
             secure_val = f"zo_sec_{secrets.token_hex(24)}"
-            is_secret = True
-        elif "secret" in var_key.lower() or "key" in var_key.lower() or "token" in var_key.lower() or "pass" in var_key.lower():
-            secure_val = secrets.token_hex(32)
             is_secret = True
         elif var_key == "PORT":
             secure_val = "3000"
@@ -662,8 +743,14 @@ async def create_project(
             secure_val = "production"
             is_secret = False
         else:
-            secure_val = f"configured_by_zeroops_{secrets.token_hex(4)}"
-            is_secret = False
+            db.add(models.Notification(
+                user_id=current_user.id,
+                title=f"{var_key} Required",
+                message=f"Add {var_key} in project environment settings. ZeroOps will not generate external credentials.",
+                type="warning",
+                category="deployment"
+            ))
+            continue
             
         db.add(models.EnvironmentVariable(
             environment_id=production_env.id,
@@ -671,6 +758,8 @@ async def create_project(
             value=secure_val,
             is_secret=is_secret
         ))
+        if is_secret:
+            vault.set_project_secret(str(project.id), var_key, secure_val)
 
     await db.commit()
     await db.refresh(project)
@@ -682,6 +771,160 @@ async def create_project(
         status=project.status, created_at=format_dt(project.created_at),
         deployment_count=0, latest_deployment_status=None
     )
+
+
+@app.post("/api/projects/upload")
+async def upload_code_project(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    filename = file.filename or "source.zip"
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP archives are supported for direct code upload.")
+
+    max_bytes = config.MAX_CODE_UPLOAD_MB * 1024 * 1024
+    upload_id = uuid.uuid4()
+    upload_dir = os.path.join(config.WORKSPACE_DIR, "uploads", str(current_user.id), str(upload_id))
+    archive_path = os.path.join(upload_dir, "source.zip")
+    extract_dir = os.path.join(upload_dir, "extracted")
+    os.makedirs(upload_dir, exist_ok=True)
+    os.makedirs(extract_dir, exist_ok=True)
+
+    digest = hashlib.sha256()
+    size_bytes = 0
+    try:
+        with open(archive_path, "wb") as out_file:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size_bytes += len(chunk)
+                if size_bytes > max_bytes:
+                    raise HTTPException(status_code=413, detail=f"Upload exceeds {config.MAX_CODE_UPLOAD_MB} MB limit.")
+                digest.update(chunk)
+                out_file.write(chunk)
+
+        safe_extract_zip(archive_path, extract_dir)
+        source_root = normalize_upload_root(extract_dir)
+        project_id_raw = f"upload-{str(upload_id)[:8]}"
+        analysis = ai.analyze_repo_local(source_root, project_id_raw)
+        pricing = analysis.get("pricing_breakdown") or {}
+        for key in [
+            "compute_cost",
+            "database_cost",
+            "platform_fee",
+            "bandwidth_cost",
+            "monitoring_cost",
+            "total_cost",
+            "projected_growth_cost",
+            "why_this_plan",
+            "detected_vars_detail",
+            "application_type",
+            "estimated_build_time",
+            "production_readiness_score",
+            "detected_services",
+        ]:
+            if key in pricing and key not in analysis:
+                analysis[key] = pricing[key]
+
+        project = models.Project(
+            user_id=current_user.id,
+            name=project_id_raw,
+            full_name=f"upload/{project_id_raw}",
+            repo_url=None,
+            framework=analysis.get("framework") or "Unknown",
+            language=analysis.get("language") or "Unknown",
+            branch="uploaded",
+            region=config.AZURE_DEFAULT_REGION,
+            source_type="upload",
+            source_path=source_root,
+        )
+        db.add(project)
+        await db.flush()
+
+        production_env = models.Environment(project_id=project.id, name="production")
+        db.add(production_env)
+        db.add(models.CodeUpload(
+            id=upload_id,
+            user_id=current_user.id,
+            project_id=project.id,
+            original_filename=filename,
+            storage_path=source_root,
+            size_bytes=size_bytes,
+            checksum_sha256=digest.hexdigest(),
+        ))
+        db.add(models.AIAnalysis(
+            user_id=current_user.id,
+            project_id=project.id,
+            framework=analysis.get("framework"),
+            framework_version=analysis.get("version") or analysis.get("framework_version"),
+            language=analysis.get("language"),
+            risk_score=analysis.get("risk_score", 0),
+            confidence=analysis.get("confidence", 0),
+            cpu_recommendation=analysis.get("resources", {}).get("cpu"),
+            memory_recommendation=analysis.get("resources", {}).get("memory"),
+            storage_recommendation=analysis.get("resources", {}).get("storage"),
+            dependencies=analysis.get("dependencies", []),
+            vulnerabilities=analysis.get("vulnerabilities", []),
+            dockerfile=analysis.get("dockerfile"),
+            kubernetes_manifest=analysis.get("kubernetes_manifest"),
+            runtime=analysis.get("runtime"),
+            package_manager=analysis.get("package_manager"),
+            docker_support=analysis.get("docker_support", False),
+            monorepo_structure=analysis.get("monorepo_structure"),
+            database_dependencies=analysis.get("database_dependencies", []),
+            deployment_strategy=analysis.get("deployment_strategy"),
+            build_commands=analysis.get("build_commands"),
+            start_commands=analysis.get("start_commands"),
+            environment_variables=analysis.get("environment_variables", []),
+            explanation=analysis.get("explanation"),
+            recommended_compute_tier=analysis.get("recommended_compute_tier"),
+            estimated_cost=analysis.get("estimated_cost"),
+            recommended_region=analysis.get("recommended_region"),
+            expected_traffic=analysis.get("expected_traffic"),
+            pricing_breakdown=analysis.get("pricing_breakdown"),
+        ))
+        db.add(models.Notification(
+            user_id=current_user.id,
+            title="Code Uploaded",
+            message=f"{filename} was uploaded and scanned successfully.",
+            type="success",
+            category="deployment",
+        ))
+        await db.commit()
+        await db.refresh(project)
+
+        return {
+            "project": schemas.ProjectResponse(
+                id=project.id,
+                name=project.name,
+                full_name=project.full_name,
+                repo_url=project.repo_url,
+                framework=project.framework,
+                language=project.language,
+                branch=project.branch,
+                region=project.region,
+                status=project.status,
+                created_at=format_dt(project.created_at),
+                deployment_count=0,
+                latest_deployment_status=None,
+            ),
+            "analysis": analysis,
+        }
+    except HTTPException:
+        await db.rollback()
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise
+    except zipfile.BadZipFile:
+        await db.rollback()
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="Upload is not a valid ZIP archive.")
+    except Exception as e:
+        await db.rollback()
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        logger.error(f"Code upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process uploaded code.")
 
 
 @app.get("/api/projects/{project_id}")
@@ -718,6 +961,229 @@ async def delete_project(
     return {"status": "success"}
 
 
+@app.get("/api/azure/connection")
+async def get_azure_connection(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    connection = await get_active_azure_connection(db, current_user.id)
+    if not connection:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "tenant_id": connection.tenant_id,
+        "subscription_id": connection.subscription_id,
+        "client_id": connection.client_id,
+        "region": connection.region,
+        "resource_group": connection.resource_group,
+        "acr_login_server": connection.acr_login_server,
+        "aks_cluster_name": connection.aks_cluster_name,
+        "namespace_prefix": connection.namespace_prefix,
+        "created_at": format_dt(connection.created_at),
+        "updated_at": format_dt(connection.updated_at),
+    }
+
+
+@app.put("/api/azure/connection")
+async def upsert_azure_connection(
+    req: schemas.AzureConnectionUpsert,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not req.tenant_id.strip() or not req.subscription_id.strip():
+        raise HTTPException(status_code=400, detail="tenant_id and subscription_id are required.")
+
+    existing = await get_active_azure_connection(db, current_user.id)
+    encrypted_secret = github_oauth.encrypt_token(req.client_secret) if req.client_secret else None
+    if existing:
+        existing.tenant_id = req.tenant_id.strip()
+        existing.subscription_id = req.subscription_id.strip()
+        existing.client_id = req.client_id.strip() if req.client_id else None
+        if encrypted_secret:
+            existing.client_secret_encrypted = encrypted_secret
+        existing.region = req.region or config.AZURE_DEFAULT_REGION
+        existing.resource_group = req.resource_group.strip() if req.resource_group else None
+        existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
+        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else None
+        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
+        existing.updated_at = datetime.utcnow()
+        connection = existing
+    else:
+        connection = models.UserAzureConnection(
+            user_id=current_user.id,
+            tenant_id=req.tenant_id.strip(),
+            subscription_id=req.subscription_id.strip(),
+            client_id=req.client_id.strip() if req.client_id else None,
+            client_secret_encrypted=encrypted_secret,
+            region=req.region or config.AZURE_DEFAULT_REGION,
+            resource_group=req.resource_group.strip() if req.resource_group else None,
+            acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
+            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
+            namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
+            is_active=True,
+        )
+        db.add(connection)
+
+    await db.commit()
+    return {
+        "connected": True,
+        "subscription_id": connection.subscription_id,
+        "region": connection.region,
+        "resource_group": connection.resource_group,
+        "acr_login_server": connection.acr_login_server,
+        "aks_cluster_name": connection.aks_cluster_name,
+    }
+
+
+@app.get("/api/billing/operations")
+async def list_billing_operations(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(models.BillingOperation)
+        .filter(models.BillingOperation.user_id == current_user.id)
+        .order_by(desc(models.BillingOperation.created_at))
+        .limit(50)
+    )
+    return [map_billing_operation(op) for op in result.scalars().all()]
+
+
+@app.post("/api/billing/operations")
+async def create_billing_operation(
+    req: schemas.BillingOperationCreate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_types = {"ai_code_fix", "ai_redeploy_fix", "ai_action_apply"}
+    if req.operation_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Unsupported paid operation type.")
+
+    if req.project_id:
+        project_result = await db.execute(
+            select(models.Project).filter(models.Project.id == req.project_id, models.Project.user_id == current_user.id)
+        )
+        if not project_result.scalars().first():
+            raise HTTPException(status_code=404, detail="Project not found.")
+    if req.deployment_id:
+        deployment_result = await db.execute(
+            select(models.Deployment).filter(models.Deployment.id == req.deployment_id, models.Deployment.user_id == current_user.id)
+        )
+        if not deployment_result.scalars().first():
+            raise HTTPException(status_code=404, detail="Deployment not found.")
+
+    op = models.BillingOperation(
+        user_id=current_user.id,
+        project_id=req.project_id,
+        deployment_id=req.deployment_id,
+        operation_type=req.operation_type,
+        status="pending_payment",
+        amount_cents=config.AI_PAID_OPERATION_PRICE_CENTS,
+        currency="usd",
+        provider=config.PAYMENT_PROVIDER,
+        description=req.description,
+    )
+    db.add(op)
+    await db.commit()
+    await db.refresh(op)
+
+    response = map_billing_operation(op)
+    if config.PAYMENT_PROVIDER == "stripe":
+        session = create_stripe_checkout_session(op, current_user)
+        op.provider_reference = session.id
+        await db.commit()
+        response = map_billing_operation(op)
+        response["checkout_url"] = session.url
+
+    return response
+
+
+@app.post("/api/billing/operations/{operation_id}/checkout")
+async def create_billing_checkout(
+    operation_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(models.BillingOperation)
+        .filter(models.BillingOperation.id == operation_id, models.BillingOperation.user_id == current_user.id)
+    )
+    operation = result.scalars().first()
+    if not operation:
+        raise HTTPException(status_code=404, detail="Billing operation not found.")
+    if operation.status != "pending_payment":
+        return map_billing_operation(operation)
+    if config.PAYMENT_PROVIDER != "stripe":
+        response = map_billing_operation(operation)
+        response["checkout_url"] = None
+        return response
+
+    session = create_stripe_checkout_session(operation, current_user)
+    operation.provider_reference = session.id
+    await db.commit()
+    response = map_billing_operation(operation)
+    response["checkout_url"] = session.url
+    return response
+
+
+@app.post("/api/billing/stripe/webhook")
+async def stripe_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if config.PAYMENT_PROVIDER != "stripe":
+        raise HTTPException(status_code=404, detail="Stripe payments are not enabled.")
+    if stripe is None:
+        raise HTTPException(status_code=500, detail="Stripe package is not installed on the backend.")
+    if not config.STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Stripe webhook secret is not configured.")
+
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, signature, config.STRIPE_WEBHOOK_SECRET)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Stripe webhook: {exc}")
+
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+        metadata = session.get("metadata") or {}
+        operation_id = metadata.get("operation_id")
+        if operation_id:
+            result = await db.execute(
+                select(models.BillingOperation).filter(models.BillingOperation.id == uuid.UUID(operation_id))
+            )
+            operation = result.scalars().first()
+            if operation and operation.status == "pending_payment":
+                operation.status = "paid"
+                operation.provider_reference = session.get("id") or operation.provider_reference
+                operation.paid_at = datetime.utcnow()
+                await db.commit()
+
+    return {"received": True}
+
+
+@app.post("/api/billing/operations/{operation_id}/mark-paid")
+async def mark_billing_operation_paid_for_dev(
+    operation_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if config.APP_ENV == "production" or config.PAYMENT_PROVIDER != "manual":
+        raise HTTPException(status_code=403, detail="Manual payment marking is disabled in production.")
+    result = await db.execute(
+        select(models.BillingOperation)
+        .filter(models.BillingOperation.id == operation_id, models.BillingOperation.user_id == current_user.id)
+    )
+    operation = result.scalars().first()
+    if not operation:
+        raise HTTPException(status_code=404, detail="Billing operation not found.")
+    operation.status = "paid"
+    operation.paid_at = datetime.utcnow()
+    await db.commit()
+    return map_billing_operation(operation)
+
+
 @app.post("/api/projects/{project_id}/self-heal")
 async def self_heal_project(
     project_id: uuid.UUID,
@@ -734,6 +1200,8 @@ async def self_heal_project(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     action = req.action.lower()
+    operation_type = "ai_redeploy_fix" if action in {"redeploy", "rollback"} else "ai_action_apply"
+    await consume_paid_operation(db, current_user.id, operation_type, project_id=project.id)
     
     if action == "restart":
         db.add(models.ActivityEvent(
@@ -818,15 +1286,20 @@ async def self_heal_project(
         return {"status": "success", "message": "Database connections reconnected."}
 
     elif action == "redeploy":
+        azure_connection = await get_active_azure_connection(db, current_user.id)
+        if not azure_connection or not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
+            raise HTTPException(status_code=400, detail="Connect Azure ACR and AKS before redeploying.")
+        version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-redeploy"
+        image_name = f"{str(current_user.id)[:8]}-{project.name}".lower().replace("_", "-")
         deployment = models.Deployment(
             user_id=current_user.id,
             project_id=project.id,
             status="building",
             environment="production",
             branch=project.branch or "main",
-            version=f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-redeploy",
+            version=version,
             deployed_by="AI Self-Healer",
-            image=f"acr.azurecr.io/{project.name}:latest"
+            image=f"{azure_connection.acr_login_server}/{image_name}:{version}"
         )
         db.add(deployment)
         project.status = "deploying"
@@ -860,6 +1333,9 @@ async def self_heal_project(
         return {"status": "success", "message": "Redeployment triggered.", "deployment_id": str(deployment.id)}
 
     elif action == "rollback":
+        azure_connection = await get_active_azure_connection(db, current_user.id)
+        if not azure_connection or not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
+            raise HTTPException(status_code=400, detail="Connect Azure ACR and AKS before rolling back.")
         rollback_dep_result = await db.execute(
             select(models.Deployment)
             .filter(models.Deployment.project_id == project.id, models.Deployment.status == "running")
@@ -927,23 +1403,18 @@ async def self_heal_project(
             user_id=current_user.id,
             project_id=project.id,
             action="Health Validation Retried",
-            details="Manual validation checks executed. Service endpoints pinged."
+            details="Manual validation requested. Deployment status was not changed without live telemetry."
         ))
         db.add(models.Notification(
             user_id=current_user.id,
-            title="Health Check Completed",
-            message=f"Liveness and readiness checks pinged successfully for {project.name}.",
-            type="success",
+            title="Health Check Requested",
+            message=f"Health validation requested for {project.name}. Review deployment logs for the result.",
+            type="info",
             category="system"
         ))
-        
-        if latest_dep.status == "failed":
-            latest_dep.status = "running"
-            project.status = "active"
-            latest_dep.live_url = f"https://{project.name}.zeroops.app"
-            
+
         await db.commit()
-        return {"status": "success", "message": "Health check retried and verified successfully."}
+        return {"status": "success", "message": "Health validation request recorded."}
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported self-healing action: {action}")
@@ -1147,13 +1618,13 @@ async def get_project_metrics(
             )
             latest_status = latest_dep_result.scalar()
             if latest_status == "running":
-                uptime = "99.98%"
+                uptime = "Running"
             elif latest_status == "failed":
-                uptime = "0.00%"
+                uptime = "Failed"
             else:
-                uptime = "99.98%"
+                uptime = latest_status or "No data"
         except Exception:
-            uptime = "99.98%"
+            uptime = "No data"
 
     return schemas.TelemetryMetricResponse(
         cpu=cpu_data,
@@ -1193,7 +1664,8 @@ async def list_deployments(
             duration=format_duration(dep.duration_seconds),
             live_url=dep.live_url, deployed_by=dep.deployed_by,
             started_at=format_dt(dep.started_at),
-            completed_at=format_dt(dep.completed_at)
+            completed_at=format_dt(dep.completed_at),
+            infrastructure_metadata=dep.infrastructure_metadata,
         )
         for dep, proj_name in rows
     ]
@@ -1215,6 +1687,19 @@ async def start_deploy(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
+    azure_connection = await get_active_azure_connection(db, current_user.id)
+    if not azure_connection:
+        raise HTTPException(status_code=400, detail="Connect your Azure account before starting a deployment.")
+    if not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Azure connection must include ACR login server and AKS cluster name before deployment."
+        )
+
+    version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}"
+    image_name = f"{str(current_user.id)[:8]}-{project.name}".lower().replace("_", "-")
+    image_ref = f"{azure_connection.acr_login_server}/{image_name}:{version}"
+
     # Create deployment record
     deployment = models.Deployment(
         user_id=current_user.id,
@@ -1222,9 +1707,19 @@ async def start_deploy(
         status="building",
         environment=req.environment,
         branch=req.branch,
-        version=f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}",
+        version=version,
         deployed_by=f"{current_user.first_name or 'User'} {(current_user.last_name or '')[0:1]}.".strip(),
-        image=f"acr.azurecr.io/{project.name}:latest"
+        image=image_ref,
+        infrastructure_metadata={
+            "azure": {
+                "subscription_id": azure_connection.subscription_id,
+                "region": azure_connection.region,
+                "resource_group": azure_connection.resource_group,
+                "acr_login_server": azure_connection.acr_login_server,
+                "aks_cluster_name": azure_connection.aks_cluster_name,
+            },
+            "source_type": project.source_type,
+        }
     )
     db.add(deployment)
 
@@ -1297,6 +1792,7 @@ async def get_deployment(
         live_url=dep.live_url, deployed_by=dep.deployed_by,
         started_at=format_dt(dep.started_at),
         completed_at=format_dt(dep.completed_at),
+        infrastructure_metadata=dep.infrastructure_metadata,
         logs=[
             schemas.DeploymentLogResponse(
                 line_number=log.line_number, level=log.level,
@@ -1326,6 +1822,14 @@ async def fix_deployment_automatically(
         
     if deployment.status != "failed":
         raise HTTPException(status_code=400, detail="Only failed deployments can be automatically fixed.")
+
+    await consume_paid_operation(
+        db,
+        current_user.id,
+        "ai_code_fix",
+        project_id=deployment.project_id,
+        deployment_id=deployment.id,
+    )
         
     # 2. Run auto remediation
     devops_agent = agent.NvidiaNIMDevOpsAgent()
@@ -1499,6 +2003,7 @@ async def apply_ai_action(
     action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Action not found.")
+    await consume_paid_operation(db, current_user.id, "ai_action_apply", project_id=action.project_id)
     action.status = "applied"
     db.add(models.Notification(
         user_id=current_user.id,
@@ -1677,7 +2182,8 @@ async def analyze_repo(
         recommended_compute_tier=analysis.get("recommended_compute_tier"),
         estimated_cost=analysis.get("estimated_cost"),
         recommended_region=analysis.get("recommended_region"),
-        expected_traffic=analysis.get("expected_traffic")
+        expected_traffic=analysis.get("expected_traffic"),
+        pricing_breakdown=analysis.get("pricing_breakdown")
     )
     db.add(db_analysis)
 
@@ -1723,6 +2229,24 @@ async def analyze_repo(
         "recommended_region": db_recommendation.recommended_region,
         "expected_traffic": db_recommendation.expected_traffic,
     }
+    pricing = analysis.get("pricing_breakdown") or {}
+    for key in [
+        "compute_cost",
+        "database_cost",
+        "platform_fee",
+        "bandwidth_cost",
+        "monitoring_cost",
+        "total_cost",
+        "projected_growth_cost",
+        "why_this_plan",
+        "detected_vars_detail",
+        "application_type",
+        "estimated_build_time",
+        "production_readiness_score",
+        "detected_services",
+    ]:
+        if key in pricing and key not in analysis:
+            analysis[key] = pricing[key]
 
     return analysis
 
@@ -2493,6 +3017,146 @@ async def github_oauth_callback(
         secure=True if is_prod_cookie else False,
     )
 
+    return redirect_response
+
+
+@app.get("/api/auth/google")
+async def google_oauth_redirect(request: Request):
+    """Initiate Google OAuth flow."""
+    if not config.GOOGLE_CLIENT_ID or not config.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.")
+
+    import secrets
+    state = secrets.token_urlsafe(32)
+    redirect_uri = str(request.url_for("google_oauth_callback"))
+    authorization_url = google_oauth.get_authorization_url(state, redirect_uri)
+
+    redirect_response = RedirectResponse(url=authorization_url, status_code=302)
+    is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https"
+    redirect_response.set_cookie(
+        key="google_oauth_state",
+        value=state,
+        httponly=True,
+        secure=True if is_prod_cookie else False,
+        samesite="none" if is_prod_cookie else "lax",
+        max_age=600,
+    )
+    return redirect_response
+
+
+@app.get("/api/auth/google/callback")
+async def google_oauth_callback(
+    request: Request,
+    code: str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    frontend_url = config.FRONTEND_URL.rstrip("/")
+
+    def redirect_to_frontend(query: str) -> RedirectResponse:
+        res = RedirectResponse(url=f"{frontend_url}/auth/github/callback?provider=google&{query}", status_code=302)
+        is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https" or ("localhost" not in frontend_url)
+        res.delete_cookie(
+            key="google_oauth_state",
+            path="/",
+            secure=True if is_prod_cookie else False,
+            samesite="none" if is_prod_cookie else "lax",
+        )
+        return res
+
+    if error:
+        return redirect_to_frontend(f"error={error}")
+    if not code or not state:
+        return redirect_to_frontend("error=missing_params")
+
+    cookie_state = request.cookies.get("google_oauth_state")
+    if not cookie_state or cookie_state != state:
+        return redirect_to_frontend("error=invalid_state")
+
+    redirect_uri = str(request.url_for("google_oauth_callback"))
+    google_access_token = await google_oauth.exchange_code_for_token(code, redirect_uri)
+    if not google_access_token:
+        return redirect_to_frontend("error=token_exchange_failed")
+
+    google_user = await google_oauth.get_google_user(google_access_token)
+    if not google_user:
+        return redirect_to_frontend("error=google_user_fetch_failed")
+
+    google_id = str(google_user.get("sub", ""))
+    email = (google_user.get("email") or "").strip().lower()
+    if not google_id or not email:
+        return redirect_to_frontend("error=no_email")
+
+    try:
+        result = await db.execute(select(models.User).filter(models.User.google_id == google_id))
+        user = result.scalars().first()
+        if not user:
+            result = await db.execute(select(models.User).filter(models.User.email == email))
+            user = result.scalars().first()
+
+        if user:
+            user.google_id = google_id
+            user.provider = "google"
+            user.provider_id = google_id
+            if not user.avatar_url:
+                user.avatar_url = google_user.get("picture")
+            if not user.first_name:
+                user.first_name = google_user.get("given_name") or google_user.get("name")
+            if not user.last_name:
+                user.last_name = google_user.get("family_name")
+        else:
+            user = models.User(
+                id=uuid.uuid4(),
+                first_name=google_user.get("given_name") or google_user.get("name") or "User",
+                last_name=google_user.get("family_name") or "",
+                email=email,
+                password_hash=None,
+                provider="google",
+                provider_id=google_id,
+                google_id=google_id,
+                avatar_url=google_user.get("picture"),
+                plan="starter",
+            )
+            db.add(user)
+            await db.flush()
+            db.add(models.UserSettings(user_id=user.id))
+            db.add(models.Notification(
+                user_id=user.id,
+                title="Welcome to ZeroOps AI",
+                message="Your account is ready. Connect GitHub or upload code to start a deployment.",
+                type="success",
+                category="system",
+            ))
+
+        jwt_access_token = auth.create_access_token(data={"sub": str(user.id)})
+        refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
+        user.refresh_token = refresh_token
+        db.add(user)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Google OAuth database error: {e}")
+        return redirect_to_frontend("error=server_error")
+
+    redirect_response = redirect_to_frontend(f"token={jwt_access_token}")
+    is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https" or ("localhost" not in frontend_url)
+    redirect_response.set_cookie(
+        key="session_token",
+        value=jwt_access_token,
+        httponly=True,
+        max_age=15 * 60,
+        samesite="none" if is_prod_cookie else "lax",
+        secure=True if is_prod_cookie else False,
+    )
+    redirect_response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=7 * 24 * 3600,
+        samesite="none" if is_prod_cookie else "lax",
+        secure=True if is_prod_cookie else False,
+    )
     return redirect_response
 
 

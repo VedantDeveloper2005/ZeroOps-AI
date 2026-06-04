@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -11,10 +11,7 @@ import {
   Terminal,
   CheckCircle2,
   AlertTriangle,
-  XCircle,
-  Info,
   Server,
-  Shield,
   Activity,
   Sparkles,
   Trash2,
@@ -23,7 +20,6 @@ import {
   Search,
   Settings as SettingsIcon,
   Brain,
-  Copy,
   Eye,
   EyeOff
 } from "lucide-react";
@@ -37,14 +33,39 @@ import {
   type Project,
   type TelemetryMetric,
   type EnvVar,
+  type HealthScore,
+  type CostOptimization,
   getErrorMessage
 } from "@/lib/api";
 
 const formatDateTime = (value?: string | null) => {
-  if (!value) return "—";
+  if (!value) return "Not recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+};
+
+const displayMetric = (value?: string | null) => {
+  return value && value !== "No data" ? value : "No data";
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+};
+
+const stringFromRecord = (record: Record<string, unknown> | null | undefined, key: string) => {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+};
+
+const hostFromUrl = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url.replace(/^https?:\/\//, "");
+  }
 };
 
 function AppDetailsPageContent({ projectId }: { projectId: string }) {
@@ -60,6 +81,9 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
+  const [costOpt, setCostOpt] = useState<CostOptimization | null>(null);
+  const [requestingFixId, setRequestingFixId] = useState<string | null>(null);
 
   // Domain Management States
   const [domainNameInput, setDomainNameInput] = useState("");
@@ -83,46 +107,6 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
   const [logMode, setLogMode] = useState<"simple" | "advanced">("simple");
   const [logSearchQuery, setLogSearchQuery] = useState("");
 
-  // AI Engineering Recommendations State
-  const [aiRecommendations, setAiRecommendations] = useState([
-    {
-      id: "rec-1",
-      category: "Performance",
-      issue: "Large JavaScript bundle sizes detected",
-      impact: "Slows initial page load and degrades browser rendering speeds.",
-      recommendation: "Enable automatic code-splitting and Next.js image optimization.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-2",
-      category: "Security",
-      issue: "Missing HSTS and X-Content-Type security headers",
-      impact: "Exposes application to protocol downgrade attacks and mime-sniffing vulnerabilities.",
-      recommendation: "Inject default security headers in environment startup config.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-3",
-      category: "Reliability",
-      issue: "Single instance deployment tier",
-      impact: "Lack of redundancy in case of localized hosting region downtime.",
-      recommendation: "Set auto-scale rules to spin up 2-4 instances on traffic spikes.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-4",
-      category: "Cost",
-      issue: "Idle premium compute CPU allocated",
-      impact: "Higher monthly billing despite minimal off-peak hours workload.",
-      recommendation: "Enable target CPU scaling policy to throttle cores when idle.",
-      status: "pending",
-      fixing: false,
-    },
-  ]);
-
   useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab) setActiveTab(tab);
@@ -140,11 +124,13 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
       const projectData = await api.getProject(projectId);
       setProject(projectData);
 
-      const [depsData, metricsData, domainsData, envData] = await Promise.allSettled([
+      const [depsData, metricsData, domainsData, envData, healthData, costData] = await Promise.allSettled([
         api.getDeployments(50),
         api.getProjectMetrics(projectId),
         api.getProjectDomains(projectId),
         api.getEnvVars(projectId),
+        api.getHealthScore(projectId),
+        api.getCostOptimization(projectId),
       ]);
 
       let filteredDeployments: Deployment[] = [];
@@ -161,6 +147,8 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
       if (metricsData.status === "fulfilled") setMetrics(metricsData.value);
       if (domainsData.status === "fulfilled") setDomains(domainsData.value);
       if (envData.status === "fulfilled") setEnvVars(envData.value);
+      if (healthData.status === "fulfilled") setHealthScore(healthData.value);
+      if (costData.status === "fulfilled") setCostOpt(costData.value);
 
       if (filteredDeployments.length > 0) {
         try {
@@ -183,7 +171,40 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
   }, [loadData]);
 
   const latestDeployment = deployments[0];
-  const liveUrl = latestDeployment?.live_url || `https://${project?.name}.zeroops.app`;
+  const liveUrl = latestDeployment?.live_url || "";
+  const liveHost = liveUrl ? hostFromUrl(liveUrl) : "";
+  const latestMetadata = latestDeploymentDetail?.infrastructure_metadata || latestDeployment?.infrastructure_metadata || null;
+  const azureMetadata = asRecord(latestMetadata?.azure);
+  const hostingTarget = stringFromRecord(azureMetadata, "aks_cluster_name")
+    || stringFromRecord(latestMetadata, "namespace")
+    || "Not recorded";
+  const hostingRegion = stringFromRecord(azureMetadata, "region") || project?.region || "Not recorded";
+  const latestLogs = latestDeploymentDetail?.logs || [];
+  const logErrorCount = latestLogs.filter((log) => log.level === "ERROR").length;
+  const logWarningCount = latestLogs.filter((log) => log.level === "WARN").length;
+  const recentLogs = latestLogs.slice(-5);
+
+  const aiRecommendations = useMemo(() => {
+    const healthItems = (healthScore?.recommendations || []).map((text, index) => ({
+      id: `health-${index}`,
+      category: "Health",
+      issue: text,
+      impact: "Based on recorded deployments, runtime logs, and telemetry.",
+      recommendation: text,
+      billable: (healthScore?.score || 0) > 0 && !text.toLowerCase().includes("no immediate"),
+    }));
+
+    const costItems = (costOpt?.recommendations || []).map((item, index) => ({
+      id: `cost-${index}`,
+      category: "Cost",
+      issue: item.title,
+      impact: item.savings > 0 ? `Estimated savings: $${item.savings}/month.` : "Cost telemetry is still being established.",
+      recommendation: item.description,
+      billable: item.savings > 0,
+    }));
+
+    return [...healthItems, ...costItems];
+  }, [healthScore, costOpt]);
 
   const handleRedeploy = async () => {
     if (!project || redeploying) return;
@@ -329,32 +350,50 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
     }
   };
 
-  const applyAIAction = (id: string) => {
-    setAiRecommendations((prev) =>
-      prev.map((rec) => (rec.id === id ? { ...rec, fixing: true } : rec))
-    );
-    setTimeout(() => {
-      setAiRecommendations((prev) =>
-        prev.map((rec) => (rec.id === id ? { ...rec, status: "applied", fixing: false } : rec))
-      );
-      addToast("AI auto-fix applied successfully", "success");
-    }, 1500);
+  const handleRequestPaidFix = async (id: string, recommendation: string) => {
+    if (!project || requestingFixId) return;
+    setRequestingFixId(id);
+    try {
+      await api.createBillingOperation({
+        operation_type: "ai_code_fix",
+        project_id: project.id,
+        description: recommendation,
+      });
+      addToast("Paid fix request created. Complete payment before AI changes code.", "info");
+    } catch (err) {
+      addToast(`Could not create paid fix request: ${getErrorMessage(err, "unknown error")}`, "error");
+    } finally {
+      setRequestingFixId(null);
+    }
   };
 
   const toggleShowValue = (id: string) => {
     setShowEnvValues((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Simplified status and health scores
-  const isProjectActive = project?.status === "active";
-  const appStatusText = isProjectActive ? "Healthy" : "Idle";
-  const appStatusClass = isProjectActive ? "text-success bg-success/10 border-success/20" : "text-warning bg-warning/10 border-warning/20";
-  const appStatusIcon = isProjectActive ? <CheckCircle2 size={14} className="text-success mr-1.5" /> : <AlertTriangle size={14} className="text-warning mr-1.5" />;
+  const isProjectRunning = project?.status === "active" || latestDeployment?.status === "running";
+  const appStatusText = isProjectRunning
+    ? "Running"
+    : latestDeployment?.status
+      ? latestDeployment.status
+      : "Not deployed";
+  const appStatusClass = isProjectRunning
+    ? "text-success bg-success/10 border-success/20"
+    : "text-warning bg-warning/10 border-warning/20";
+  const appStatusIcon = isProjectRunning ? <CheckCircle2 size={14} className="text-success mr-1.5" /> : <AlertTriangle size={14} className="text-warning mr-1.5" />;
 
   // Filter logs in Advanced Mode
   const filteredLogs = latestDeploymentDetail?.logs?.filter((log) =>
     log.message.toLowerCase().includes(logSearchQuery.toLowerCase())
   ) || [];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="animate-spin text-primary" size={28} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -378,14 +417,24 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
             <p className="text-xs text-foreground-muted mt-1">{project?.full_name}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <a
-              href={liveUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm"
-            >
-              <ExternalLink size={13} /> Open App
-            </a>
+            {liveUrl ? (
+              <a
+                href={liveUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1 shadow-sm"
+              >
+                <ExternalLink size={13} /> Open App
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="px-4 py-2 bg-muted text-foreground-muted rounded-xl text-xs font-semibold flex items-center gap-1 shadow-sm cursor-not-allowed"
+              >
+                <ExternalLink size={13} /> No URL
+              </button>
+            )}
             <button
               onClick={handleRedeploy}
               disabled={redeploying}
@@ -442,7 +491,7 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                 <Sparkles size={16} className="text-primary animate-pulse" /> AI Health Assessment
               </h3>
               <p className="text-xs text-foreground-muted leading-relaxed">
-                ZeroOps AI monitored traffic and compute latency for this application. Overall status is <span className="text-success font-bold">Healthy</span>. Latency profiles are optimal, and SSL renewal cron is scheduled.
+                ZeroOps AI is showing only recorded deployment and telemetry signals for this application. Current runtime status is <span className="text-foreground font-bold">{metrics?.uptime || appStatusText}</span>.
               </p>
             </div>
             <button
@@ -460,26 +509,30 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
               <div className="grid grid-cols-2 gap-4 text-xs">
                 <div>
                   <p className="text-[10px] uppercase text-foreground-muted font-bold">Hosting Target</p>
-                  <p className="font-extrabold text-foreground mt-0.5">Managed Production Environment</p>
+                  <p className="font-extrabold text-foreground mt-0.5">{hostingTarget}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase text-foreground-muted font-bold">Environment</p>
-                  <p className="font-extrabold text-foreground mt-0.5">Production</p>
+                  <p className="font-extrabold text-foreground mt-0.5">{latestDeployment?.environment || "Not recorded"}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase text-foreground-muted font-bold">Live URL</p>
-                  <a
-                    href={liveUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-extrabold text-primary hover:underline mt-0.5 truncate block"
-                  >
-                    {liveUrl.replace("https://", "")}
-                  </a>
+                  {liveUrl ? (
+                    <a
+                      href={liveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-extrabold text-primary hover:underline mt-0.5 truncate block"
+                    >
+                      {liveHost}
+                    </a>
+                  ) : (
+                    <p className="font-extrabold text-foreground-muted mt-0.5">Not recorded</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] uppercase text-foreground-muted font-bold">Repository Branch</p>
-                  <p className="font-extrabold text-foreground font-mono mt-0.5">{project?.branch || "main"}</p>
+                  <p className="font-extrabold text-foreground font-mono mt-0.5">{project?.branch || "Not recorded"}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase text-foreground-muted font-bold">Last Deployment</p>
@@ -498,19 +551,19 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3.5 bg-background-secondary border border-border/60 rounded-xl space-y-1">
                   <span className="text-[9px] uppercase font-bold text-foreground-muted">Average Latency</span>
-                  <p className="text-xl font-extrabold text-foreground tracking-tight">{((project?.name?.charCodeAt(0) || 0) % 15) + 12}ms</p>
+                  <p className="text-xl font-extrabold text-foreground tracking-tight">{displayMetric(metrics?.response_time)}</p>
                 </div>
                 <div className="p-3.5 bg-background-secondary border border-border/60 rounded-xl space-y-1">
-                  <span className="text-[9px] uppercase font-bold text-foreground-muted">Availability</span>
-                  <p className="text-xl font-extrabold text-success tracking-tight">99.98%</p>
+                  <span className="text-[9px] uppercase font-bold text-foreground-muted">Runtime Status</span>
+                  <p className="text-xl font-extrabold text-foreground tracking-tight">{displayMetric(metrics?.uptime)}</p>
                 </div>
                 <div className="p-3.5 bg-background-secondary border border-border/60 rounded-xl space-y-1">
                   <span className="text-[9px] uppercase font-bold text-foreground-muted">Requests (24h)</span>
-                  <p className="text-xl font-extrabold text-foreground tracking-tight">{metrics?.request_count ? metrics.request_count.toLocaleString() : "4,821"}</p>
+                  <p className="text-xl font-extrabold text-foreground tracking-tight">{metrics ? metrics.request_count.toLocaleString() : "No data"}</p>
                 </div>
                 <div className="p-3.5 bg-background-secondary border border-border/60 rounded-xl space-y-1">
                   <span className="text-[9px] uppercase font-bold text-foreground-muted">Error Rate</span>
-                  <p className="text-xl font-extrabold text-success tracking-tight">0.01%</p>
+                  <p className="text-xl font-extrabold text-foreground tracking-tight">{displayMetric(metrics?.error_rate)}</p>
                 </div>
               </div>
             </div>
@@ -615,21 +668,24 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                   <Brain size={14} className="text-primary animate-pulse" /> AI Log Summary
                 </h3>
                 <p className="text-xs text-foreground-muted leading-relaxed">
-                  Your application has initialized successfully. The Node/Python server started listening on port 3000, and established database connections without socket errors. Uptime has remained at 100% since deployment.
+                  {latestLogs.length > 0
+                    ? `Latest deployment has ${latestLogs.length} recorded log lines, including ${logErrorCount} errors and ${logWarningCount} warnings.`
+                    : "No runtime logs are recorded for the latest deployment yet."}
                 </p>
                 
                 <div className="grid sm:grid-cols-2 gap-3 pt-2">
-                  {[
-                    { label: "Database pool connected", status: "success" },
-                    { label: "Startup compilation complete", status: "success" },
-                    { label: "SSL connection verified", status: "success" },
-                    { label: "Autoscaling handler listening", status: "success" },
-                  ].map((chk, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs font-semibold text-foreground">
-                      <CheckCircle2 size={14} className="text-success flex-shrink-0" />
-                      <span>{chk.label}</span>
+                  {recentLogs.length > 0 ? recentLogs.map((log, i) => (
+                    <div key={`${log.timestamp || "log"}-${i}`} className="flex items-start gap-2 text-xs font-semibold text-foreground">
+                      {log.level === "ERROR" ? (
+                        <AlertTriangle size={14} className="text-danger flex-shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle2 size={14} className="text-success flex-shrink-0 mt-0.5" />
+                      )}
+                      <span className="line-clamp-2">{log.message}</span>
                     </div>
-                  ))}
+                  )) : (
+                    <div className="sm:col-span-2 text-xs text-foreground-muted font-semibold">Deploy or refresh the latest deployment to collect logs.</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -734,7 +790,7 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                           </div>
                           <div>
                             <span className="text-zinc-500 block text-[9px] uppercase font-sans font-bold">Target Value</span>
-                            {isSubdomain ? "cname.zeroops.app" : "20.112.101.45"}
+                            {liveHost || (isSubdomain ? "Deploy first to record ingress host" : "Use Azure ingress IP after deployment")}
                           </div>
                         </div>
                       </div>
@@ -769,12 +825,12 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
         <div className="space-y-6">
           <div className="border-b border-border/40 pb-3">
             <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">AI Engineering Review</h2>
-            <p className="text-xs text-foreground-muted mt-0.5">Optimizations compiled by ZeroOps AI Cloud Engineer to enhance performance, reliability, and hosting costs.</p>
+            <p className="text-xs text-foreground-muted mt-0.5">Recommendations are generated from recorded deployments, logs, and telemetry.</p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">
-            {aiRecommendations.map((rec) => {
-              const isApplied = rec.status === "applied";
+            {aiRecommendations.length > 0 ? aiRecommendations.map((rec) => {
+              const isRequesting = requestingFixId === rec.id;
               return (
                 <div key={rec.id} className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
                   <div className="space-y-3">
@@ -782,11 +838,6 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                       <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary">
                         {rec.category}
                       </span>
-                      {isApplied && (
-                        <span className="text-[10px] font-bold text-success flex items-center gap-1">
-                          <CheckCircle2 size={12} /> Applied
-                        </span>
-                      )}
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-foreground">{rec.issue}</h4>
@@ -795,29 +846,34 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                     </div>
                   </div>
                   <div className="pt-4 border-t border-border/20 flex justify-end">
-                    <button
-                      onClick={() => applyAIAction(rec.id)}
-                      disabled={isApplied || rec.fixing}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                        isApplied
-                          ? "bg-muted border border-border text-foreground-muted cursor-not-allowed"
-                          : "bg-primary text-white hover:bg-primary-hover shadow-sm"
-                      }`}
-                    >
-                      {rec.fixing ? (
-                        <>
-                          <Loader2 size={12} className="animate-spin" /> Applying...
-                        </>
-                      ) : isApplied ? (
-                        "Configured"
-                      ) : (
-                        "Apply Automatically"
-                      )}
-                    </button>
+                    {rec.billable ? (
+                      <button
+                        onClick={() => handleRequestPaidFix(rec.id, rec.recommendation)}
+                        disabled={isRequesting}
+                        className="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-primary text-white hover:bg-primary-hover shadow-sm disabled:opacity-50"
+                      >
+                        {isRequesting ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" /> Creating request...
+                          </>
+                        ) : (
+                          "Request Paid Fix"
+                        )}
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-foreground-muted font-semibold">No paid code change required</span>
+                    )}
                   </div>
                 </div>
               );
-            })}
+            }) : (
+              <div className="md:col-span-2 bg-card border border-border rounded-2xl p-8 text-center">
+                <p className="text-xs font-semibold text-foreground">No AI recommendations yet</p>
+                <p className="text-[11px] text-foreground-muted mt-1">
+                  Deployments and telemetry must be recorded before ZeroOps can generate actionable guidance.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -921,15 +977,15 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                 </div>
                 <div className="space-y-1">
                   <p className="text-[10px] text-foreground-muted font-bold">Hosting Region</p>
-                  <p className="font-extrabold text-foreground">East US (Default)</p>
+                  <p className="font-extrabold text-foreground">{hostingRegion}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-[10px] text-foreground-muted font-bold">Build Command</p>
-                  <p className="font-mono text-[11px] text-foreground font-semibold">npm run build</p>
+                  <p className="font-mono text-[11px] text-foreground font-semibold">Recorded during analysis</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-[10px] text-foreground-muted font-bold">Startup Command</p>
-                  <p className="font-mono text-[11px] text-foreground font-semibold">npm run start</p>
+                  <p className="font-mono text-[11px] text-foreground font-semibold">Recorded during analysis</p>
                 </div>
               </div>
             </div>

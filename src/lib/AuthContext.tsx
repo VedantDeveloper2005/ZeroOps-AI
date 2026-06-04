@@ -26,6 +26,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<User>;
   signup: (firstName: string, lastName: string, email: string, password: string) => Promise<User>;
   loginWithGitHub: () => void;
+  loginWithGoogle: () => void;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -33,6 +34,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/, "");
+const GITHUB_OAUTH_PENDING_KEY = "zeroops.githubOAuth.pending";
+const GOOGLE_OAUTH_PENDING_KEY = "zeroops.googleOAuth.pending";
 
 // Global fetch interceptor to automatically route client-side relative API requests to backend
 if (typeof window !== "undefined") {
@@ -75,6 +78,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        if (data?.github_connected === true) {
+          sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
+        }
       } else {
         setUser(null);
       }
@@ -173,8 +179,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // GitHub OAuth login — redirects to backend which redirects to GitHub
   const loginWithGitHub = () => {
+    sessionStorage.setItem(GITHUB_OAUTH_PENDING_KEY, "true");
     const githubAuthUrl = `${API_BASE_URL}/api/auth/github`;
     window.location.href = githubAuthUrl;
+  };
+
+  const loginWithGoogle = () => {
+    sessionStorage.setItem(GOOGLE_OAUTH_PENDING_KEY, "true");
+    const googleAuthUrl = `${API_BASE_URL}/api/auth/google`;
+    window.location.href = googleAuthUrl;
   };
 
   // Logout handler
@@ -185,6 +198,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Error during logout endpoint call:", err);
     }
     setUser(null);
+    sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
+    sessionStorage.removeItem(GOOGLE_OAUTH_PENDING_KEY);
     addToast("Logged out successfully", "info");
     router.push("/login");
   };
@@ -201,6 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         signup,
         loginWithGitHub,
+        loginWithGoogle,
         logout,
         refreshUser,
       }}

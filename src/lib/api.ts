@@ -31,10 +31,34 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+  const url = `${API_BASE_URL}${path}`;
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail;
+    const msg = typeof detail === "string"
+      ? detail
+      : (detail && typeof detail === "object" && "details" in detail && typeof detail.details === "string"
+        ? detail.details
+        : (detail && typeof detail === "object" && "error" in detail && typeof detail.error === "string"
+          ? detail.error
+          : `Request failed: ${res.status}`));
+    throw new ApiError(res.status, msg, detail);
+  }
+
+  return res.json();
+}
+
 export class ApiError extends Error {
   status: number;
-  details?: any;
-  constructor(status: number, message: string, details?: any) {
+  details?: unknown;
+  constructor(status: number, message: string, details?: unknown) {
     super(message);
     this.status = status;
     this.details = details;
@@ -91,7 +115,7 @@ export interface Deployment {
   deployed_by: string;
   started_at: string | null;
   completed_at: string | null;
-  infrastructure_metadata?: any;
+  infrastructure_metadata?: Record<string, unknown> | null;
 }
 
 export interface DeploymentLog {
@@ -336,6 +360,23 @@ export interface CostOptimization {
   }[];
 }
 
+export interface BillingOperation {
+  id: string;
+  operation_type: string;
+  status: string;
+  amount_cents: number;
+  currency: string;
+  description: string | null;
+  project_id: string | null;
+  deployment_id: string | null;
+  provider?: string | null;
+  provider_reference?: string | null;
+  checkout_url?: string | null;
+  created_at: string | null;
+  paid_at: string | null;
+  consumed_at: string | null;
+}
+
 export interface SystemHealth {
   status: string;
   service: string;
@@ -384,6 +425,12 @@ export const api = {
     branch?: string;
     region?: string;
   }) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify(data) }),
+
+  uploadCode: (file: File) => {
+    const formData = new FormData();
+    formData.set("file", file);
+    return requestForm<{ project: Project; analysis: Record<string, unknown> }>("/api/projects/upload", formData);
+  },
 
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
 
@@ -597,6 +644,24 @@ export const api = {
 
   getCostOptimization: (projectId: string) =>
     request<CostOptimization>(`/api/projects/${projectId}/cost-optimization`),
+
+  createBillingOperation: (data: {
+    operation_type: string;
+    project_id?: string;
+    deployment_id?: string;
+    description?: string;
+  }) =>
+    request<BillingOperation>("/api/billing/operations", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getBillingOperations: () => request<BillingOperation[]>("/api/billing/operations"),
+
+  createBillingCheckout: (operationId: string) =>
+    request<BillingOperation>(`/api/billing/operations/${operationId}/checkout`, {
+      method: "POST",
+    }),
 
   getProjectDomains: (projectId: string) =>
     request<CustomDomain[]>(`/api/projects/${projectId}/domains`),

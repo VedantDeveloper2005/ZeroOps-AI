@@ -14,6 +14,7 @@ import {
   Sparkles,
   AlertCircle,
   RefreshCw,
+  Upload,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -57,12 +58,6 @@ interface AnalysisResult {
   detected_services?: string[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
@@ -76,39 +71,41 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
-function toAnalysisResult(data: Record<string, unknown>, repo?: GitHubRepoItem): AnalysisResult {
-  const detectedFramework = asString(data.framework) || "Web Application";
-  const detectedRuntime = asString(data.runtime) || "Node.js";
-  const explanation = asString(data.explanation) || `ZeroOps AI analyzed your ${detectedFramework} repository and detected a standard ${detectedRuntime} runtime. This configuration provides a secure, autoscaling runtime environment with a target deploy time of 90 seconds.`;
-  
+function toAnalysisResult(data: Record<string, unknown>): AnalysisResult {
+  const databaseDependencies = asStringArray(data.database_dependencies);
+  const detectedServices = asStringArray(data.detected_services);
+
   return {
-    framework: detectedFramework,
-    runtime: detectedRuntime,
-    packageManager: asString(data.package_manager) || "npm",
+    framework: asString(data.framework),
+    runtime: asString(data.runtime),
+    packageManager: asString(data.package_manager),
     dockerSupport: data.docker_support === true,
-    databaseDependencies: asStringArray(data.database_dependencies).length > 0 ? asStringArray(data.database_dependencies) : ["PostgreSQL"],
+    databaseDependencies,
     environmentVariables: asStringArray(data.environment_variables),
-    confidence: asNumber(data.confidence) || 98,
-    deploymentTarget: "Managed Production Environment",
-    buildCommands: asString(data.build_commands) || asString(data.build_command) || "npm run build",
-    startCommands: asString(data.start_commands) || asString(data.start_command) || "npm start",
-    port: asString(data.port) || "3000",
-    explanation: explanation,
-    estimated_cost: asString(data.estimated_cost) || "$12/month",
-    compute_cost: asNumber(data.compute_cost) ?? 8.0,
-    database_cost: asNumber(data.database_cost) ?? (asStringArray(data.database_dependencies).length > 0 ? 5.0 : 0.0),
-    platform_fee: asNumber(data.platform_fee) ?? 4.0,
-    total_cost: asNumber(data.total_cost) ?? 12.0,
-    projected_growth_cost: asNumber(data.projected_growth_cost) ?? 26.4,
+    confidence: asNumber(data.confidence),
+    deploymentTarget: asString(data.deployment_target) || asString(data.deployment_strategy),
+    buildCommands: asString(data.build_commands) || asString(data.build_command),
+    startCommands: asString(data.start_commands) || asString(data.start_command),
+    port: asString(data.port),
+    explanation: asString(data.explanation),
+    estimated_cost: asString(data.estimated_cost) || undefined,
+    compute_cost: asNumber(data.compute_cost) ?? undefined,
+    database_cost: asNumber(data.database_cost) ?? undefined,
+    platform_fee: asNumber(data.platform_fee) ?? undefined,
+    total_cost: asNumber(data.total_cost) ?? undefined,
+    projected_growth_cost: asNumber(data.projected_growth_cost) ?? undefined,
     why_this_plan: asString(data.why_this_plan) || undefined,
-    recommended_compute_tier: asString(data.recommended_compute_tier) || "Standard Production Core",
+    recommended_compute_tier: asString(data.recommended_compute_tier) || undefined,
     detected_vars_detail: Array.isArray(data.detected_vars_detail) ? data.detected_vars_detail : undefined,
-    application_type: asString(data.application_type) || `${detectedFramework} App`,
-    estimated_build_time: asString(data.estimated_build_time) || "90s",
-    production_readiness_score: asNumber(data.production_readiness_score) || (100 - (asNumber(data.risk_score) || 12)),
-    detected_services: asStringArray(data.detected_services).length > 0 ? asStringArray(data.detected_services) : [detectedFramework, asStringArray(data.database_dependencies)[0]].filter(Boolean),
+    application_type: asString(data.application_type),
+    estimated_build_time: asString(data.estimated_build_time),
+    production_readiness_score: asNumber(data.production_readiness_score),
+    detected_services: detectedServices,
   };
 }
+
+const displayValue = (value?: string | number | null, fallback = "Not detected") =>
+  value === undefined || value === null || value === "" ? fallback : String(value);
 
 const formatDate = (value?: string | null) => {
   if (!value) return "—";
@@ -124,9 +121,10 @@ export default function RepositoriesPage() {
 
   const [onboardStep, setOnboardStep] = useState(1);
   const [isConnectingGit, setIsConnectingGit] = useState(false);
-  const [isConnectingAzure, setIsConnectingAzure] = useState(false);
-  const [isAzureConnected, setIsAzureConnected] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState("");
+  const [uploadedProjectId, setUploadedProjectId] = useState<string | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [isUploadingCode, setIsUploadingCode] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState("main");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
@@ -155,6 +153,21 @@ export default function RepositoriesPage() {
   }));
 
   const isGitHubConnected = user?.github_connected === true;
+  const [oauthPending, setOauthPending] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setOauthPending(sessionStorage.getItem("zeroops.githubOAuth.pending") === "true");
+  }, []);
+
+  useEffect(() => {
+    if (!isGitHubConnected || typeof window === "undefined") return;
+    sessionStorage.removeItem("zeroops.githubOAuth.pending");
+    setOauthPending(false);
+    setIsConnectingGit(false);
+  }, [isGitHubConnected]);
+
+  const isGitHubAuthorizing = isConnectingGit || oauthPending;
 
   // Auto-advance to repository step if GitHub is already connected on load
   useEffect(() => {
@@ -207,7 +220,7 @@ export default function RepositoriesPage() {
   }, [repoSearchQuery, isGitHubConnected, loadRepos]);
 
   useEffect(() => {
-    if (!selectedRepo || !isGitHubConnected) return;
+    if (!selectedRepo || !isGitHubConnected || uploadedProjectId) return;
     setIsLoadingBranches(true);
     api
       .getRepoBranches(selectedRepo)
@@ -220,7 +233,7 @@ export default function RepositoriesPage() {
         setSelectedBranch("main");
       })
       .finally(() => setIsLoadingBranches(false));
-  }, [selectedRepo, isGitHubConnected]);
+  }, [selectedRepo, isGitHubConnected, uploadedProjectId]);
 
   useEffect(() => {
     if (isGitHubConnected) {
@@ -235,11 +248,11 @@ export default function RepositoriesPage() {
       return;
     }
     const logs = [
-      "Initializing analysis pipeline...",
-      "Parsing repository configuration...",
-      "Running dependency scan...",
-      "Generating deployment report...",
-      "Report ready.",
+      "Requesting repository metadata from backend...",
+      "Reading package and runtime configuration...",
+      "Checking detected environment variable references...",
+      "Saving analysis results to your workspace...",
+      "Waiting for backend response...",
     ];
     let idx = 0;
     setScanLogs([logs[0]]);
@@ -270,13 +283,12 @@ export default function RepositoriesPage() {
     setIsAnalyzing(true);
     setAnalysisResult(null);
     setAnalysisError(null);
-    const repoObj = gitRepos.find((repo) => repo.full_name === selectedRepo);
 
     api
       .analyzeRepo(selectedRepo, selectedBranch)
       .then((data) => {
         setIsAnalyzing(false);
-        setAnalysisResult(toAnalysisResult(data, repoObj));
+        setAnalysisResult(toAnalysisResult(data));
         setAnalysisError(null);
         addToast("AI analysis complete.", "success");
       })
@@ -284,10 +296,11 @@ export default function RepositoriesPage() {
         setIsAnalyzing(false);
         setAnalysisResult(null);
         if (err instanceof ApiError && err.details && typeof err.details === "object") {
+          const details = err.details as { error?: unknown; details?: unknown; stage?: unknown };
           setAnalysisError({
-            error: err.details.error || "Analysis Failed",
-            details: err.details.details || err.message,
-            stage: err.details.stage || "repository_analysis"
+            error: typeof details.error === "string" ? details.error : "Analysis Failed",
+            details: typeof details.details === "string" ? details.details : err.message,
+            stage: typeof details.stage === "string" ? details.stage : "repository_analysis"
           });
         } else {
           setAnalysisError({
@@ -298,13 +311,13 @@ export default function RepositoriesPage() {
         }
         addToast("Repository analysis failed.", "error");
       });
-  }, [selectedRepo, selectedBranch, gitRepos, addToast]);
+  }, [selectedRepo, selectedBranch, addToast]);
 
   useEffect(() => {
-    if (onboardStep !== 3 || !selectedRepo || hasTriggeredAnalysis.current) return;
+    if (onboardStep !== 3 || !selectedRepo || uploadedProjectId || hasTriggeredAnalysis.current) return;
     hasTriggeredAnalysis.current = true;
     runAnalysis();
-  }, [onboardStep, selectedRepo, runAnalysis]);
+  }, [onboardStep, selectedRepo, uploadedProjectId, runAnalysis]);
 
   const handleLaunchDeployment = async () => {
     if (!analysisResult) {
@@ -314,15 +327,17 @@ export default function RepositoriesPage() {
     addToast(`Launching deployment for ${selectedRepo}...`, "info");
     try {
       const selectedRepoObj = gitRepos.find((repo) => repo.full_name === selectedRepo);
-      const project = await api.createProject({
-        name: selectedRepo.split("/").pop() || selectedRepo,
-        full_name: selectedRepo,
-        repo_url: `https://github.com/${selectedRepo}`,
-        framework: analysisResult.framework || "Unknown",
-        language: selectedRepoObj?.language || "Unknown",
-        branch: selectedBranch,
-        region: "eastus",
-      });
+      const project = uploadedProjectId
+        ? await api.getProject(uploadedProjectId)
+        : await api.createProject({
+            name: selectedRepo.split("/").pop() || selectedRepo,
+            full_name: selectedRepo,
+            repo_url: `https://github.com/${selectedRepo}`,
+            framework: analysisResult.framework || "Unknown",
+            language: selectedRepoObj?.language || "Unknown",
+            branch: selectedBranch,
+            region: "eastus",
+          });
 
       const deployRes = await api.startDeployment({
         project_id: project.id,
@@ -344,7 +359,33 @@ export default function RepositoriesPage() {
       router.push(`/dashboard/deployments?id=${deployRes.deployment_id}&repo=${encodeURIComponent(selectedRepo)}`);
     } catch (err) {
       console.error("Failed to deploy project:", err);
-      addToast("Failed to initialize deployment pipeline.", "error");
+      addToast(getErrorMessage(err, "Failed to initialize deployment pipeline."), "error");
+    }
+  };
+
+  const handleUploadCode = async () => {
+    if (!uploadFile) {
+      addToast("Choose a ZIP file before uploading.", "warning");
+      return;
+    }
+
+    setIsUploadingCode(true);
+    setAnalysisError(null);
+    try {
+      const result = await api.uploadCode(uploadFile);
+      setUploadedProjectId(result.project.id);
+      setSelectedRepo(result.project.full_name);
+      setSelectedBranch(result.project.branch || "uploaded");
+      setAvailableBranches([result.project.branch || "uploaded"]);
+      setAnalysisResult(toAnalysisResult(result.analysis));
+      setOnboardStep(4);
+      await Promise.all([refreshProjects(), refreshStats()]);
+      addToast("Code uploaded and analyzed.", "success");
+    } catch (err) {
+      console.error("Code upload failed:", err);
+      addToast(getErrorMessage(err, "Failed to upload code."), "error");
+    } finally {
+      setIsUploadingCode(false);
     }
   };
 
@@ -438,10 +479,10 @@ export default function RepositoriesPage() {
                     Authorize ZeroOps to read repository layouts and commit states.
                   </p>
                 </div>
-                {isConnectingGit ? (
+                {isGitHubAuthorizing ? (
                   <div className="space-y-2 p-3 rounded-lg bg-background-secondary border border-border text-center">
                     <Loader2 size={20} className="animate-spin text-primary mx-auto" />
-                    <p className="text-[10px] font-mono text-foreground-muted">Redirecting to GitHub OAuth...</p>
+                    <p className="text-[10px] font-mono text-foreground-muted">Waiting for GitHub authorization...</p>
                   </div>
                 ) : (
                   <button
@@ -532,7 +573,11 @@ export default function RepositoriesPage() {
                         key={repo.id}
                         initial={{ opacity: 0, y: 5 }}
                         animate={{ opacity: 1, y: 0 }}
-                        onClick={() => setSelectedRepo(repo.full_name)}
+                        onClick={() => {
+                          setUploadedProjectId(null);
+                          setSelectedRepo(repo.full_name);
+                          setAnalysisResult(null);
+                        }}
                         className={`p-4 rounded-xl border transition-all cursor-pointer text-left space-y-2 ${
                           isSelected
                             ? "bg-primary-subtle/20 border-primary"
@@ -551,7 +596,7 @@ export default function RepositoriesPage() {
                         <div className="flex items-center justify-between text-[10px] text-foreground-muted pt-1">
                           <span>{repo.language || "Unknown"}</span>
                           <span>•</span>
-                          <span className="text-primary font-semibold">Est. Deploy: 90s</span>
+                          <span className="text-primary font-semibold">Ready to analyze</span>
                           <span>•</span>
                           <span>Updated {formatDate(repo.updated_at)}</span>
                         </div>
@@ -578,6 +623,35 @@ export default function RepositoriesPage() {
                 )}
               </>
             )}
+
+            <div className="bg-card border border-border rounded-xl p-4 flex flex-col md:flex-row md:items-center gap-4">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary flex-shrink-0">
+                <Upload size={18} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-foreground">Upload code directly</p>
+                <p className="text-[11px] text-foreground-muted">
+                  Upload a ZIP archive when the project is not available through GitHub.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <input
+                  type="file"
+                  accept=".zip,application/zip,application/x-zip-compressed"
+                  onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
+                  className="block w-full max-w-[220px] text-[11px] text-foreground-muted file:mr-3 file:rounded-lg file:border file:border-border file:bg-background-secondary file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-foreground hover:file:bg-card"
+                />
+                <button
+                  type="button"
+                  onClick={handleUploadCode}
+                  disabled={!uploadFile || isUploadingCode}
+                  className="px-4 py-2 bg-card border border-border rounded-xl text-xs font-semibold text-foreground hover:bg-card-hover disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5"
+                >
+                  {isUploadingCode ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  Upload
+                </button>
+              </div>
+            </div>
 
             {selectedRepo && (
               <motion.div
@@ -620,7 +694,7 @@ export default function RepositoriesPage() {
               </button>
               <button
                 disabled={!selectedRepo}
-                onClick={() => setOnboardStep(3)}
+                onClick={() => setOnboardStep(uploadedProjectId ? 2 : 3)}
                 className="px-5 py-2.5 bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold hover:bg-primary-hover transition cursor-pointer flex items-center gap-1"
               >
                 Continue <ArrowRight size={14} />
@@ -636,8 +710,8 @@ export default function RepositoriesPage() {
                 <h3 className="text-lg font-bold text-foreground">AI Analysis</h3>
                 <p className="text-xs text-foreground-muted">
                   {analysisError
-                    ? "Deployment blueprint compilation failed."
-                    : "ZeroOps AI is compiling your deployment blueprint."}
+                    ? "Repository analysis failed."
+                    : "ZeroOps AI is reading the repository configuration."}
                 </p>
               </div>
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono font-semibold">
@@ -774,9 +848,9 @@ export default function RepositoriesPage() {
                   <Check size={24} />
                 </div>
                 <div className="space-y-2">
-                  <h4 className="text-sm font-bold text-foreground">AI Blueprint Generated Successfully</h4>
+                  <h4 className="text-sm font-bold text-foreground">Analysis Saved</h4>
                   <p className="text-xs text-foreground-muted">
-                    We have analyzed the repository and created a customized deployment plan.
+                    The detected runtime, build commands, and required configuration were saved for review.
                   </p>
                 </div>
               </div>
@@ -806,11 +880,11 @@ export default function RepositoriesPage() {
               <div>
                 <h3 className="text-lg font-bold text-foreground">Review Deployment Plan</h3>
                 <p className="text-xs text-foreground-muted">
-                  Review the deployment architecture, connection credentials, and estimated costs.
+                  Review detected runtime settings and complete required Azure/environment configuration before deploying.
                 </p>
               </div>
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
-                Plan Verified
+                Review Required
               </span>
             </div>
 
@@ -821,7 +895,7 @@ export default function RepositoriesPage() {
               </h4>
               <p className="text-xs text-foreground leading-relaxed">
                 {analysisResult?.why_this_plan ||
-                  `ZeroOps AI selected a Managed Production Environment because the application requires a secure, autoscaling runtime with automatic SSL termination. An isolated runtime tier is configured to support the detected framework with high availability.`}
+                  "ZeroOps analyzed the repository and recorded only the configuration it could detect. Azure resources, external databases, payment-gated AI fixes, and missing secrets must be confirmed before deployment starts."}
               </p>
             </div>
 
@@ -844,15 +918,15 @@ export default function RepositoriesPage() {
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Application Type</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.application_type || "Web App"}</span>
+                      <span className="font-extrabold text-foreground">{displayValue(analysisResult?.application_type)}</span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Framework</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.framework || "Next.js"}</span>
+                      <span className="font-extrabold text-foreground">{displayValue(analysisResult?.framework)}</span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Runtime</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.runtime || "Node.js 20"}</span>
+                      <span className="font-extrabold text-foreground">{displayValue(analysisResult?.runtime)}</span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Database</span>
@@ -867,7 +941,7 @@ export default function RepositoriesPage() {
                       <span className="font-extrabold text-foreground">
                         {analysisResult?.detected_services && analysisResult.detected_services.length > 0
                           ? analysisResult.detected_services.join(", ")
-                          : "Web Service"}
+                          : "Not detected"}
                       </span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
@@ -880,19 +954,23 @@ export default function RepositoriesPage() {
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Estimated Build Time</span>
-                      <span className="font-extrabold text-foreground">{analysisResult?.estimated_build_time || "90s"}</span>
+                      <span className="font-extrabold text-foreground">{displayValue(analysisResult?.estimated_build_time, "Not estimated")}</span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Estimated Monthly Cost</span>
-                      <span className="font-extrabold text-primary">{analysisResult?.estimated_cost || "$12/mo"}</span>
+                      <span className="font-extrabold text-primary">{displayValue(analysisResult?.estimated_cost, "Not estimated")}</span>
                     </div>
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Production Readiness</span>
-                      <span className="font-extrabold text-success">{analysisResult?.production_readiness_score || 94}%</span>
+                      <span className="font-extrabold text-success">
+                        {analysisResult?.production_readiness_score != null ? `${analysisResult.production_readiness_score}%` : "Not scored"}
+                      </span>
                     </div>
                     <div className="py-1 flex justify-between col-span-2 border-t border-border/10 pt-2">
                       <span className="text-foreground-muted font-bold">Deployment Confidence Score</span>
-                      <span className="font-extrabold text-success">{analysisResult?.confidence || 98}%</span>
+                      <span className="font-extrabold text-success">
+                        {analysisResult?.confidence != null ? `${analysisResult.confidence}%` : "Not scored"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -900,19 +978,19 @@ export default function RepositoriesPage() {
                 {/* Databases Status Panel */}
                 <div className="bg-card border border-border rounded-xl p-5 space-y-3">
                   <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider border-b border-border/40 pb-2">
-                    Managed Database Provisioning
+                    Database Configuration
                   </h4>
                   {analysisResult?.databaseDependencies && analysisResult.databaseDependencies.length > 0 ? (
                     <div className="space-y-3">
                       {analysisResult.databaseDependencies.map((dbName) => (
-                        <div key={dbName} className="p-3 rounded-lg bg-success/5 border border-success/20 flex items-start gap-2.5">
-                          <Check size={16} className="text-success mt-0.5" />
+                        <div key={dbName} className="p-3 rounded-lg bg-warning/5 border border-warning/20 flex items-start gap-2.5">
+                          <AlertCircle size={16} className="text-warning mt-0.5" />
                           <div className="space-y-1">
-                            <p className="text-xs font-bold text-success">
-                              {dbName} (Auto-provisioned & Linked)
+                            <p className="text-xs font-bold text-warning">
+                              {dbName} dependency detected
                             </p>
                             <p className="text-[11px] text-foreground-muted leading-relaxed">
-                              ZeroOps will automatically provision an isolated managed {dbName} instance and inject the connection credentials safely.
+                              Add a real Azure-backed connection string in project environment settings before deployment. ZeroOps will not invent database credentials.
                             </p>
                           </div>
                         </div>
@@ -920,7 +998,7 @@ export default function RepositoriesPage() {
                     </div>
                   ) : (
                     <div className="p-3 rounded-lg bg-zinc-800/30 border border-border/40 text-xs text-foreground-muted">
-                      No databases detected. Using simple isolated storage container.
+                      No database package or connection variable was detected by the scanner.
                     </div>
                   )}
                 </div>
@@ -930,13 +1008,13 @@ export default function RepositoriesPage() {
               <div className="bg-card border border-border rounded-xl p-5 flex flex-col justify-between space-y-4">
                 <div className="space-y-4">
                   <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider border-b border-border/40 pb-2">
-                    Pricing Estimation Engine
+                    Cost Signals
                   </h4>
                   <div className="space-y-3 text-xs">
                     <div className="flex justify-between py-1 border-b border-border/10">
                       <span className="text-foreground-muted font-semibold">Compute Infrastructure</span>
                       <span className="font-bold text-foreground">
-                        ${analysisResult?.compute_cost ?? 8}/month
+                        {analysisResult?.compute_cost != null ? `$${analysisResult.compute_cost}/month` : "Not estimated"}
                       </span>
                     </div>
                     {analysisResult?.database_cost && analysisResult.database_cost > 0 ? (
@@ -950,29 +1028,29 @@ export default function RepositoriesPage() {
                     <div className="flex justify-between py-1 border-b border-border/10">
                       <span className="text-foreground-muted font-semibold">ZeroOps Platform Margin</span>
                       <span className="font-bold text-foreground">
-                        ${analysisResult?.platform_fee ?? 4}/month
+                        {analysisResult?.platform_fee != null ? `$${analysisResult.platform_fee}/month` : "Not estimated"}
                       </span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-border/10">
                       <span className="text-foreground-muted font-semibold">Bandwidth & Monitoring</span>
-                      <span className="text-success font-bold">Included ($0/mo)</span>
+                      <span className="text-foreground-muted font-bold">Azure billing dependent</span>
                     </div>
                     <div className="flex justify-between py-1.5 border-b border-primary/20 text-sm">
                       <span className="text-foreground font-bold">Estimated Monthly Total</span>
                       <span className="font-extrabold text-primary">
-                        {analysisResult?.total_cost ? `$${analysisResult.total_cost}/month` : "$12/month"}
+                        {analysisResult?.total_cost != null ? `$${analysisResult.total_cost}/month` : "Not estimated"}
                       </span>
                     </div>
                     <div className="flex justify-between py-1">
                       <span className="text-foreground-muted">Projected Growth Limit</span>
                       <span className="font-semibold text-foreground-muted">
-                        {analysisResult?.projected_growth_cost ? `$${analysisResult.projected_growth_cost.toFixed(0)}/month` : "$26/month"}
+                        {analysisResult?.projected_growth_cost != null ? `$${analysisResult.projected_growth_cost.toFixed(0)}/month` : "Not estimated"}
                       </span>
                     </div>
                     <div className="flex justify-between py-1">
                       <span className="text-foreground-muted">Recommended Compute Plan</span>
                       <span className="font-mono text-xs px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-foreground font-bold">
-                        {analysisResult?.recommended_compute_tier || "Standard Production Core"}
+                        {analysisResult?.recommended_compute_tier || "Not selected"}
                       </span>
                     </div>
                   </div>
@@ -980,7 +1058,7 @@ export default function RepositoriesPage() {
 
                 <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl text-[11px] text-foreground-muted leading-relaxed">
                   <span className="font-bold text-foreground block mb-0.5">Billing Policy</span>
-                  No setup charges. Billed hourly based on actual container uptime. Cancel or scale down to zero at any time.
+                  Production billing must be approved before AI code changes or automated remediation run. Azure resource charges depend on the user&apos;s connected Azure subscription.
                 </div>
               </div>
             </div>
@@ -991,7 +1069,7 @@ export default function RepositoriesPage() {
                 Environment Variable Resolution
               </h4>
               <p className="text-[11px] text-foreground-muted">
-                ZeroOps AI scanned files like package.json, requirements.txt, and source configurations to auto-configure these environment variables.
+                ZeroOps scanned package files and source configuration references. Missing external credentials must be supplied before deployment.
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left border-collapse">
@@ -1000,7 +1078,7 @@ export default function RepositoriesPage() {
                       <th className="py-2 pr-4">Variable Key</th>
                       <th className="py-2 px-4">Type</th>
                       <th className="py-2 px-4">Status</th>
-                      <th className="py-2 pl-4">Resolved Value / Default</th>
+                      <th className="py-2 pl-4">Required Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/40">
@@ -1015,20 +1093,26 @@ export default function RepositoriesPage() {
                           </td>
                           <td className="py-2 px-4">
                             {envVar.is_missing ? (
-                              <span className="text-warning font-semibold">Auto-Generated</span>
+                              <span className="text-warning font-semibold">
+                                {envVar.has_default ? "Generated securely" : "Needs value"}
+                              </span>
                             ) : (
                               <span className="text-success font-semibold">Detected</span>
                             )}
                           </td>
                           <td className="py-2 pl-4 font-mono text-foreground-muted truncate max-w-[240px]">
-                            {envVar.default_val || "••••••••"}
+                            {envVar.is_missing
+                              ? envVar.has_default
+                                ? "Server generated secret"
+                                : "Configure in project settings"
+                              : "Detected in repository"}
                           </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
                         <td colSpan={4} className="py-4 text-center text-foreground-muted italic">
-                          No environment variables required. Simple defaults will be injected.
+                          No environment variables were detected by the scanner.
                         </td>
                       </tr>
                     )}
@@ -1039,7 +1123,7 @@ export default function RepositoriesPage() {
 
             <div className="flex justify-between pt-6 border-t border-border/40">
               <button
-                onClick={() => setOnboardStep(3)}
+                onClick={() => setOnboardStep(uploadedProjectId && analysisResult ? 4 : 3)}
                 className="px-4 py-2 border border-border rounded-xl text-xs font-semibold hover:bg-card-hover transition cursor-pointer"
               >
                 Back

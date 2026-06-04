@@ -70,6 +70,25 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_OAUTH_SCOPES = os.getenv("GITHUB_OAUTH_SCOPES", "repo,read:user,user:email")
 
+# Google OAuth App credentials
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_OAUTH_SCOPES = os.getenv("GOOGLE_OAUTH_SCOPES", "openid email profile")
+
+# Azure deployment configuration. User-specific Azure targets are stored in DB.
+AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
+ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
+
+# Paid AI operation controls
+PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "manual")
+AI_PAID_OPERATION_PRICE_CENTS = int(os.getenv("AI_PAID_OPERATION_PRICE_CENTS", "499"))
+AI_FREE_DAILY_LIMIT = int(os.getenv("AI_FREE_DAILY_LIMIT", "5"))
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+# Direct upload controls
+MAX_CODE_UPLOAD_MB = int(os.getenv("MAX_CODE_UPLOAD_MB", "50"))
+
 # Workspace folder for temporary checkouts
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
 os.makedirs(WORKSPACE_DIR, exist_ok=True)

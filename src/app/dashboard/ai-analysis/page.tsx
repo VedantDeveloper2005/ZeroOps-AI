@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Brain, Loader2, ShieldCheck, TrendingUp, Sparkles, CheckCircle2 } from "lucide-react";
+import { Brain, Loader2, ShieldCheck, TrendingUp } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { api, type Project, type HealthScore, type CostOptimization } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -14,45 +14,7 @@ export default function AIAnalysisPage() {
   const [loadingData, setLoadingData] = useState(false);
   const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
   const [costOpt, setCostOpt] = useState<CostOptimization | null>(null);
-
-  const [recommendations, setRecommendations] = useState([
-    {
-      id: "rec-1",
-      category: "Performance",
-      issue: "Large JavaScript bundle sizes detected",
-      impact: "Slower browser rendering and increased network payload.",
-      recommendation: "Enable image optimization and code splitting by converting heavy static imports to dynamic imports.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-2",
-      category: "Security",
-      issue: "Exposed API secrets in client bundle",
-      impact: "Malicious actors could harvest client credentials from public scripts.",
-      recommendation: "Shift sensitive keys to Azure App Service environment configuration.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-3",
-      category: "Cost",
-      issue: "Over-provisioned idle container cores",
-      impact: "Paying for unused server capacity during low-traffic periods.",
-      recommendation: "Configure Azure auto-scaling to downscale instances to 1 unit during off-peak hours.",
-      status: "pending",
-      fixing: false,
-    },
-    {
-      id: "rec-4",
-      category: "Reliability",
-      issue: "Missing health validation endpoints",
-      impact: "Azure cannot determine container health during deployment rollouts.",
-      recommendation: "Expose a /api/health endpoint returning 200 OK and bind to App Service probes.",
-      status: "pending",
-      fixing: false,
-    },
-  ]);
+  const [requestingFixId, setRequestingFixId] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadProjects() {
@@ -80,9 +42,6 @@ export default function AIAnalysisPage() {
         ]);
         if (scoreRes.status === "fulfilled") setHealthScore(scoreRes.value);
         if (costRes.status === "fulfilled") setCostOpt(costRes.value);
-        
-        // Reset recommendations status on project switch to make it fresh
-        setRecommendations((prev) => prev.map(rec => ({ ...rec, status: "pending", fixing: false })));
       } catch (err) {
         console.error("Failed to fetch AI review", err);
       } finally {
@@ -113,16 +72,41 @@ export default function AIAnalysisPage() {
     ];
   }, [healthScore]);
 
-  const handleApplyFix = (id: string) => {
-    setRecommendations((prev) =>
-      prev.map((rec) => (rec.id === id ? { ...rec, fixing: true } : rec))
-    );
-    setTimeout(() => {
-      setRecommendations((prev) =>
-        prev.map((rec) => (rec.id === id ? { ...rec, status: "applied", fixing: false } : rec))
-      );
-      addToast("AI auto-fix applied successfully", "success");
-    }, 1200);
+  const recommendations = useMemo(() => {
+    const healthRecommendations = (healthScore?.recommendations || []).map((text, index) => ({
+      id: `health-${index}`,
+      category: "Health",
+      issue: text,
+      impact: "Based on recorded deployments, metrics, and scanner output.",
+      recommendation: text,
+    }));
+
+    const costRecommendations = (costOpt?.recommendations || []).map((item, index) => ({
+      id: `cost-${index}`,
+      category: "Cost",
+      issue: item.title,
+      impact: item.savings > 0 ? `Estimated savings: $${item.savings}/month.` : "Cost telemetry is still being established.",
+      recommendation: item.description,
+    }));
+
+    return [...healthRecommendations, ...costRecommendations];
+  }, [healthScore, costOpt]);
+
+  const handleRequestPaidFix = async (id: string, recommendation: string) => {
+    setRequestingFixId(id);
+    try {
+      await api.createBillingOperation({
+        operation_type: "ai_code_fix",
+        project_id: selectedProjectId,
+        description: recommendation,
+      });
+      addToast("Paid fix request created. Complete payment before AI changes code.", "info");
+    } catch (err) {
+      console.error("Failed to create paid fix request", err);
+      addToast("Could not create paid fix request.", "error");
+    } finally {
+      setRequestingFixId(null);
+    }
   };
 
   if (loadingProjects || (loadingData && !healthScore)) {
@@ -181,9 +165,9 @@ export default function AIAnalysisPage() {
           >
             <p className="text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{card.label}</p>
             <p className="text-2xl font-extrabold text-foreground">
-              {card.value != null ? `${card.value}%` : "92%"}
+              {card.value != null ? `${card.value}%` : "No data"}
             </p>
-            <p className="text-[10px] text-foreground-muted font-medium">Updated from latest deployment</p>
+            <p className="text-[10px] text-foreground-muted font-medium">From recorded deployment telemetry</p>
           </motion.div>
         ))}
       </div>
@@ -194,8 +178,8 @@ export default function AIAnalysisPage() {
           <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">AI Engineering Recommendations</h2>
         </div>
         <div className="grid md:grid-cols-2 gap-6">
-          {recommendations.map((rec, index) => {
-            const isApplied = rec.status === "applied";
+          {recommendations.length > 0 ? recommendations.map((rec, index) => {
+            const isRequesting = requestingFixId === rec.id;
             return (
               <motion.div
                 key={rec.id}
@@ -209,11 +193,6 @@ export default function AIAnalysisPage() {
                     <span className="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary">
                       {rec.category}
                     </span>
-                    {isApplied && (
-                      <span className="text-[10px] font-bold text-success flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Applied
-                      </span>
-                    )}
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-foreground">{rec.issue}</h3>
@@ -223,28 +202,29 @@ export default function AIAnalysisPage() {
                 </div>
                 <div className="pt-4 border-t border-border/20 flex justify-end">
                   <button
-                    onClick={() => handleApplyFix(rec.id)}
-                    disabled={isApplied || rec.fixing}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                      isApplied
-                        ? "bg-muted border border-border text-foreground-muted cursor-not-allowed"
-                        : "bg-primary text-white hover:bg-primary-hover shadow-sm"
-                    }`}
+                    onClick={() => handleRequestPaidFix(rec.id, rec.recommendation)}
+                    disabled={isRequesting}
+                    className="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-primary text-white hover:bg-primary-hover shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {rec.fixing ? (
+                    {isRequesting ? (
                       <>
-                        <Loader2 size={12} className="animate-spin" /> Applying...
+                        <Loader2 size={12} className="animate-spin" /> Creating request...
                       </>
-                    ) : isApplied ? (
-                      "Configured"
                     ) : (
-                      "Apply Automatically"
+                      "Request Paid Fix"
                     )}
                   </button>
                 </div>
               </motion.div>
             );
-          })}
+          }) : (
+            <div className="md:col-span-2 bg-card border border-border rounded-2xl p-8 text-center">
+              <p className="text-xs font-semibold text-foreground">No recommendations yet</p>
+              <p className="text-[11px] text-foreground-muted mt-1">
+                Deployments and telemetry must be recorded before ZeroOps can generate actionable guidance.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

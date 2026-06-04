@@ -17,3 +17,5 @@ authlib
 email-validator
 httpx
 cryptography
+python-multipart
+stripe
