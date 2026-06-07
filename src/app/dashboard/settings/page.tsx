@@ -11,6 +11,7 @@ import {
   api,
   getErrorMessage,
   type CustomDomain,
+  type AzureConnection,
   type DeploymentHealth,
   type EnvVar,
   type HealthCheck,
@@ -19,7 +20,19 @@ import {
   type SystemHealth,
 } from "@/lib/api";
 
-type TabId = "general" | "domains" | "security" | "team" | "notifications" | "ai";
+type TabId = "general" | "azure" | "domains" | "security" | "team" | "notifications" | "ai";
+
+const emptyAzureForm = {
+  tenant_id: "",
+  subscription_id: "",
+  client_id: "",
+  client_secret: "",
+  region: "eastus",
+  resource_group: "",
+  acr_login_server: "",
+  aks_cluster_name: "",
+  namespace_prefix: "",
+};
 
 export default function SettingsPage() {
   const { addToast, addNotification, resetOnboarding } = useNotifications();
@@ -41,6 +54,10 @@ export default function SettingsPage() {
   const [ghHealth, setGhHealth] = useState<HealthCheck | null>(null);
   const [depHealth, setDepHealth] = useState<DeploymentHealth | null>(null);
   const [loadingHealth, setLoadingHealth] = useState(true);
+  const [azureConnection, setAzureConnection] = useState<AzureConnection | null>(null);
+  const [loadingAzure, setLoadingAzure] = useState(true);
+  const [savingAzure, setSavingAzure] = useState(false);
+  const [azureForm, setAzureForm] = useState(emptyAzureForm);
 
   // Domain states
   const [domains, setDomains] = useState<CustomDomain[]>([]);
@@ -112,6 +129,42 @@ export default function SettingsPage() {
     loadProjects();
     refreshHealthChecks();
   }, [refreshHealthChecks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && ["general", "azure", "domains", "security", "team", "notifications", "ai"].includes(tab)) {
+      setActiveTab(tab as TabId);
+    }
+  }, []);
+
+  const loadAzureConnection = useCallback(async () => {
+    setLoadingAzure(true);
+    try {
+      const data = await api.getAzureConnection();
+      setAzureConnection(data);
+      setAzureForm({
+        tenant_id: data.tenant_id || "",
+        subscription_id: data.subscription_id || "",
+        client_id: data.client_id || "",
+        client_secret: "",
+        region: data.region || "eastus",
+        resource_group: data.resource_group || "",
+        acr_login_server: data.acr_login_server || "",
+        aks_cluster_name: data.aks_cluster_name || "",
+        namespace_prefix: data.namespace_prefix || "",
+      });
+    } catch (err) {
+      console.error("Failed to load Azure connection", err);
+      addToast("Failed to load Azure deployment target.", "error");
+    } finally {
+      setLoadingAzure(false);
+    }
+  }, [addToast]);
+
+  useEffect(() => {
+    loadAzureConnection();
+  }, [loadAzureConnection]);
 
   // Load project-specific data when selected project changes
   useEffect(() => {
@@ -349,8 +402,38 @@ export default function SettingsPage() {
     }
   };
 
+  const handleAzureFieldChange = (field: keyof typeof azureForm, value: string) => {
+    setAzureForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSaveAzureConnection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingAzure(true);
+    try {
+      const updated = await api.updateAzureConnection({
+        tenant_id: azureForm.tenant_id.trim(),
+        subscription_id: azureForm.subscription_id.trim(),
+        client_id: azureForm.client_id.trim() || undefined,
+        client_secret: azureForm.client_secret.trim() || undefined,
+        region: azureForm.region.trim() || "eastus",
+        resource_group: azureForm.resource_group.trim() || undefined,
+        acr_login_server: azureForm.acr_login_server.trim().replace(/\/+$/, "") || undefined,
+        aks_cluster_name: azureForm.aks_cluster_name.trim() || undefined,
+        namespace_prefix: azureForm.namespace_prefix.trim() || undefined,
+      });
+      setAzureConnection(updated);
+      setAzureForm((prev) => ({ ...prev, client_secret: "" }));
+      addToast("Azure deployment target saved.", "success");
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, "Failed to save Azure deployment target."), "error");
+    } finally {
+      setSavingAzure(false);
+    }
+  };
+
   const tabs = [
     { id: "general" as const, label: "General", icon: Settings },
+    { id: "azure" as const, label: "Azure Target", icon: Globe2 },
     { id: "domains" as const, label: "Domains", icon: Globe },
     { id: "security" as const, label: "Security & Secrets", icon: Shield },
     { id: "team" as const, label: "Team Access", icon: Users },
@@ -556,6 +639,152 @@ export default function SettingsPage() {
                 >
                   Reset Onboarding State
                 </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* AZURE TARGET TAB */}
+          {activeTab === "azure" && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+              <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-border/40 pb-4">
+                  <div className="space-y-1">
+                    <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
+                      <Globe2 size={16} className="text-primary" /> Azure Deployment Target
+                    </h3>
+                    <p className="text-xs text-foreground-muted leading-relaxed">
+                      Store the Azure subscription and cluster metadata ZeroOps uses to build per-user namespaces, image names, and deployments.
+                    </p>
+                  </div>
+                  <span className={`text-[10px] px-2.5 py-1 rounded-full border font-bold uppercase w-fit ${
+                    azureConnection?.connected && azureConnection.acr_login_server && azureConnection.aks_cluster_name
+                      ? "bg-success/10 border-success/25 text-success"
+                      : "bg-warning/10 border-warning/25 text-warning"
+                  }`}>
+                    {azureConnection?.connected && azureConnection.acr_login_server && azureConnection.aks_cluster_name
+                      ? "Ready"
+                      : "Needs Setup"}
+                  </span>
+                </div>
+
+                {loadingAzure ? (
+                  <div className="flex items-center gap-2 text-foreground-muted font-medium py-8 text-xs">
+                    <Loader2 size={14} className="animate-spin text-primary" /> Loading Azure target...
+                  </div>
+                ) : (
+                  <form onSubmit={handleSaveAzureConnection} className="space-y-5 text-xs">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Tenant ID</span>
+                        <input
+                          type="text"
+                          required
+                          value={azureForm.tenant_id}
+                          onChange={(e) => handleAzureFieldChange("tenant_id", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Subscription ID</span>
+                        <input
+                          type="text"
+                          required
+                          value={azureForm.subscription_id}
+                          onChange={(e) => handleAzureFieldChange("subscription_id", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Client ID</span>
+                        <input
+                          type="text"
+                          value={azureForm.client_id}
+                          onChange={(e) => handleAzureFieldChange("client_id", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Client Secret</span>
+                        <input
+                          type="password"
+                          value={azureForm.client_secret}
+                          onChange={(e) => handleAzureFieldChange("client_secret", e.target.value)}
+                          placeholder={azureConnection?.connected ? "Leave blank to keep existing" : "Optional for managed identity"}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Region</span>
+                        <input
+                          type="text"
+                          value={azureForm.region}
+                          onChange={(e) => handleAzureFieldChange("region", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">Resource Group</span>
+                        <input
+                          type="text"
+                          value={azureForm.resource_group}
+                          onChange={(e) => handleAzureFieldChange("resource_group", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">ACR Login Server</span>
+                        <input
+                          type="text"
+                          required
+                          value={azureForm.acr_login_server}
+                          onChange={(e) => handleAzureFieldChange("acr_login_server", e.target.value)}
+                          placeholder="myregistry.azurecr.io"
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="font-bold text-foreground-muted">AKS Cluster Name</span>
+                        <input
+                          type="text"
+                          required
+                          value={azureForm.aks_cluster_name}
+                          onChange={(e) => handleAzureFieldChange("aks_cluster_name", e.target.value)}
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                      <label className="space-y-1.5 md:col-span-2">
+                        <span className="font-bold text-foreground-muted">Namespace Prefix</span>
+                        <input
+                          type="text"
+                          value={azureForm.namespace_prefix}
+                          onChange={(e) => handleAzureFieldChange("namespace_prefix", e.target.value)}
+                          placeholder="team-or-customer-slug"
+                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-[11px] text-foreground-muted leading-relaxed">
+                      Deployments are isolated into namespaces derived from this prefix and the project name. The backend still requires the Azure runtime identity to have ACR push and AKS deploy permissions.
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={savingAzure}
+                        className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-md shadow-primary/10 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {savingAzure ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" /> Saving...
+                          </>
+                        ) : (
+                          "Save Azure Target"
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             </motion.div>
           )}

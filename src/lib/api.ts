@@ -377,6 +377,18 @@ export interface BillingOperation {
   consumed_at: string | null;
 }
 
+export interface AzureConnection {
+  connected: boolean;
+  tenant_id?: string | null;
+  subscription_id?: string | null;
+  client_id?: string | null;
+  region?: string | null;
+  resource_group?: string | null;
+  acr_login_server?: string | null;
+  aks_cluster_name?: string | null;
+  namespace_prefix?: string | null;
+}
+
 export interface SystemHealth {
   status: string;
   service: string;
@@ -515,6 +527,25 @@ export const api = {
 
   resetOnboarding: () =>
     request<{ status: string; message: string }>("/api/user/reset", { method: "POST" }),
+
+  // ── Azure Deployment Target ──
+  getAzureConnection: () => request<AzureConnection>("/api/azure/connection"),
+
+  updateAzureConnection: (data: {
+    tenant_id: string;
+    subscription_id: string;
+    client_id?: string;
+    client_secret?: string;
+    region?: string;
+    resource_group?: string;
+    acr_login_server?: string;
+    aks_cluster_name?: string;
+    namespace_prefix?: string;
+  }) =>
+    request<AzureConnection>("/api/azure/connection", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
 
   // ── GitHub OAuth ──
   getGitHubStatus: () => request<GitHubStatus>("/api/github/status"),

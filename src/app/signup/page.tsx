@@ -8,9 +8,10 @@ import { useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function SignupPage() {
-  const { signup, loginWithGitHub } = useAuth();
+  const { signup, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
+  const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -139,7 +140,16 @@ export default function SignupPage() {
 
           {/* Social login buttons */}
           <div className="grid grid-cols-2 gap-4 w-full">
-            <SocialButton icon={ChromeIcon} label="Google" />
+            <SocialButton
+              icon={ChromeIcon}
+              label={isGoogleRedirecting ? "Redirecting..." : "Google"}
+              disabled={isGoogleRedirecting}
+              loading={isGoogleRedirecting}
+              onClick={() => {
+                setIsGoogleRedirecting(true);
+                loginWithGoogle();
+              }}
+            />
             <button
               type="button"
               onClick={() => {
@@ -293,16 +303,28 @@ function StepItem({
 function SocialButton({
   icon: Icon,
   label,
+  onClick,
+  disabled,
+  loading,
 }: {
   icon: React.ComponentType<{ size?: number }>;
   label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  loading?: boolean;
 }) {
   return (
     <button
       type="button"
-      className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
     >
-      <Icon size={18} />
+      {loading ? (
+        <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
+      ) : (
+        <Icon size={18} />
+      )}
       <span className="text-sm">{label}</span>
     </button>
   );

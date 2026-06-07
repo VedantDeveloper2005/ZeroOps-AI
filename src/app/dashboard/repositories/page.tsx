@@ -324,8 +324,15 @@ export default function RepositoriesPage() {
       addToast("Run repository analysis before deploying.", "error");
       return;
     }
-    addToast(`Launching deployment for ${selectedRepo}...`, "info");
     try {
+      const azureConnection = await api.getAzureConnection();
+      if (!azureConnection.connected || !azureConnection.acr_login_server || !azureConnection.aks_cluster_name) {
+        addToast("Configure your Azure deployment target before launching.", "warning");
+        router.push("/dashboard/settings?tab=azure");
+        return;
+      }
+
+      addToast(`Launching deployment for ${selectedRepo}...`, "info");
       const selectedRepoObj = gitRepos.find((repo) => repo.full_name === selectedRepo);
       const project = uploadedProjectId
         ? await api.getProject(uploadedProjectId)
