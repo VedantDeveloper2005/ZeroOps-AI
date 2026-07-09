@@ -516,3 +516,61 @@ async def list_resources(user_id: uuid.UUID, params: dict, db) -> dict:
     except Exception as e:
         logger.error(f"list_resources failed: {e}")
         return {"success": False, "error": str(e)}
+
+async def inject_dependency_impl(user_id: uuid.UUID, params: dict, db) -> dict:
+    """Commit code changes to package.json or requirements.txt on approved self-healing action."""
+    project_id = params.get("project_id")
+    package_name = params.get("package_name")
+    
+    if not project_id or not package_name:
+        return {"success": False, "error": "project_id and package_name are required."}
+        
+    try:
+        proj_uuid = uuid.UUID(project_id) if isinstance(project_id, str) else project_id
+        result = await db.execute(select(models.Project).filter(models.Project.id == proj_uuid))
+        project = result.scalars().first()
+        if not project:
+            return {"success": False, "error": f"Project {project_id} not found."}
+            
+        from backend.services import git
+        repo_path = git.get_repo_path(project.full_name)
+        if not os.path.exists(repo_path):
+            return {"success": False, "error": f"Local repository path {repo_path} does not exist."}
+            
+        package_json_path = os.path.join(repo_path, "package.json")
+        req_txt_path = os.path.join(repo_path, "requirements.txt")
+        
+        fix_applied = False
+        import json
+        
+        if os.path.exists(package_json_path):
+            with open(package_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if "dependencies" not in data:
+                data["dependencies"] = {}
+            data["dependencies"][package_name] = "latest"
+            with open(package_json_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            fix_applied = True
+            
+        elif os.path.exists(req_txt_path):
+            with open(req_txt_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{package_name}\n")
+            fix_applied = True
+            
+        if not fix_applied:
+            return {"success": False, "error": "Neither package.json nor requirements.txt found in repository."}
+            
+        db.add(models.ActivityEvent(
+            user_id=user_id,
+            project_id=project.id,
+            action="AI Auto-Fix: Dependency Injected",
+            details=f"Injected package '{package_name}' into dependencies list."
+        ))
+        await db.commit()
+        
+        return {"success": True, "detail": f"Successfully injected dependency '{package_name}' into manifest."}
+    except Exception as e:
+        logger.error(f"inject_dependency_impl failed: {e}")
+        return {"success": False, "error": str(e)}
+

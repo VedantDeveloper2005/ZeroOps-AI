@@ -60,6 +60,44 @@ RATE_LIMIT_WINDOW = 60  # 1 minute window
 request_counts = defaultdict(list)
 
 @app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/ws") or path in ["/docs", "/openapi.json", "/favicon.ico"]:
+        return await call_next(request)
+        
+    has_cookie_auth = "session_token" in request.cookies or "refresh_token" in request.cookies
+    
+    if request.method in ["POST", "PUT", "DELETE", "PATCH"] and has_cookie_auth:
+        cookie_csrf = request.cookies.get("csrf_token")
+        header_csrf = request.headers.get("x-csrf-token") or request.headers.get("X-CSRF-Token")
+        
+        if not cookie_csrf or not header_csrf or cookie_csrf != header_csrf:
+            logger.warning(f"CSRF validation failed for path {path}. Cookie: {bool(cookie_csrf)}, Header: {bool(header_csrf)}")
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token validation failed. Missing or mismatched token."}
+            )
+            
+    response = await call_next(request)
+    
+    # Generate and set csrf_token cookie if missing
+    if "csrf_token" not in request.cookies:
+        import secrets
+        token = secrets.token_urlsafe(32)
+        is_prod = config.APP_ENV == "production"
+        response.set_cookie(
+            key="csrf_token",
+            value=token,
+            httponly=False,  # JavaScript must be able to read it
+            max_age=3600 * 24 * 7,  # 7 days
+            samesite="none" if is_prod else "lax",
+            secure=is_prod
+        )
+        
+    return response
+
+
+@app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
     

@@ -259,6 +259,8 @@ async def run_migrations():
         # Azure BYOS: pending_approvals indexes
         "CREATE INDEX IF NOT EXISTS ix_pending_approvals_user_id ON pending_approvals(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_pending_approvals_status ON pending_approvals(status)",
+        # Azure BYOS: add raw_parameters column to pending_approvals
+        "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS raw_parameters JSON DEFAULT '{}'",
 
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN

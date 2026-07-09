@@ -187,6 +187,7 @@ async def test_decide_approval_approve(db_session):
         user_id=user.id,
         action_type="delete_resource",
         parameters={"resource_id": "test-res-id"},
+        raw_parameters={"resource_id": "test-res-id"},
         risk_tier="high",
         status="pending"
     )
@@ -237,6 +238,7 @@ async def test_decide_approval_deny(db_session):
         user_id=user.id,
         action_type="delete_resource",
         parameters={"resource_id": "test-res-id"},
+        raw_parameters={"resource_id": "test-res-id"},
         risk_tier="high",
         status="pending"
     )
@@ -260,3 +262,232 @@ async def test_decide_approval_deny(db_session):
     assert audit.approval_status == "denied"
     assert audit.result_status == "failed"
     assert "Denied by administrator" in audit.result_detail
+
+@pytest.mark.asyncio
+async def test_unredacted_parameter_execution_regression(db_session):
+    result_user = await db_session.execute(select(models.User))
+    user = result_user.scalars().first()
+    
+    conn = models.UserAzureConnection(
+        user_id=user.id,
+        tenant_id="mock",
+        client_id="mock",
+        subscription_id="mock-sub",
+        resource_group="mock-rg",
+        connection_status="connected"
+    )
+    db_session.add(conn)
+    azure_connector.store_credential_in_vault(user.id, "mock")
+    await db_session.commit()
+    
+    # Execute high-risk action through gateway. Parameters contain a "key" word.
+    res = await action_gateway.execute_azure_action(
+        user_id=user.id,
+        agent_name="scaling_agent",
+        action_type="delete_resource",
+        parameters={"resource_id": "test-res-id", "ssh_public_key": "actual-value-123"},
+        db=db_session
+    )
+    
+    approval_id = uuid.UUID(res["approval_id"])
+    result_pending = await db_session.execute(
+        select(models.PendingApproval).filter(models.PendingApproval.id == approval_id)
+    )
+    pending = result_pending.scalars().first()
+    
+    # Assert parameters are redacted for DB/UI
+    assert pending.parameters["ssh_public_key"] == "<REDACTED>"
+    # Assert raw_parameters are unredacted for execution
+    assert pending.raw_parameters["ssh_public_key"] == "actual-value-123"
+    
+    # Approve the action, and intercept the call to verify it gets the raw parameters
+    from unittest.mock import AsyncMock
+    mock_delete = AsyncMock(return_value={"success": True, "detail": "Success"})
+    
+    with patch.dict(action_gateway.ACTION_DISPATCHER, {"delete_resource": mock_delete}):
+        await action_gateway.decide_pending_action(
+            approval_id=approval_id,
+            decision="approved",
+            decided_by=user.id,
+            db=db_session
+        )
+        
+        # Assert the real SDK wrapper function received the raw, unredacted parameters
+        mock_delete.assert_called_once()
+        called_args = mock_delete.call_args[0]
+        assert called_args[1]["ssh_public_key"] == "actual-value-123"
+        
+    azure_connector.delete_credential_from_vault(user.id)
+
+@pytest.mark.asyncio
+async def test_cost_risk_rule_integration(db_session):
+    result_user = await db_session.execute(select(models.User))
+    user = result_user.scalars().first()
+    
+    # Create a project
+    project = models.Project(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="test-project",
+        full_name="test-org/test-project",
+        framework="nextjs",
+        language="typescript"
+    )
+    db_session.add(project)
+    
+    # Create an environment (production)
+    env = models.Environment(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        name="production"
+    )
+    db_session.add(env)
+    
+    conn = models.UserAzureConnection(
+        user_id=user.id,
+        tenant_id="mock",
+        client_id="mock",
+        subscription_id="mock-sub",
+        resource_group="mock-rg",
+        connection_status="connected"
+    )
+    db_session.add(conn)
+    azure_connector.store_credential_in_vault(user.id, "mock")
+    await db_session.commit()
+    
+    from backend.services.agent import NvidiaNIMDevOpsAgent
+    agent_instance = NvidiaNIMDevOpsAgent()
+    
+    # Scale request with 10 nodes (at $100/node = $1000, exceeding $50 threshold)
+    success = await agent_instance.scale_resources(
+        project_id=str(project.id),
+        min_replicas=1,
+        max_replicas=10,
+        db=db_session
+    )
+    
+    assert success is True
+    
+    # Assert that a PendingApproval was created for the scale action
+    result_pending = await db_session.execute(
+        select(models.PendingApproval).filter(models.PendingApproval.user_id == user.id)
+    )
+    pending = result_pending.scalars().first()
+    assert pending is not None
+    assert pending.action_type == "scale_aks_nodepool"
+    assert pending.parameters["node_count"] == 10
+    assert pending.parameters["estimated_cost_cents"] == 100000  # 10 * 10000 cents = 100,000 cents
+    assert pending.parameters["resource_tags"]["environment"] == "production"
+    
+    azure_connector.delete_credential_from_vault(user.id)
+
+@pytest.mark.asyncio
+async def test_auto_remediate_package_check_and_gating(db_session):
+    result_user = await db_session.execute(select(models.User))
+    user = result_user.scalars().first()
+    
+    project = models.Project(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="healing-project",
+        full_name="test-org/healing-project",
+        framework="nextjs",
+        language="typescript"
+    )
+    db_session.add(project)
+    
+    deployment = models.Deployment(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        user_id=user.id,
+        status="failed",
+        environment="production"
+    )
+    db_session.add(deployment)
+    
+    fa = models.FailureAnalysis(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        deployment_id=deployment.id,
+        user_id=user.id,
+        failure_summary="missing dependency 'non-existent-package-abc-123'",
+        root_cause="compilation failure",
+        recommended_fix="install 'non-existent-package-abc-123'",
+        severity="error"
+    )
+    db_session.add(fa)
+    await db_session.commit()
+    
+    from backend.services.agent import NvidiaNIMDevOpsAgent
+    agent_instance = NvidiaNIMDevOpsAgent()
+    
+    # Mock git.get_repo_path to return a valid directory containing package.json
+    import tempfile
+    import os
+    import json
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create mock package.json
+        with open(os.path.join(tmpdir, "package.json"), "w") as f:
+            json.dump({"dependencies": {}}, f)
+            
+        with patch("backend.services.git.get_repo_path") as mock_repo_path:
+            mock_repo_path.return_value = tmpdir
+            
+            # 1. Attempt remediation with non-existent package. Should return False (refused).
+            success = await agent_instance.auto_remediate_failure(
+                deployment_id=str(deployment.id),
+                failure_reason="missing dependency 'non-existent-package-abc-123'",
+                db=db_session
+            )
+            assert success is False
+            
+            # 2. Attempt remediation with a valid real package name (e.g. "lodash").
+            fa.failure_summary = "missing dependency 'lodash'"
+            fa.recommended_fix = "install 'lodash'"
+            await db_session.commit()
+            
+            # Store connection first
+            conn = models.UserAzureConnection(
+                user_id=user.id,
+                tenant_id="mock",
+                client_id="mock",
+                subscription_id="mock-sub",
+                resource_group="mock-rg",
+                connection_status="connected"
+            )
+            db_session.add(conn)
+            azure_connector.store_credential_in_vault(user.id, "mock")
+            await db_session.commit()
+            
+            success_ok = await agent_instance.auto_remediate_failure(
+                deployment_id=str(deployment.id),
+                failure_reason="missing dependency 'lodash'",
+                db=db_session
+            )
+            assert success_ok is True
+            
+            # Verify pending approval was created for "inject_dependency"
+            result_pending = await db_session.execute(
+                select(models.PendingApproval).filter(models.PendingApproval.action_type == "inject_dependency")
+            )
+            pending = result_pending.scalars().first()
+            assert pending is not None
+            assert pending.parameters["package_name"] == "lodash"
+            assert pending.status == "pending"
+            
+            # Approve it and verify file was written to disk
+            await action_gateway.decide_pending_action(
+                approval_id=pending.id,
+                decision="approved",
+                decided_by=user.id,
+                db=db_session
+            )
+            
+            # Verify lodash is now in the package.json
+            with open(os.path.join(tmpdir, "package.json"), "r") as f:
+                data = json.load(f)
+            assert data["dependencies"]["lodash"] == "latest"
+            
+            azure_connector.delete_credential_from_vault(user.id)
+

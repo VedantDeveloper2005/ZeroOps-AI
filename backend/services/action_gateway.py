@@ -22,7 +22,8 @@ ACTION_DISPATCHER = {
     "create_vnet": azure_connector.create_vnet,
     "create_storage_account": azure_connector.create_storage_account,
     "delete_resource": azure_connector.delete_resource,
-    "list_resources": azure_connector.list_resources
+    "list_resources": azure_connector.list_resources,
+    "inject_dependency": azure_connector.inject_dependency_impl
 }
 
 def redact_secrets(data: Any) -> Any:
@@ -75,6 +76,7 @@ async def execute_azure_action(
             user_id=user_id,
             action_type=action_type,
             parameters=clean_params,
+            raw_parameters=parameters,  # Unredacted copy for SDK execution
             risk_tier=risk_tier.value,
             status=models.ApprovalStatus.pending.value
         )
@@ -162,7 +164,7 @@ async def decide_pending_action(
             res = {"success": False, "error": f"Unsupported action type: {pending.action_type}"}
         else:
             try:
-                res = await func(pending.user_id, pending.parameters, db)
+                res = await func(pending.user_id, pending.raw_parameters, db)
             except Exception as e:
                 res = {"success": False, "error": str(e)}
                 

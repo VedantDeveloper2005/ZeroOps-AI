@@ -603,6 +603,7 @@ class PendingApproval(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     action_type = Column(Text, nullable=False)
     parameters = Column(JSON, default=dict)  # Secrets MUST be redacted
+    raw_parameters = Column(JSON, default=dict)  # Real unredacted parameters for execution
     risk_tier = Column(Text, default=RiskTier.high.value)
     status = Column(Text, default=ApprovalStatus.pending.value)  # pending, approved, denied
     decided_by = Column(UUID(as_uuid=True), nullable=True)

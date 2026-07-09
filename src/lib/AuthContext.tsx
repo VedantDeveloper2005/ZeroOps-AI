@@ -37,6 +37,18 @@ const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/,
 const GITHUB_OAUTH_PENDING_KEY = "zeroops.githubOAuth.pending";
 const GOOGLE_OAUTH_PENDING_KEY = "zeroops.googleOAuth.pending";
 
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const nameEQ = name + "=";
+  const ca = document.cookie.split(";");
+  for (let i = 0; i < ca.length; i++) {
+    let c = ca[i];
+    while (c.charAt(0) === " ") c = c.substring(1, c.length);
+    if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+  }
+  return null;
+}
+
 // Global fetch interceptor to automatically route client-side relative API requests to backend
 if (typeof window !== "undefined") {
   const originalFetch = window.fetch;
@@ -55,6 +67,20 @@ if (typeof window !== "undefined") {
       targetInput = `${API_BASE_URL}${targetInput}`;
     }
     
+    // Automatically include credentials for same-origin and configured cross-origin API calls
+    if (typeof targetInput === "string" && (targetInput.startsWith("/api/") || (API_BASE_URL && targetInput.startsWith(API_BASE_URL)))) {
+      initCopy.credentials = "include";
+    }
+    
+    // Automatically inject CSRF token header for state-changing calls
+    const method = initCopy.method ? initCopy.method.toUpperCase() : "GET";
+    if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+      const csrfToken = getCookie("csrf_token");
+      if (csrfToken) {
+        headers.set("X-CSRF-Token", csrfToken);
+      }
+    }
+    
     initCopy.headers = headers;
     return originalFetch(targetInput, initCopy);
   };
@@ -71,6 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const fetchCurrentUser = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+        credentials: "include",
         headers: {
           "Accept": "application/json",
         },
@@ -129,6 +156,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string): Promise<User> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -155,6 +183,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<User> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -193,7 +222,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Logout handler
   const logout = async () => {
     try {
-      await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST" });
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
     } catch (err) {
       console.error("Error during logout endpoint call:", err);
     }

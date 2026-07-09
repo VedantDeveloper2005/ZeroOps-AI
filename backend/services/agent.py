@@ -167,12 +167,34 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         if not conn:
             return {"success": False, "error": "No connected Azure connection found. Cannot provision infrastructure."}
 
+        # Hardcoded monthly rate table in cents per node for VM sizes
+        sku_rates = {
+            "Standard_DS2_v2": 10000,  # $100
+            "Standard_D2s_v3": 9000,   # $90
+            "Standard_D4s_v3": 18000,  # $180
+            "Standard_F2s_v2": 8500,   # $85
+        }
+        
+        node_count = requirements.get("node_count", 1)
+        vm_size = requirements.get("vm_size", "Standard_DS2_v2")
+        rate = sku_rates.get(vm_size, 8000)
+        estimated_cost_cents = node_count * rate
+        
+        # Query environment details for the project
+        env_result = await db.execute(
+            select(models.Environment).filter(models.Environment.project_id == project.id)
+        )
+        env = env_result.scalars().first()
+        env_name = env.name if env else "production"
+        
         action_params = {
             "cluster_name": requirements.get("cluster_name", f"aks-{project.name}"),
             "location": requirements.get("location", conn.region or "eastus"),
             "dns_prefix": requirements.get("dns_prefix", f"aks-{project.name}-dns"),
-            "node_count": requirements.get("node_count", 1),
-            "vm_size": requirements.get("vm_size", "Standard_DS2_v2")
+            "node_count": node_count,
+            "vm_size": vm_size,
+            "estimated_cost_cents": estimated_cost_cents,
+            "resource_tags": {"environment": env_name}
         }
 
         res = await action_gateway.execute_azure_action(
@@ -183,6 +205,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
             db=db
         )
         return res
+
 
     async def restart_failed_service(
         self, 
@@ -220,10 +243,31 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
             logger.error(f"Project {project_id} not found.")
             return False
 
+        # Hardcoded monthly rate table in cents per node for VM sizes
+        sku_rates = {
+            "Standard_DS2_v2": 10000,  # $100
+            "Standard_D2s_v3": 9000,   # $90
+            "Standard_D4s_v3": 18000,  # $180
+            "Standard_F2s_v2": 8500,   # $85
+        }
+        vm_size = "Standard_DS2_v2"  # Default VM size for scaling nodepool
+        rate = sku_rates.get(vm_size, 8000)
+        estimated_cost_cents = max_replicas * rate
+        
+        # Query environment details for the project
+        env_result = await db.execute(
+            select(models.Environment).filter(models.Environment.project_id == project.id)
+        )
+        env = env_result.scalars().first()
+        env_name = env.name if env else "production"
+
         action_params = {
             "cluster_name": project.name,
             "node_pool_name": "nodepool1",
-            "node_count": max_replicas
+            "node_count": max_replicas,
+            "vm_size": vm_size,
+            "estimated_cost_cents": estimated_cost_cents,
+            "resource_tags": {"environment": env_name}
         }
 
         res = await action_gateway.execute_azure_action(
@@ -234,6 +278,7 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
             db=db
         )
         return res.get("success", False)
+
 
     async def analyze_incident(
         self, 
@@ -316,53 +361,51 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
                 logger.warning("Auto-Remediate: No explicit package name found in failure analysis; refusing to guess a dependency.")
                 return False
             
-            # Apply fix to package.json (Node/Nextjs)
-            package_json_path = os.path.join(repo_path, "package.json")
-            if os.path.exists(package_json_path):
-                try:
-                    with open(package_json_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    
-                    if "dependencies" not in data:
-                        data["dependencies"] = {}
-                        
-                    # Inject package
-                    data["dependencies"][package_name] = "latest"
-                    fix_applied = True
-                    logger.info(f"Auto-Remediate: Injected dependency '{package_name}' into package.json")
-                    
-                    with open(package_json_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
-                        
-                    # Add an ActivityEvent for this fix
-                    db.add(models.ActivityEvent(
-                        user_id=deployment.user_id,
-                        project_id=project.id,
-                        action="AI Auto-Fix: Dependency Injected",
-                        details=f"Injected package '{package_name}' into package.json dependencies list to resolve compilation error."
-                    ))
-                    await db.commit()
-                except Exception as ex:
-                    logger.error(f"Auto-Remediate: Failed to modify package.json: {ex}")
+            # Verify the package exists on the public registry before writing it
+            package_exists = False
+            import requests
             
-            # Apply fix to requirements.txt (Python)
+            package_json_path = os.path.join(repo_path, "package.json")
             req_txt_path = os.path.join(repo_path, "requirements.txt")
-            if os.path.exists(req_txt_path):
+            
+            if os.path.exists(package_json_path):
+                # Query npm registry
                 try:
-                    with open(req_txt_path, "a", encoding="utf-8") as f:
-                        f.write(f"\n{package_name}\n")
-                    fix_applied = True
-                    logger.info(f"Auto-Remediate: Appended '{package_name}' to requirements.txt")
-                    
-                    db.add(models.ActivityEvent(
-                        user_id=deployment.user_id,
-                        project_id=project.id,
-                        action="AI Auto-Fix: Dependency Injected",
-                        details=f"Appended dependency '{package_name}' to requirements.txt file."
-                    ))
-                    await db.commit()
-                except Exception as ex:
-                    logger.error(f"Auto-Remediate: Failed to append to requirements.txt: {ex}")
+                    escaped_name = package_name.replace("/", "%2F")
+                    url = f"https://registry.npmjs.org/{escaped_name}"
+                    res = requests.get(url, timeout=5)
+                    package_exists = (res.status_code == 200)
+                except Exception as e:
+                    logger.error(f"Failed to check npm registry for package {package_name}: {e}")
+            elif os.path.exists(req_txt_path):
+                # Query PyPI registry
+                try:
+                    url = f"https://pypi.org/pypi/{package_name}/json"
+                    res = requests.get(url, timeout=5)
+                    package_exists = (res.status_code == 200)
+                except Exception as e:
+                    logger.error(f"Failed to check PyPI registry for package {package_name}: {e}")
+            
+            if not package_exists:
+                logger.error(f"Auto-Remediate: Package '{package_name}' does not exist on the public registry. Refusing to inject.")
+                return False
+                
+            # Route action through action gateway (classified as high risk by default)
+            from backend.services import action_gateway
+            action_res = await action_gateway.execute_azure_action(
+                user_id=deployment.user_id,
+                agent_name="healing_agent",
+                action_type="inject_dependency",
+                parameters={
+                    "project_id": str(project.id),
+                    "package_name": package_name
+                },
+                db=db
+            )
+            
+            logger.info(f"Auto-Remediate: Gated dependency injection of '{package_name}'. Gateway response: {action_res}")
+            fix_applied = True
+
                     
         # 4. Check for DATABASE_URL / missing env vars
         elif "database_url" in summary_text.lower() or "database_url" in fix_text.lower() or "db" in summary_text.lower():

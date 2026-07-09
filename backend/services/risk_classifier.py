@@ -71,5 +71,11 @@ def classify(action_type: str, parameters: dict) -> models.RiskTier:
             logger.info(f"High risk classified: Production change requested outside maintenance window ({config.MAINTENANCE_WINDOW_UTC or 'none defined'})")
             return models.RiskTier.high
             
+    # Rule 6: Code mutation or package dependency injection (always high risk by default)
+    if any(k in action for k in ["dependency", "code", "remediate", "package", "inject"]):
+        logger.info(f"High risk classified: Code/Dependency mutation detected in '{action_type}'")
+        return models.RiskTier.high
+
     # Default: Low Risk
     return models.RiskTier.low
+
