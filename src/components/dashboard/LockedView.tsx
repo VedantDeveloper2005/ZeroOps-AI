@@ -23,17 +23,17 @@ export function LockedView({
       <div className="absolute -top-10 -left-10 w-48 h-48 bg-primary/20 rounded-full blur-3xl opacity-50" />
       <div className="absolute -bottom-10 -right-10 w-48 h-48 bg-accent/20 rounded-full blur-3xl opacity-50" />
       
-      {/* Background decoration representing locked logs/charts */}
-      <div className="absolute inset-0 flex flex-col justify-around p-8 opacity-10 pointer-events-none select-none font-mono text-left text-[10px]">
-        <div>[09:04:12] INFO auth-service - JWT token validated for user_id=usr_2847</div>
-        <div>[09:04:15] WARN payments-service - DB connection pool at 82% capacity</div>
+      {/* Background decoration representing locked operational panels */}
+      <div className="absolute inset-0 flex flex-col justify-around p-8 opacity-10 pointer-events-none select-none" aria-hidden="true">
+        <div className="h-2 w-2/3 rounded-full bg-primary" />
+        <div className="h-2 w-1/2 rounded-full bg-foreground-muted" />
         <div className="flex gap-2 items-end h-8">
-          <div className="bg-primary w-2 h-4" />
-          <div className="bg-primary w-2 h-6" />
-          <div className="bg-primary w-2 h-5" />
-          <div className="bg-primary w-2 h-8" />
+          <div className="bg-primary w-2 h-4 rounded-t" />
+          <div className="bg-primary w-2 h-6 rounded-t" />
+          <div className="bg-primary w-2 h-5 rounded-t" />
+          <div className="bg-primary w-2 h-8 rounded-t" />
         </div>
-        <div>[09:04:20] INFO api-gateway - GET /api/deployments 200 12ms</div>
+        <div className="h-2 w-3/4 rounded-full bg-accent" />
       </div>
 
       {/* Lock Card Content */}

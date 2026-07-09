@@ -83,6 +83,31 @@ class AIActionStatus(str, enum.Enum):
     dismissed = "dismissed"
 
 
+class AzureConnectionStatus(str, enum.Enum):
+    pending = "pending"
+    connected = "connected"
+    revoked = "revoked"
+    error = "error"
+
+
+class RiskTier(str, enum.Enum):
+    low = "low"
+    high = "high"
+
+
+class ApprovalStatus(str, enum.Enum):
+    not_required = "not_required"
+    pending = "pending"
+    approved = "approved"
+    denied = "denied"
+
+
+class AuditResultStatus(str, enum.Enum):
+    success = "success"
+    failed = "failed"
+    pending = "pending"
+
+
 # ──────────────────────────────────────────────
 # USERS
 # ──────────────────────────────────────────────
@@ -122,8 +147,11 @@ class User(Base):
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="user", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="user", cascade="all, delete-orphan")
     azure_connections = relationship("UserAzureConnection", back_populates="user", cascade="all, delete-orphan")
+    gke_connections = relationship("UserGkeConnection", back_populates="user", cascade="all, delete-orphan")
     billing_operations = relationship("BillingOperation", back_populates="user", cascade="all, delete-orphan")
     code_uploads = relationship("CodeUpload", back_populates="user", cascade="all, delete-orphan")
+    audit_log_entries = relationship("AuditLogEntry", back_populates="user", cascade="all, delete-orphan")
+    pending_approvals = relationship("PendingApproval", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -205,7 +233,7 @@ class Deployment(Base):
     completed_at = Column(DateTime, nullable=True)
     failure_reason = Column(Text, nullable=True)
     infrastructure_metadata = Column(JSON, nullable=True)
- 
+
     # Relationships
     user = relationship("User", back_populates="deployments")
     project = relationship("Project", back_populates="deployments")
@@ -335,7 +363,6 @@ class AIAnalysis(Base):
     recommended_region = Column(Text, nullable=True)
     expected_traffic = Column(Text, nullable=True)
     pricing_breakdown = Column(JSON, nullable=True)
-
 
     # Relationships
     project = relationship("Project", back_populates="ai_analyses")
@@ -501,7 +528,7 @@ class RevokedToken(Base):
 
 
 # ──────────────────────────────────────────────
-# DEPLOYMENT RECOMMENDATIONS
+# AZURE BYOS – USER CONNECTIONS
 # ──────────────────────────────────────────────
 
 class UserAzureConnection(Base):
@@ -512,7 +539,11 @@ class UserAzureConnection(Base):
     tenant_id = Column(Text, nullable=False)
     subscription_id = Column(Text, nullable=False)
     client_id = Column(Text, nullable=True)
-    client_secret_encrypted = Column(Text, nullable=True)
+    # NOTE: client_secret is NEVER stored in the database.
+    # It is stored exclusively in Azure Key Vault at path: zeroops-{user_id}-sp-client-secret
+    connection_status = Column(
+        Text, default=AzureConnectionStatus.pending.value
+    )  # pending, connected, revoked, error
     region = Column(Text, default="eastus")
     resource_group = Column(Text, nullable=True)
     acr_login_server = Column(Text, nullable=True)
@@ -528,6 +559,96 @@ class UserAzureConnection(Base):
         Index("ix_user_azure_connections_user_id", "user_id"),
     )
 
+
+# ──────────────────────────────────────────────
+# AZURE BYOS AUDIT LOG
+# ──────────────────────────────────────────────
+
+class AuditLogEntry(Base):
+    __tablename__ = "audit_log_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    agent_name = Column(Text, nullable=False)  # e.g. "pipeline", "scaling_agent"
+    action_type = Column(Text, nullable=False)  # e.g. "aks_cluster_create", "resource_delete"
+    parameters = Column(JSON, default=dict)  # Secrets MUST be redacted before storage
+    risk_tier = Column(Text, default=RiskTier.low.value)  # "low" or "high"
+    approval_status = Column(
+        Text, default=ApprovalStatus.not_required.value
+    )  # not_required, pending, approved, denied
+    approved_by = Column(UUID(as_uuid=True), nullable=True)  # user_id of approver
+    result_status = Column(
+        Text, default=AuditResultStatus.pending.value
+    )  # pending, success, failed
+    result_detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="audit_log_entries")
+
+    __table_args__ = (
+        Index("ix_audit_log_entries_user_id", "user_id"),
+        Index("ix_audit_log_entries_created_at", "created_at"),
+    )
+
+
+# ──────────────────────────────────────────────
+# PENDING APPROVALS (high-risk action queue)
+# ──────────────────────────────────────────────
+
+class PendingApproval(Base):
+    __tablename__ = "pending_approvals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    audit_log_id = Column(UUID(as_uuid=True), ForeignKey("audit_log_entries.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    action_type = Column(Text, nullable=False)
+    parameters = Column(JSON, default=dict)  # Secrets MUST be redacted
+    risk_tier = Column(Text, default=RiskTier.high.value)
+    status = Column(Text, default=ApprovalStatus.pending.value)  # pending, approved, denied
+    decided_by = Column(UUID(as_uuid=True), nullable=True)
+    decided_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    audit_log = relationship("AuditLogEntry")
+    user = relationship("User", back_populates="pending_approvals")
+
+    __table_args__ = (
+        Index("ix_pending_approvals_user_id", "user_id"),
+        Index("ix_pending_approvals_status", "status"),
+    )
+
+
+# ──────────────────────────────────────────────
+# GKE USER CONNECTIONS
+# ──────────────────────────────────────────────
+
+class UserGkeConnection(Base):
+    __tablename__ = "user_gke_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    gcp_project_id = Column(Text, nullable=False)
+    service_account_email = Column(Text, nullable=True)
+    service_account_json_encrypted = Column(Text, nullable=True)
+    location = Column(Text, default="us-central1")
+    cluster_name = Column(Text, nullable=True)
+    artifact_registry_host = Column(Text, nullable=True)
+    artifact_registry_repository = Column(Text, nullable=True)
+    namespace_prefix = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="gke_connections")
+
+    __table_args__ = (
+        Index("ix_user_gke_connections_user_id", "user_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# BILLING OPERATIONS
+# ──────────────────────────────────────────────
 
 class BillingOperation(Base):
     __tablename__ = "billing_operations"
@@ -555,6 +676,10 @@ class BillingOperation(Base):
     )
 
 
+# ──────────────────────────────────────────────
+# CODE UPLOADS
+# ──────────────────────────────────────────────
+
 class CodeUpload(Base):
     __tablename__ = "code_uploads"
 
@@ -575,6 +700,10 @@ class CodeUpload(Base):
         Index("ix_code_uploads_project_id", "project_id"),
     )
 
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT RECOMMENDATIONS
+# ──────────────────────────────────────────────
 
 class DeploymentRecommendation(Base):
     __tablename__ = "deployment_recommendations"

@@ -11,13 +11,13 @@ PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
 IS_PRODUCTION = APP_ENV == "production"
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
-FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"))
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "").rstrip("/")
+FRONTEND_URL = os.getenv("FRONTEND_URL", FRONTEND_ORIGIN).rstrip("/")
+if not FRONTEND_URL and not IS_PRODUCTION:
+    FRONTEND_URL = "http://localhost:3000"
 ZEROOPS_BACKEND_URL = os.getenv("ZEROOPS_BACKEND_URL", "")
 
-DEFAULT_ALLOWED_ORIGINS = [
-    "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"
-]
+DEFAULT_ALLOWED_ORIGINS = [FRONTEND_URL] if FRONTEND_URL else []
 
 if not IS_PRODUCTION:
     DEFAULT_ALLOWED_ORIGINS.extend([
@@ -45,6 +45,9 @@ for url in [FRONTEND_ORIGIN, FRONTEND_URL]:
         clean_url = url.rstrip("/")
         if clean_url not in CORS_ORIGINS:
             CORS_ORIGINS.append(clean_url)
+
+# Remove duplicates while preserving order
+CORS_ORIGINS = list(dict.fromkeys(CORS_ORIGINS))
 
 ALLOW_CREDENTIALS = True
 
@@ -78,6 +81,17 @@ GOOGLE_OAUTH_SCOPES = os.getenv("GOOGLE_OAUTH_SCOPES", "openid email profile")
 # Azure deployment configuration. User-specific Azure targets are stored in DB.
 AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
+
+# Azure BYOS (Bring Your Own Subscription) configuration
+# ZeroOps Key Vault URL – used to store customer SP secrets via Managed Identity.
+# Leave empty to fall back to local mock secret storage (dev only).
+AZURE_KEYVAULT_URL = os.getenv("AZURE_KEYVAULT_URL", "")
+
+# Risk classifier thresholds
+RISK_COST_THRESHOLD_CENTS = int(os.getenv("RISK_COST_THRESHOLD_CENTS", "5000"))  # $50
+# UTC time range during which production changes are allowed without high-risk escalation.
+# Format: "HH:MM-HH:MM" e.g. "02:00-06:00". Empty = all production ops require approval.
+MAINTENANCE_WINDOW_UTC = os.getenv("MAINTENANCE_WINDOW_UTC", "")
 
 # Paid AI operation controls
 PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "manual")
@@ -125,6 +139,12 @@ if IS_PRODUCTION and not DATABASE_URL:
 if IS_PRODUCTION and not JWT_SECRET:
     raise RuntimeError("JWT_SECRET must be configured when APP_ENV=production.")
 
+if IS_PRODUCTION and not FRONTEND_URL:
+    raise RuntimeError("FRONTEND_URL or FRONTEND_ORIGIN must be configured when APP_ENV=production.")
+
+if IS_PRODUCTION and FRONTEND_URL.lower().startswith("http://"):
+    raise RuntimeError("FRONTEND_URL must use HTTPS when APP_ENV=production.")
+
 if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     print("  WARNING: JWT_SECRET is not set. Generated an ephemeral local-development secret.")
@@ -140,4 +160,3 @@ print(f"  Database Configured: {bool(DATABASE_URL)}")
 print(f"  JWT Secret Configured: {bool(JWT_SECRET)}")
 if not DATABASE_URL:
     print("  WARNING: DATABASE_URL is not set. Database storage features will be unavailable.")
-

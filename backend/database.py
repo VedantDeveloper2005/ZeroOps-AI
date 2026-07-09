@@ -234,10 +234,31 @@ async def run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_failure_analyses_project_id ON failure_analyses(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_failure_analyses_deployment_id ON failure_analyses(deployment_id)",
         "CREATE INDEX IF NOT EXISTS ix_user_azure_connections_user_id ON user_azure_connections(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_user_gke_connections_user_id ON user_gke_connections(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_billing_operations_user_id ON billing_operations(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_billing_operations_status ON billing_operations(status)",
         "CREATE INDEX IF NOT EXISTS ix_code_uploads_user_id ON code_uploads(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_code_uploads_project_id ON code_uploads(project_id)",
+
+        # Azure BYOS: add connection_status column to user_azure_connections
+        "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS connection_status TEXT DEFAULT 'pending'",
+        # Drop the obsolete client_secret_encrypted column (secrets go to Key Vault only)
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'user_azure_connections' AND column_name = 'client_secret_encrypted'
+            ) THEN
+                ALTER TABLE user_azure_connections DROP COLUMN client_secret_encrypted;
+            END IF;
+        END $$""",
+
+        # Azure BYOS: audit_log_entries indexes
+        "CREATE INDEX IF NOT EXISTS ix_audit_log_entries_user_id ON audit_log_entries(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_log_entries_created_at ON audit_log_entries(created_at)",
+
+        # Azure BYOS: pending_approvals indexes
+        "CREATE INDEX IF NOT EXISTS ix_pending_approvals_user_id ON pending_approvals(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_pending_approvals_status ON pending_approvals(status)",
 
         # Partial unique index for github_id (only non-null values)
         """DO $$ BEGIN

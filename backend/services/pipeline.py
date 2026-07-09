@@ -10,11 +10,11 @@ from fastapi import WebSocket
 from sqlalchemy.future import select
 
 try:
-    from backend.services import git, ai, builder, k8s, vault
+    from backend.services import git, ai, builder, k8s, vault, deployment_targets, github_oauth
     from backend.database import AsyncSessionLocal
     from backend import models, config
 except ImportError:
-    from services import git, ai, builder, k8s, vault
+    from services import git, ai, builder, k8s, vault, deployment_targets, github_oauth
     from database import AsyncSessionLocal
     import models, config
 
@@ -179,22 +179,51 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             )
             deployment = result.scalars().first()
             project = deployment.project
+            from sqlalchemy import or_
             azure_result = await db.execute(
                 select(models.UserAzureConnection)
-                .filter(models.UserAzureConnection.user_id == deployment.user_id, models.UserAzureConnection.is_active == True)
+                .filter(
+                    models.UserAzureConnection.user_id == deployment.user_id,
+                    or_(
+                        models.UserAzureConnection.connection_status == "connected",
+                        models.UserAzureConnection.is_active == True
+                    )
+                )
                 .order_by(models.UserAzureConnection.created_at.desc())
                 .limit(1)
             )
             azure_connection = azure_result.scalars().first()
-            if not azure_connection:
-                raise RuntimeError("Azure connection is not configured for this user.")
-            if not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
-                raise RuntimeError("Azure connection must include ACR login server and AKS cluster name.")
+            gke_result = await db.execute(
+                select(models.UserGkeConnection)
+                .filter(models.UserGkeConnection.user_id == deployment.user_id, models.UserGkeConnection.is_active == True)
+                .order_by(models.UserGkeConnection.created_at.desc())
+                .limit(1)
+            )
+            gke_connection = gke_result.scalars().first()
+            target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+            if not target_status["any_ready"]:
+                raise RuntimeError("No deployment target is ready. Configure Azure AKS or Google GKE before deployment.")
 
-            namespace_prefix = azure_connection.namespace_prefix or f"user-{str(deployment.user_id)[:8]}"
+            requested_provider = (deployment.infrastructure_metadata or {}).get("target_provider", "auto")
+            initial_hint = {
+                "framework": project.framework,
+                "language": project.language,
+                "deployment_strategy": (deployment.infrastructure_metadata or {}).get("target_reason"),
+            }
+            selected_target = deployment_targets.choose_target(
+                initial_hint,
+                azure_connection,
+                gke_connection,
+                requested_provider,
+            )
+            namespace_prefix = deployment_targets.namespace_prefix(selected_target, deployment.user_id)
             project_id_raw = normalize_project_id(f"{namespace_prefix}-{project.name}")
             ns_name = f"zeroops-{project_id_raw}"
-            image_ref = deployment.image or f"{azure_connection.acr_login_server}/{project_id_raw}:{deployment.version or 'latest'}"
+            image_ref = deployment.image or deployment_targets.image_ref_for_target(
+                selected_target,
+                project_id_raw,
+                deployment.version or "latest",
+            )
             if config.ZEROOPS_PUBLIC_BASE_DOMAIN:
                 live_url = f"https://{project_id_raw}.{config.ZEROOPS_PUBLIC_BASE_DOMAIN}"
             
@@ -206,6 +235,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await p_logger.log(f"$ zeroops deploy --repo {repo_name} --env production", "command")
             await p_logger.log("ZeroOps AI deployment engine online", "info")
             await p_logger.log(f"> Project identity resolved: {project_id_raw}", "info")
+            await p_logger.log(f"> Cloud target: {selected_target.label} ({selected_target.reason})", "info")
             await p_logger.log(f"> Namespace target: {ns_name}", "info")
             await asyncio.sleep(0.5)
             await p_logger.log("  ✓ Repository configuration verified.", "success")
@@ -388,10 +418,10 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                     if var_key not in existing_vars:
                         raise RuntimeError(
                             f"{db_dep} dependency detected but {var_key} is not configured. "
-                            "Add a real Azure database connection string before deploying."
+                            "Add a real database connection string before deploying."
                         )
                     await p_logger.log(f"  Database dependency {db_dep} will use configured {var_key}.", "info")
-                await p_logger.log("  Automatic database provisioning is disabled; using configured Azure resources only.", "info")
+                await p_logger.log("  Automatic database provisioning is disabled; using configured external database resources only.", "info")
                 db_deps = []
             if db_deps:
                 for db_dep in db_deps:
@@ -489,6 +519,27 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await update_stage(7, "active", "...")
             build_start = time.time()
             image_name, image_tag = image_ref.rsplit(":", 1) if ":" in image_ref else (image_ref, "latest")
+
+            if selected_target.provider == "gke":
+                await p_logger.log("▸ Preparing Google GKE deployment context...", "info")
+                service_account_json = None
+                encrypted_json = getattr(selected_target.connection, "service_account_json_encrypted", None)
+                if encrypted_json:
+                    try:
+                        service_account_json = github_oauth.decrypt_token(encrypted_json)
+                    except Exception as cred_err:
+                        raise RuntimeError("Stored GKE service account credentials could not be decrypted.") from cred_err
+
+                for log_line in k8s.configure_gke_context(
+                    gcp_project_id=selected_target.connection.gcp_project_id,
+                    cluster_name=selected_target.connection.cluster_name,
+                    location=selected_target.connection.location,
+                    artifact_registry_host=selected_target.connection.artifact_registry_host,
+                    service_account_json=service_account_json,
+                ):
+                    await p_logger.log(log_line.strip(), "info")
+                    await asyncio.sleep(0.01)
+
             await p_logger.log(f"$ docker build -t {image_ref} .", "command")
             for log_line in builder.build_and_tag_image(repo_path, image_name, image_tag):
                 await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
@@ -577,6 +628,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             
             deployment.status = "running"
             deployment.duration_seconds = duration_total
+            deployment.image = image_ref
             deployment.live_url = live_url
             deployment.completed_at = datetime.utcnow()
             
@@ -584,14 +636,20 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             meta = deployment.infrastructure_metadata or {}
             meta["stages"] = stages_metadata
             meta["namespace"] = ns_name
-            meta["region"] = azure_connection.region or deployment.project.region or "eastus"
+            meta["region"] = (
+                getattr(selected_target.connection, "location", None)
+                or getattr(selected_target.connection, "region", None)
+                or deployment.project.region
+                or "eastus"
+            )
             meta["image"] = image_ref
-            meta["azure"] = {
-                "subscription_id": azure_connection.subscription_id,
-                "resource_group": azure_connection.resource_group,
-                "acr_login_server": azure_connection.acr_login_server,
-                "aks_cluster_name": azure_connection.aks_cluster_name,
-            }
+            meta["target_provider"] = selected_target.provider
+            meta["target_reason"] = selected_target.reason
+            meta["target"] = deployment_targets.metadata_for_target(selected_target)
+            if selected_target.provider == "azure":
+                meta["azure"] = meta["target"]
+            elif selected_target.provider == "gke":
+                meta["gke"] = meta["target"]
             meta["framework"] = metadata.get("framework")
             meta["language"] = metadata.get("language")
             deployment.infrastructure_metadata = meta

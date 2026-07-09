@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 import requests
 import threading
@@ -8,7 +9,7 @@ import shutil
 import zipfile
 import hashlib
 from datetime import datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -26,12 +27,14 @@ except ImportError:
 try:
     from backend import config
     from backend.services import git, ai, k8s, pipeline, vault, agent
+    from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
     from services import git, ai, k8s, pipeline, vault, agent
+    from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
     import models, schemas, auth
@@ -277,6 +280,20 @@ def format_dt(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
+def get_frontend_redirect_url() -> str:
+    frontend_url = (config.FRONTEND_URL or "").rstrip("/")
+    if not frontend_url:
+        raise HTTPException(status_code=500, detail="FRONTEND_URL is not configured.")
+    lowered = frontend_url.lower()
+    if config.APP_ENV == "production" and (
+        lowered.startswith("http://")
+        or "localhost" in lowered
+        or "127.0.0.1" in lowered
+    ):
+        raise HTTPException(status_code=500, detail="FRONTEND_URL must be a public HTTPS origin in production.")
+    return frontend_url
+
+
 # ──────────────────────────────────────────────
 # AUTHENTICATION
 # ──────────────────────────────────────────────
@@ -334,11 +351,71 @@ def create_stripe_checkout_session(op: models.BillingOperation, user: models.Use
 async def get_active_azure_connection(db: AsyncSession, user_id: uuid.UUID) -> Optional[models.UserAzureConnection]:
     result = await db.execute(
         select(models.UserAzureConnection)
-        .filter(models.UserAzureConnection.user_id == user_id, models.UserAzureConnection.is_active == True)
+        .filter(
+            models.UserAzureConnection.user_id == user_id,
+            or_(
+                models.UserAzureConnection.connection_status == "connected",
+                models.UserAzureConnection.is_active == True
+            )
+        )
         .order_by(desc(models.UserAzureConnection.created_at))
         .limit(1)
     )
     return result.scalars().first()
+
+
+async def get_active_gke_connection(db: AsyncSession, user_id: uuid.UUID) -> Optional[models.UserGkeConnection]:
+    result = await db.execute(
+        select(models.UserGkeConnection)
+        .filter(models.UserGkeConnection.user_id == user_id, models.UserGkeConnection.is_active == True)
+        .order_by(desc(models.UserGkeConnection.created_at))
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def get_latest_deployment_hint(db: AsyncSession, user_id: uuid.UUID, project: models.Project) -> dict[str, Any]:
+    analysis_result = await db.execute(
+        select(models.AIAnalysis)
+        .filter(models.AIAnalysis.project_id == project.id)
+        .order_by(desc(models.AIAnalysis.created_at))
+        .limit(1)
+    )
+    analysis = analysis_result.scalars().first()
+    if analysis:
+        return {
+            "deployment_strategy": analysis.deployment_strategy,
+            "framework": analysis.framework,
+            "language": analysis.language,
+            "runtime": analysis.runtime,
+            "docker_support": analysis.docker_support,
+            "kubernetes_manifest": analysis.kubernetes_manifest,
+            "explanation": analysis.explanation,
+        }
+
+    recommendation_result = await db.execute(
+        select(models.DeploymentRecommendation)
+        .filter(
+            models.DeploymentRecommendation.user_id == user_id,
+            models.DeploymentRecommendation.repository_full_name == project.full_name,
+        )
+        .order_by(desc(models.DeploymentRecommendation.created_at))
+        .limit(1)
+    )
+    recommendation = recommendation_result.scalars().first()
+    if recommendation:
+        return {
+            "recommended_target": recommendation.recommended_target,
+            "deployment_strategy": recommendation.recommended_target,
+            "recommended_region": recommendation.recommended_region,
+            "framework": project.framework,
+            "language": project.language,
+        }
+
+    return {
+        "framework": project.framework,
+        "language": project.language,
+    }
 
 
 async def consume_paid_operation(
@@ -704,7 +781,7 @@ async def create_project(
             title="Database Configuration Required",
             message=(
                 f"{req.name} references {', '.join(detected_databases)}. "
-                "Add a real Azure database connection string before deployment."
+                "Add a real database connection string before deployment."
             ),
             type="warning",
             category="deployment"
@@ -970,7 +1047,8 @@ async def get_azure_connection(
     if not connection:
         return {"connected": False}
     return {
-        "connected": True,
+        "connected": connection.connection_status == "connected",
+        "connection_status": connection.connection_status,
         "tenant_id": connection.tenant_id,
         "subscription_id": connection.subscription_id,
         "client_id": connection.client_id,
@@ -984,28 +1062,141 @@ async def get_azure_connection(
     }
 
 
+@app.post("/api/azure/connect")
+async def connect_azure(
+    req: schemas.AzureConnectRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.services import azure_connector
+
+    # Validate credential first
+    validation_res = azure_connector.validate_credential(
+        tenant_id=req.tenant_id,
+        client_id=req.client_id,
+        client_secret=req.client_secret,
+        subscription_id=req.subscription_id,
+        resource_group=req.resource_group
+    )
+    if not validation_res.get("success"):
+        raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
+
+    # Store SP client secret in vault
+    store_ok = azure_connector.store_credential_in_vault(current_user.id, req.client_secret)
+    if not store_ok:
+        raise HTTPException(status_code=500, detail="Failed to secure client secret in vault.")
+
+    # Find existing or create new connection
+    existing = await get_active_azure_connection(db, current_user.id)
+    if existing:
+        existing.tenant_id = req.tenant_id.strip()
+        existing.subscription_id = req.subscription_id.strip()
+        existing.client_id = req.client_id.strip()
+        existing.region = req.region or config.AZURE_DEFAULT_REGION
+        existing.resource_group = req.resource_group.strip()
+        existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
+        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else None
+        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
+        existing.connection_status = "connected"
+        existing.is_active = True
+        existing.updated_at = datetime.utcnow()
+        connection = existing
+    else:
+        connection = models.UserAzureConnection(
+            user_id=current_user.id,
+            tenant_id=req.tenant_id.strip(),
+            subscription_id=req.subscription_id.strip(),
+            client_id=req.client_id.strip(),
+            region=req.region or config.AZURE_DEFAULT_REGION,
+            resource_group=req.resource_group.strip(),
+            acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
+            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
+            namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
+            connection_status="connected",
+            is_active=True,
+        )
+        db.add(connection)
+
+    await db.commit()
+    
+    # Audit log entry for connection connect
+    try:
+        from backend.services import action_gateway
+        # Connect is a low risk action, but we audit it anyway for compliance
+        audit = models.AuditLogEntry(
+            user_id=current_user.id,
+            agent_name="user",
+            action_type="azure_connection_connect",
+            parameters={"subscription_id": connection.subscription_id, "resource_group": connection.resource_group},
+            risk_tier="low",
+            approval_status="not_required",
+            result_status="success"
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception as audit_err:
+        logger.error(f"Failed to write onboarding audit: {audit_err}")
+
+    return {
+        "connected": True,
+        "connection_status": connection.connection_status,
+        "subscription_id": connection.subscription_id,
+        "tenant_id": connection.tenant_id,
+        "client_id": connection.client_id,
+        "resource_group": connection.resource_group,
+        "region": connection.region,
+        "acr_login_server": connection.acr_login_server,
+        "aks_cluster_name": connection.aks_cluster_name,
+        "namespace_prefix": connection.namespace_prefix,
+    }
+
+
 @app.put("/api/azure/connection")
 async def upsert_azure_connection(
     req: schemas.AzureConnectionUpsert,
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Legacy PUT connection endpoint updated to use secure Key Vault BYOS storage."""
+    from backend.services import azure_connector
+
     if not req.tenant_id.strip() or not req.subscription_id.strip():
         raise HTTPException(status_code=400, detail="tenant_id and subscription_id are required.")
 
+    # Retrieve existing to see if we have a secret or require a new one
     existing = await get_active_azure_connection(db, current_user.id)
-    encrypted_secret = github_oauth.encrypt_token(req.client_secret) if req.client_secret else None
+    secret_to_use = req.client_secret
+    if not secret_to_use and existing:
+        secret_to_use = azure_connector.get_credential_secret(current_user.id)
+        
+    if not secret_to_use:
+        raise HTTPException(status_code=400, detail="client_secret is required to connect.")
+
+    # Validate
+    validation_res = azure_connector.validate_credential(
+        tenant_id=req.tenant_id,
+        client_id=req.client_id or (existing.client_id if existing else ""),
+        client_secret=secret_to_use,
+        subscription_id=req.subscription_id,
+        resource_group=req.resource_group or (existing.resource_group if existing else "")
+    )
+    if not validation_res.get("success"):
+        raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
+
+    # Store
+    azure_connector.store_credential_in_vault(current_user.id, secret_to_use)
+
     if existing:
         existing.tenant_id = req.tenant_id.strip()
         existing.subscription_id = req.subscription_id.strip()
-        existing.client_id = req.client_id.strip() if req.client_id else None
-        if encrypted_secret:
-            existing.client_secret_encrypted = encrypted_secret
+        existing.client_id = req.client_id.strip() if req.client_id else existing.client_id
         existing.region = req.region or config.AZURE_DEFAULT_REGION
-        existing.resource_group = req.resource_group.strip() if req.resource_group else None
-        existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
-        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else None
-        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
+        existing.resource_group = req.resource_group.strip() if req.resource_group else existing.resource_group
+        existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else existing.acr_login_server
+        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else existing.aks_cluster_name
+        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else existing.namespace_prefix
+        existing.connection_status = "connected"
+        existing.is_active = True
         existing.updated_at = datetime.utcnow()
         connection = existing
     else:
@@ -1014,12 +1205,12 @@ async def upsert_azure_connection(
             tenant_id=req.tenant_id.strip(),
             subscription_id=req.subscription_id.strip(),
             client_id=req.client_id.strip() if req.client_id else None,
-            client_secret_encrypted=encrypted_secret,
             region=req.region or config.AZURE_DEFAULT_REGION,
             resource_group=req.resource_group.strip() if req.resource_group else None,
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
             aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
+            connection_status="connected",
             is_active=True,
         )
         db.add(connection)
@@ -1033,6 +1224,204 @@ async def upsert_azure_connection(
         "acr_login_server": connection.acr_login_server,
         "aks_cluster_name": connection.aks_cluster_name,
     }
+
+
+@app.post("/api/azure/disconnect")
+async def disconnect_azure(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    connection = await get_active_azure_connection(db, current_user.id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="No active Azure connection found.")
+
+    from backend.services import azure_connector
+
+    connection.connection_status = "revoked"
+    connection.is_active = False
+    connection.updated_at = datetime.utcnow()
+    
+    # Delete from vault
+    azure_connector.delete_credential_from_vault(current_user.id)
+    
+    # Audit log disconnect
+    try:
+        audit = models.AuditLogEntry(
+            user_id=current_user.id,
+            agent_name="user",
+            action_type="azure_connection_disconnect",
+            parameters={"subscription_id": connection.subscription_id, "resource_group": connection.resource_group},
+            risk_tier="low",
+            approval_status="not_required",
+            result_status="success"
+        )
+        db.add(audit)
+    except Exception as audit_err:
+        logger.error(f"Failed to write disconnect audit: {audit_err}")
+
+    await db.commit()
+    return {"status": "success", "detail": "Azure subscription disconnected and client credentials revoked."}
+
+
+@app.post("/api/approvals/{approval_id}/decision")
+async def decide_approval(
+    approval_id: uuid.UUID,
+    req: schemas.ApprovalDecisionRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.services import action_gateway
+
+    # Verify connection ownership or authorization. Here any logged in user can decide their connection's approvals.
+    result = await db.execute(
+        select(models.PendingApproval).filter(
+            models.PendingApproval.id == approval_id,
+            models.PendingApproval.user_id == current_user.id
+        )
+    )
+    pending = result.scalars().first()
+    if not pending:
+        raise HTTPException(status_code=404, detail="Pending approval not found or not owned by you.")
+
+    decision_res = await action_gateway.decide_pending_action(
+        approval_id=approval_id,
+        decision=req.decision,
+        decided_by=current_user.id,
+        db=db
+    )
+    if not decision_res.get("success"):
+        raise HTTPException(status_code=400, detail=decision_res.get("error", "Failed to decide approval."))
+
+    return decision_res
+
+
+@app.get("/api/approvals/pending", response_model=List[schemas.PendingApprovalResponse])
+async def get_pending_approvals(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(models.PendingApproval)
+        .filter(models.PendingApproval.user_id == current_user.id, models.PendingApproval.status == "pending")
+        .order_by(desc(models.PendingApproval.created_at))
+    )
+    return result.scalars().all()
+
+
+@app.get("/api/audit-log", response_model=List[schemas.AuditLogResponse])
+async def get_audit_logs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(models.AuditLogEntry)
+        .filter(models.AuditLogEntry.user_id == current_user.id)
+        .order_by(desc(models.AuditLogEntry.created_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+@app.get("/api/gke/connection")
+async def get_gke_connection(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    connection = await get_active_gke_connection(db, current_user.id)
+    if not connection:
+        return {"connected": False, "has_service_account_json": False}
+    return {
+        "connected": True,
+        "gcp_project_id": connection.gcp_project_id,
+        "service_account_email": connection.service_account_email,
+        "has_service_account_json": bool(connection.service_account_json_encrypted),
+        "location": connection.location,
+        "cluster_name": connection.cluster_name,
+        "artifact_registry_host": connection.artifact_registry_host,
+        "artifact_registry_repository": connection.artifact_registry_repository,
+        "namespace_prefix": connection.namespace_prefix,
+        "created_at": format_dt(connection.created_at),
+        "updated_at": format_dt(connection.updated_at),
+    }
+
+
+@app.put("/api/gke/connection")
+async def upsert_gke_connection(
+    req: schemas.GkeConnectionUpsert,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not req.gcp_project_id.strip():
+        raise HTTPException(status_code=400, detail="gcp_project_id is required.")
+
+    service_account_json = req.service_account_json.strip() if req.service_account_json else ""
+    if service_account_json:
+        try:
+            parsed = json.loads(service_account_json)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Service account JSON is not valid JSON.")
+        client_email = str(parsed.get("client_email") or "").strip()
+        if client_email and not req.service_account_email:
+            req.service_account_email = client_email
+
+    existing = await get_active_gke_connection(db, current_user.id)
+    encrypted_json = github_oauth.encrypt_token(service_account_json) if service_account_json else None
+    host = req.artifact_registry_host.strip().rstrip("/") if req.artifact_registry_host else None
+    if host:
+        host = host.replace("https://", "").replace("http://", "")
+
+    if existing:
+        existing.gcp_project_id = req.gcp_project_id.strip()
+        existing.service_account_email = req.service_account_email.strip() if req.service_account_email else existing.service_account_email
+        if encrypted_json:
+            existing.service_account_json_encrypted = encrypted_json
+        existing.location = req.location.strip() if req.location else "us-central1"
+        existing.cluster_name = req.cluster_name.strip() if req.cluster_name else None
+        existing.artifact_registry_host = host
+        existing.artifact_registry_repository = req.artifact_registry_repository.strip().strip("/") if req.artifact_registry_repository else None
+        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
+        existing.updated_at = datetime.utcnow()
+        connection = existing
+    else:
+        connection = models.UserGkeConnection(
+            user_id=current_user.id,
+            gcp_project_id=req.gcp_project_id.strip(),
+            service_account_email=req.service_account_email.strip() if req.service_account_email else None,
+            service_account_json_encrypted=encrypted_json,
+            location=req.location.strip() if req.location else "us-central1",
+            cluster_name=req.cluster_name.strip() if req.cluster_name else None,
+            artifact_registry_host=host,
+            artifact_registry_repository=req.artifact_registry_repository.strip().strip("/") if req.artifact_registry_repository else None,
+            namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
+            is_active=True,
+        )
+        db.add(connection)
+
+    await db.commit()
+    return {
+        "connected": True,
+        "gcp_project_id": connection.gcp_project_id,
+        "service_account_email": connection.service_account_email,
+        "has_service_account_json": bool(connection.service_account_json_encrypted),
+        "location": connection.location,
+        "cluster_name": connection.cluster_name,
+        "artifact_registry_host": connection.artifact_registry_host,
+        "artifact_registry_repository": connection.artifact_registry_repository,
+        "namespace_prefix": connection.namespace_prefix,
+    }
+
+
+@app.get("/api/deployment-targets")
+async def get_deployment_targets(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    azure_connection = await get_active_azure_connection(db, current_user.id)
+    gke_connection = await get_active_gke_connection(db, current_user.id)
+    return deployment_targets.status_payload(azure_connection, gke_connection)
 
 
 @app.get("/api/billing/operations")
@@ -1287,10 +1676,15 @@ async def self_heal_project(
 
     elif action == "redeploy":
         azure_connection = await get_active_azure_connection(db, current_user.id)
-        if not azure_connection or not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
-            raise HTTPException(status_code=400, detail="Connect Azure ACR and AKS before redeploying.")
+        gke_connection = await get_active_gke_connection(db, current_user.id)
+        analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
+        try:
+            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, gke_connection)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-redeploy"
-        image_name = f"{str(current_user.id)[:8]}-{project.name}".lower().replace("_", "-")
+        namespace_prefix = deployment_targets.namespace_prefix(selected_target, current_user.id)
+        image_name = pipeline.normalize_project_id(f"{namespace_prefix}-{project.name}")
         deployment = models.Deployment(
             user_id=current_user.id,
             project_id=project.id,
@@ -1299,7 +1693,13 @@ async def self_heal_project(
             branch=project.branch or "main",
             version=version,
             deployed_by="AI Self-Healer",
-            image=f"{azure_connection.acr_login_server}/{image_name}:{version}"
+            image=deployment_targets.image_ref_for_target(selected_target, image_name, version),
+            infrastructure_metadata={
+                "target_provider": selected_target.provider,
+                "target_reason": selected_target.reason,
+                "target": deployment_targets.metadata_for_target(selected_target),
+                "source_type": project.source_type,
+            }
         )
         db.add(deployment)
         project.status = "deploying"
@@ -1334,8 +1734,7 @@ async def self_heal_project(
 
     elif action == "rollback":
         azure_connection = await get_active_azure_connection(db, current_user.id)
-        if not azure_connection or not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
-            raise HTTPException(status_code=400, detail="Connect Azure ACR and AKS before rolling back.")
+        gke_connection = await get_active_gke_connection(db, current_user.id)
         rollback_dep_result = await db.execute(
             select(models.Deployment)
             .filter(models.Deployment.project_id == project.id, models.Deployment.status == "running")
@@ -1345,6 +1744,13 @@ async def self_heal_project(
         rollback_dep = rollback_dep_result.scalars().first()
         if not rollback_dep:
             raise HTTPException(status_code=400, detail="No previous successful deployment found to roll back to.")
+        rollback_meta = rollback_dep.infrastructure_metadata or {}
+        previous_provider = rollback_meta.get("target_provider") or (rollback_meta.get("target") or {}).get("provider") or "auto"
+        analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
+        try:
+            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, gke_connection, previous_provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
             
         deployment = models.Deployment(
             user_id=current_user.id,
@@ -1355,7 +1761,13 @@ async def self_heal_project(
             version=f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-rollback",
             deployed_by="AI Self-Healer",
             image=rollback_dep.image,
-            live_url=rollback_dep.live_url
+            live_url=rollback_dep.live_url,
+            infrastructure_metadata={
+                "target_provider": selected_target.provider,
+                "target_reason": f"Rollback to previous {selected_target.label} deployment.",
+                "target": deployment_targets.metadata_for_target(selected_target),
+                "source_type": project.source_type,
+            }
         )
         db.add(deployment)
         project.status = "deploying"
@@ -1688,17 +2100,29 @@ async def start_deploy(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     azure_connection = await get_active_azure_connection(db, current_user.id)
-    if not azure_connection:
-        raise HTTPException(status_code=400, detail="Connect your Azure account before starting a deployment.")
-    if not azure_connection.acr_login_server or not azure_connection.aks_cluster_name:
+    gke_connection = await get_active_gke_connection(db, current_user.id)
+    target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+    if not target_status["any_ready"]:
         raise HTTPException(
             status_code=400,
-            detail="Azure connection must include ACR login server and AKS cluster name before deployment."
+            detail="Configure Azure AKS or Google GKE before starting a deployment."
         )
 
+    analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
+    try:
+        selected_target = deployment_targets.choose_target(
+            analysis_hint,
+            azure_connection,
+            gke_connection,
+            req.target_provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}"
-    image_name = f"{str(current_user.id)[:8]}-{project.name}".lower().replace("_", "-")
-    image_ref = f"{azure_connection.acr_login_server}/{image_name}:{version}"
+    namespace_prefix = deployment_targets.namespace_prefix(selected_target, current_user.id)
+    image_name = pipeline.normalize_project_id(f"{namespace_prefix}-{project.name}")
+    image_ref = deployment_targets.image_ref_for_target(selected_target, image_name, version)
 
     # Create deployment record
     deployment = models.Deployment(
@@ -1711,13 +2135,10 @@ async def start_deploy(
         deployed_by=f"{current_user.first_name or 'User'} {(current_user.last_name or '')[0:1]}.".strip(),
         image=image_ref,
         infrastructure_metadata={
-            "azure": {
-                "subscription_id": azure_connection.subscription_id,
-                "region": azure_connection.region,
-                "resource_group": azure_connection.resource_group,
-                "acr_login_server": azure_connection.acr_login_server,
-                "aks_cluster_name": azure_connection.aks_cluster_name,
-            },
+            "target_provider": selected_target.provider,
+            "target_reason": selected_target.reason,
+            "target": deployment_targets.metadata_for_target(selected_target),
+            "available_targets": target_status["targets"],
             "source_type": project.source_type,
         }
     )
@@ -1730,7 +2151,7 @@ async def start_deploy(
     db.add(models.Notification(
         user_id=current_user.id,
         title="Deployment Started",
-        message=f"Building {project.full_name} ({req.branch}) for {req.environment}...",
+        message=f"Building {project.full_name} ({req.branch}) for {req.environment} on {selected_target.label}...",
         type="info",
         category="deployment"
     ))
@@ -2213,6 +2634,26 @@ async def analyze_repo(
         expected_traffic=analysis.get("expected_traffic")
     )
     db.add(db_recommendation)
+
+    azure_connection = await get_active_azure_connection(db, current_user.id)
+    gke_connection = await get_active_gke_connection(db, current_user.id)
+    target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+    try:
+        selected_target = deployment_targets.choose_target(analysis, azure_connection, gke_connection)
+        db_recommendation.recommended_target = selected_target.label
+        db_recommendation.azure_configuration = {
+            **(db_recommendation.azure_configuration or {}),
+            "selected_provider": selected_target.provider,
+            "target": deployment_targets.metadata_for_target(selected_target),
+            "reason": selected_target.reason,
+        }
+        analysis["recommended_provider"] = selected_target.provider
+        analysis["recommended_target"] = selected_target.label
+        analysis["target_reason"] = selected_target.reason
+    except ValueError as target_err:
+        analysis["recommended_provider"] = "none"
+        analysis["target_reason"] = str(target_err)
+    analysis["deployment_targets"] = target_status
     
     await db.commit()
 
@@ -2836,29 +3277,13 @@ async def github_oauth_callback(
     response: Response = None,
     db: AsyncSession = Depends(get_db)
 ):
-    frontend_url = config.FRONTEND_URL.rstrip("/")
-
-    # Telemetry debug logging
-    import os
-    request_host = request.url.hostname if request else None
-    logger.info(f"[OAuth Callback Telemetry] Raw config.FRONTEND_URL: {config.FRONTEND_URL}")
-    logger.info(f"[OAuth Callback Telemetry] Request host: {request_host}, scheme: {request.url.scheme if request else None}")
-    logger.info(f"[OAuth Callback Telemetry] APP_ENV: {config.APP_ENV}, WEBSITE_SITE_NAME: {os.getenv('WEBSITE_SITE_NAME')}, WEBSITE_HOSTNAME: {os.getenv('WEBSITE_HOSTNAME')}")
-
-    is_request_local = request_host in ("localhost", "127.0.0.1", "::1") if request_host else False
-
-    # Production Safeguard: Force override of localhost redirects in Azure/production environments
-    if "localhost" in frontend_url or "127.0.0.1" in frontend_url:
-        if (
-            os.getenv("WEBSITE_SITE_NAME") or 
-            os.getenv("WEBSITE_HOSTNAME") or 
-            config.APP_ENV == "production" or
-            not is_request_local
-        ):
-            frontend_url = "https://zeroopsai-fweqbkfmd0azb6ax.eastus-01.azurewebsites.net"
-            logger.info(f"[OAuth Callback Telemetry] Safeguard triggered. Forcing frontend_url to production: {frontend_url}")
-        else:
-            logger.info("[OAuth Callback Telemetry] Safeguard bypassed (local environment).")
+    frontend_url = get_frontend_redirect_url()
+    logger.info(
+        "[OAuth Callback Telemetry] FRONTEND_URL configured, request host: %s, scheme: %s, APP_ENV: %s",
+        request.url.hostname if request else None,
+        request.url.scheme if request else None,
+        config.APP_ENV,
+    )
 
     # Helper to construct redirect response with cleared oauth_state cookie
     def get_redirect_and_clean_state(url_target: str) -> RedirectResponse:
@@ -3052,7 +3477,7 @@ async def google_oauth_callback(
     error: str = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    frontend_url = config.FRONTEND_URL.rstrip("/")
+    frontend_url = get_frontend_redirect_url()
 
     def redirect_to_frontend(query: str) -> RedirectResponse:
         res = RedirectResponse(url=f"{frontend_url}/auth/github/callback?provider=google&{query}", status_code=302)

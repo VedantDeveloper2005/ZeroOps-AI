@@ -80,6 +80,6 @@ def push_image(image_ref: str) -> Generator[str, None, None]:
 
     if process.returncode != 0:
         yield f"Docker push failed with return code {process.returncode}\n"
-        raise RuntimeError("Docker push failed. Ensure the deployment worker is logged into the user's Azure Container Registry.")
+        raise RuntimeError("Docker push failed. Ensure the deployment worker is logged into the selected container registry.")
 
     yield "Container image pushed successfully.\n"

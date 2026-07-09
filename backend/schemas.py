@@ -36,7 +36,6 @@ class UserResponse(BaseModel):
     github_username: Optional[str] = None
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 
@@ -54,7 +53,39 @@ class ProjectCreate(BaseModel):
     region: str = "eastus"
 
 
+class AzureConnectRequest(BaseModel):
+    """Onboarding request for BYOS Azure connection.
+    The client_secret is forwarded to Key Vault and NEVER stored in the DB."""
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    subscription_id: str
+    resource_group: str
+    region: str = "eastus"
+    acr_login_server: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
+    namespace_prefix: Optional[str] = None
+
+
+class AzureConnectResponse(BaseModel):
+    """Response after connecting Azure – never includes the secret."""
+    connected: bool
+    connection_status: str
+    subscription_id: str
+    tenant_id: str
+    client_id: str
+    resource_group: str
+    region: str
+    acr_login_server: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
+    namespace_prefix: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AzureConnectionUpsert(BaseModel):
+    """Legacy schema kept for backward compatibility with existing GKE-style endpoints."""
     tenant_id: str
     subscription_id: str
     client_id: Optional[str] = None
@@ -63,6 +94,49 @@ class AzureConnectionUpsert(BaseModel):
     resource_group: Optional[str] = None
     acr_login_server: Optional[str] = None
     aks_cluster_name: Optional[str] = None
+    namespace_prefix: Optional[str] = None
+
+
+class AuditLogResponse(BaseModel):
+    id: uuid.UUID
+    agent_name: str
+    action_type: str
+    parameters: dict = {}
+    risk_tier: str
+    approval_status: str
+    result_status: str
+    result_detail: Optional[str] = None
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PendingApprovalResponse(BaseModel):
+    id: uuid.UUID
+    audit_log_id: uuid.UUID
+    action_type: str
+    parameters: dict = {}
+    risk_tier: str
+    status: str
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern="^(approved|denied)$")
+
+
+class GkeConnectionUpsert(BaseModel):
+    gcp_project_id: str
+    service_account_email: Optional[str] = None
+    service_account_json: Optional[str] = None
+    location: str = "us-central1"
+    cluster_name: Optional[str] = None
+    artifact_registry_host: Optional[str] = None
+    artifact_registry_repository: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
 
@@ -99,6 +173,7 @@ class DeploymentCreate(BaseModel):
     project_id: uuid.UUID
     branch: str = "main"
     environment: str = "production"
+    target_provider: str = "auto"
 
 class DeploymentResponse(BaseModel):
     id: uuid.UUID

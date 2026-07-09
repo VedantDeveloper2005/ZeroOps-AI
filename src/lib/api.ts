@@ -389,6 +389,33 @@ export interface AzureConnection {
   namespace_prefix?: string | null;
 }
 
+export interface GkeConnection {
+  connected: boolean;
+  gcp_project_id?: string | null;
+  service_account_email?: string | null;
+  has_service_account_json?: boolean;
+  location?: string | null;
+  cluster_name?: string | null;
+  artifact_registry_host?: string | null;
+  artifact_registry_repository?: string | null;
+  namespace_prefix?: string | null;
+}
+
+export interface DeploymentTargetStatus {
+  provider: "azure" | "gke";
+  label: string;
+  ready: boolean;
+  missing: string[];
+  region?: string | null;
+  cluster_name?: string | null;
+  registry?: string | null;
+}
+
+export interface DeploymentTargetsStatus {
+  any_ready: boolean;
+  targets: DeploymentTargetStatus[];
+}
+
 export interface SystemHealth {
   status: string;
   service: string;
@@ -455,6 +482,7 @@ export const api = {
     project_id: string;
     branch?: string;
     environment?: string;
+    target_provider?: "auto" | "azure" | "gke";
   }) => request<{ status: string; deployment_id: string; project_id: string }>(
     "/api/deployments/deploy",
     { method: "POST", body: JSON.stringify(data) }
@@ -546,6 +574,26 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+
+  // ── Google GKE Deployment Target ──
+  getGkeConnection: () => request<GkeConnection>("/api/gke/connection"),
+
+  updateGkeConnection: (data: {
+    gcp_project_id: string;
+    service_account_email?: string;
+    service_account_json?: string;
+    location?: string;
+    cluster_name?: string;
+    artifact_registry_host?: string;
+    artifact_registry_repository?: string;
+    namespace_prefix?: string;
+  }) =>
+    request<GkeConnection>("/api/gke/connection", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  getDeploymentTargets: () => request<DeploymentTargetsStatus>("/api/deployment-targets"),
 
   // ── GitHub OAuth ──
   getGitHubStatus: () => request<GitHubStatus>("/api/github/status"),

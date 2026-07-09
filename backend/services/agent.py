@@ -137,14 +137,52 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
     async def provision_infrastructure(
         self, 
         project_id: str, 
-        requirements: Dict
+        requirements: Dict,
+        db = None
     ) -> Dict:
         logger.info(f"Agent planning resource provisioning: {requirements}...")
-        return {
-            "status": "requires_manual_review",
-            "resources": [],
-            "manifests_compiled": False
+        if db is None:
+            from backend.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                return await self._provision_infra_impl(project_id, requirements, session)
+        else:
+            return await self._provision_infra_impl(project_id, requirements, db)
+
+    async def _provision_infra_impl(self, project_id: str, requirements: Dict, db) -> Dict:
+        from sqlalchemy.future import select
+        from backend import models
+        from backend.services import action_gateway
+
+        proj_uuid = uuid.UUID(project_id) if isinstance(project_id, str) else project_id
+        result = await db.execute(select(models.Project).filter(models.Project.id == proj_uuid))
+        project = result.scalars().first()
+        if not project:
+            return {"success": False, "error": f"Project {project_id} not found."}
+
+        result_conn = await db.execute(
+            select(models.UserAzureConnection)
+            .filter(models.UserAzureConnection.user_id == project.user_id, models.UserAzureConnection.connection_status == "connected")
+        )
+        conn = result_conn.scalars().first()
+        if not conn:
+            return {"success": False, "error": "No connected Azure connection found. Cannot provision infrastructure."}
+
+        action_params = {
+            "cluster_name": requirements.get("cluster_name", f"aks-{project.name}"),
+            "location": requirements.get("location", conn.region or "eastus"),
+            "dns_prefix": requirements.get("dns_prefix", f"aks-{project.name}-dns"),
+            "node_count": requirements.get("node_count", 1),
+            "vm_size": requirements.get("vm_size", "Standard_DS2_v2")
         }
+
+        res = await action_gateway.execute_azure_action(
+            user_id=project.user_id,
+            agent_name="scaling_agent",
+            action_type="create_aks_cluster",
+            parameters=action_params,
+            db=db
+        )
+        return res
 
     async def restart_failed_service(
         self, 
@@ -159,10 +197,43 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         self, 
         project_id: str, 
         min_replicas: int, 
-        max_replicas: int
+        max_replicas: int,
+        db = None
     ) -> bool:
-        logger.info(f"Agent scale request for {project_id}: [{min_replicas} - {max_replicas}]; no scaler executor is configured.")
-        return False
+        logger.info(f"Agent scale request for {project_id}: [{min_replicas} - {max_replicas}]")
+        if db is None:
+            from backend.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                return await self._scale_resources_impl(project_id, min_replicas, max_replicas, session)
+        else:
+            return await self._scale_resources_impl(project_id, min_replicas, max_replicas, db)
+
+    async def _scale_resources_impl(self, project_id: str, min_replicas: int, max_replicas: int, db) -> bool:
+        from sqlalchemy.future import select
+        from backend import models
+        from backend.services import action_gateway
+
+        proj_uuid = uuid.UUID(project_id) if isinstance(project_id, str) else project_id
+        result = await db.execute(select(models.Project).filter(models.Project.id == proj_uuid))
+        project = result.scalars().first()
+        if not project:
+            logger.error(f"Project {project_id} not found.")
+            return False
+
+        action_params = {
+            "cluster_name": project.name,
+            "node_pool_name": "nodepool1",
+            "node_count": max_replicas
+        }
+
+        res = await action_gateway.execute_azure_action(
+            user_id=project.user_id,
+            agent_name="scaling_agent",
+            action_type="scale_aks_nodepool",
+            parameters=action_params,
+            db=db
+        )
+        return res.get("success", False)
 
     async def analyze_incident(
         self, 

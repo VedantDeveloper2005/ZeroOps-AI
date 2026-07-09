@@ -175,10 +175,19 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
   const liveHost = liveUrl ? hostFromUrl(liveUrl) : "";
   const latestMetadata = latestDeploymentDetail?.infrastructure_metadata || latestDeployment?.infrastructure_metadata || null;
   const azureMetadata = asRecord(latestMetadata?.azure);
-  const hostingTarget = stringFromRecord(azureMetadata, "aks_cluster_name")
+  const gkeMetadata = asRecord(latestMetadata?.gke);
+  const targetMetadata = asRecord(latestMetadata?.target);
+  const hostingTarget = stringFromRecord(targetMetadata, "cluster_name")
+    || stringFromRecord(azureMetadata, "aks_cluster_name")
+    || stringFromRecord(gkeMetadata, "cluster_name")
     || stringFromRecord(latestMetadata, "namespace")
     || "Not recorded";
-  const hostingRegion = stringFromRecord(azureMetadata, "region") || project?.region || "Not recorded";
+  const hostingRegion = stringFromRecord(targetMetadata, "location")
+    || stringFromRecord(targetMetadata, "region")
+    || stringFromRecord(azureMetadata, "region")
+    || stringFromRecord(gkeMetadata, "location")
+    || project?.region
+    || "Not recorded";
   const latestLogs = latestDeploymentDetail?.logs || [];
   const logErrorCount = latestLogs.filter((log) => log.level === "ERROR").length;
   const logWarningCount = latestLogs.filter((log) => log.level === "WARN").length;
@@ -790,7 +799,7 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                           </div>
                           <div>
                             <span className="text-zinc-500 block text-[9px] uppercase font-sans font-bold">Target Value</span>
-                            {liveHost || (isSubdomain ? "Deploy first to record ingress host" : "Use Azure ingress IP after deployment")}
+                            {liveHost || (isSubdomain ? "Deploy first to record ingress host" : "Use cloud ingress IP after deployment")}
                           </div>
                         </div>
                       </div>
@@ -953,7 +962,7 @@ function AppDetailsPageContent({ projectId }: { projectId: string }) {
                     onChange={(e) => setEnvIsSecret(e.target.checked)}
                     className="rounded border-border text-primary focus:ring-primary cursor-pointer w-4 h-4"
                   />
-                  <span>Encrypt as Azure Vault Secret</span>
+                  <span>Encrypt as Project Secret</span>
                 </label>
                 <button
                   onClick={handleAddEnvVar}

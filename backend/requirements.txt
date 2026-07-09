@@ -8,6 +8,10 @@ requests
 python-dotenv
 azure-identity
 azure-keyvault-secrets
+azure-mgmt-resource
+azure-mgmt-containerservice
+azure-mgmt-network
+azure-mgmt-storage
 sqlalchemy
 asyncpg
 psycopg2-binary

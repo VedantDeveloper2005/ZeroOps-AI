@@ -23,7 +23,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { api, type AIAnalysis, type Deployment, type DeploymentDetail, type FailureAnalysis } from "@/lib/api";
-import { getWebSocketUrl } from "@/lib/runtime-config";
+import { createReconnectingWebSocket } from "@/lib/runtime-config";
 import { useNotifications } from "@/lib/NotificationContext";
 
 interface PipelineStep {
@@ -172,6 +172,11 @@ function metadataStringArray(metadata: Record<string, unknown> | null | undefine
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
+function metadataRecord(metadata: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
+  const value = metadata?.[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
 function DeploymentsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -219,8 +224,8 @@ function DeploymentsPageContent() {
       return;
     }
 
-    let socket: WebSocket | null = null;
     let active = true;
+    let disposeSocket: (() => void) | null = null;
 
     async function loadDeploymentAndStream() {
       try {
@@ -260,74 +265,74 @@ function DeploymentsPageContent() {
       setActiveLines([{ text: "Connecting to ZeroOps deployment stream...", type: "info" }]);
       setVisibleLines(1);
 
-      socket = new WebSocket(getWebSocketUrl(`/ws/deployments/${deployId}`));
-      socket.onopen = () => {
-        if (!active) return;
-        setActiveLines((prev) => [...prev, { text: `Connected to deployment stream: ${deployId}`, type: "success" }]);
-        setVisibleLines((prev) => prev + 1);
-      };
-      socket.onmessage = (event) => {
-        if (!active) return;
-        try {
-          const data = JSON.parse(event.data) as DeploymentStreamEvent;
-          if (data.type === "stage") {
-            setSteps((prev) => prev.map((step) => (
-              step.id === data.id && isPipelineStepStatus(data.status)
-                ? { ...step, status: data.status, duration: typeof data.duration === "string" ? data.duration : step.duration }
-                : step
-            )));
-          }
-          if (data.type === "log") {
-            setActiveLines((prev) => {
-              const updated = [...prev, {
-                text: typeof data.text === "string" ? data.text : "",
-                type: isTerminalLineType(data.lineType) ? data.lineType : "info",
-              }];
-              setVisibleLines(updated.length);
-              return updated;
-            });
-          }
-          if (data.type === "status") {
-            setIsAnimating(false);
-            api.getDeployment(deployId!).then(setCurrentDeployment).catch(console.error);
-            fetchHistory();
-            refreshStats();
-            if (data.status === "running") {
-              addToast("Deployment completed successfully.", "success");
-              addNotification({
-                title: "Deployment Successful",
-                message: `Deployment ${deployId} completed and was recorded by the backend.`,
-                type: "success",
-                category: "deployment",
-                action_url: "/dashboard/deployments",
+      disposeSocket = createReconnectingWebSocket(`/ws/deployments/${deployId}`, {
+        onOpen: () => {
+          if (!active) return;
+          setActiveLines((prev) => [...prev, { text: `Connected to deployment stream: ${deployId}`, type: "success" }]);
+          setVisibleLines((prev) => prev + 1);
+        },
+        onMessage: (event) => {
+          if (!active) return;
+          try {
+            const data = JSON.parse(event.data) as DeploymentStreamEvent;
+            if (data.type === "stage") {
+              setSteps((prev) => prev.map((step) => (
+                step.id === data.id && isPipelineStepStatus(data.status)
+                  ? { ...step, status: data.status, duration: typeof data.duration === "string" ? data.duration : step.duration }
+                  : step
+              )));
+            }
+            if (data.type === "log") {
+              setActiveLines((prev) => {
+                const updated = [...prev, {
+                  text: typeof data.text === "string" ? data.text : "",
+                  type: isTerminalLineType(data.lineType) ? data.lineType : "info",
+                }];
+                setVisibleLines(updated.length);
+                return updated;
               });
             }
-            if (data.status === "failed") {
-              addToast("Deployment failed. Check the recorded build logs.", "error");
+            if (data.type === "status") {
+              setIsAnimating(false);
+              api.getDeployment(deployId!).then(setCurrentDeployment).catch(console.error);
+              fetchHistory();
+              refreshStats();
+              if (data.status === "running") {
+                addToast("Deployment completed successfully.", "success");
+                addNotification({
+                  title: "Deployment Successful",
+                  message: `Deployment ${deployId} completed and was recorded by the backend.`,
+                  type: "success",
+                  category: "deployment",
+                  action_url: "/dashboard/deployments",
+                });
+              }
+              if (data.status === "failed") {
+                addToast("Deployment failed. Check the recorded build logs.", "error");
+              }
             }
+          } catch (err) {
+            console.error("Error parsing deployment stream:", err);
           }
-        } catch (err) {
-          console.error("Error parsing deployment stream:", err);
-        }
-      };
-      socket.onerror = () => {
-        if (!active) return;
-        setIsAnimating(false);
-        setActiveLines((prev) => [...prev, {
-          text: "Deployment stream unavailable. Refresh after the backend records logs.",
-          type: "warning",
-        }]);
-        setVisibleLines((prev) => prev + 1);
-      };
-      socket.onclose = () => {
-        if (active) setIsAnimating(false);
-      };
+        },
+        onError: () => {
+          if (!active) return;
+          setActiveLines((prev) => [...prev, {
+            text: "Deployment stream unavailable. Refresh after the backend records logs.",
+            type: "warning",
+          }]);
+          setVisibleLines((prev) => prev + 1);
+        },
+        onClose: () => {
+          if (active) setIsAnimating(false);
+        },
+      });
     }
 
     loadDeploymentAndStream();
     return () => {
       active = false;
-      socket?.close();
+      disposeSocket?.();
     };
   }, [deployId, addNotification, addToast, fetchHistory, refreshStats]);
 
@@ -424,6 +429,14 @@ function DeploymentsPageContent() {
   const isFailed = currentDeployment?.status === "failed";
   const liveUrl = currentDeployment?.live_url || "";
   const infrastructureMetadata = currentDeployment?.infrastructure_metadata;
+  const targetMetadata = metadataRecord(infrastructureMetadata, "target");
+  const targetProvider = metadataString(infrastructureMetadata, "target_provider");
+  const targetCluster = metadataString(targetMetadata, "cluster_name")
+    || metadataString(targetMetadata, "aks_cluster_name")
+    || metadataString(infrastructureMetadata, "namespace");
+  const targetLabel = targetProvider
+    ? `${targetProvider.toUpperCase()}${targetCluster ? ` / ${targetCluster}` : ""}`
+    : "Not recorded";
   const databaseDependencies = metadataStringArray(infrastructureMetadata, "database_dependencies");
   const frameworkLabel = analysis?.framework || metadataString(infrastructureMetadata, "framework") || "Not detected";
   const deploymentDuration = currentDeployment?.duration
@@ -576,10 +589,14 @@ function DeploymentsPageContent() {
           </div>
 
           {/* Deployment Summary grid */}
-          <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto pt-4 border-t border-border/20 text-xs">
+          <div className="relative z-20 grid grid-cols-2 md:grid-cols-5 gap-4 max-w-3xl mx-auto pt-4 border-t border-border/20 text-xs">
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Framework</span>
               <p className="font-extrabold text-foreground mt-0.5">{frameworkLabel}</p>
+            </div>
+            <div>
+              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Cloud Target</span>
+              <p className="font-extrabold text-foreground mt-0.5 truncate">{targetLabel}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Deployment Time</span>

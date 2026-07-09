@@ -137,7 +137,7 @@ export default function BillingPage() {
             <div className="border-t border-border/60 my-5" />
 
             <div className="grid md:grid-cols-3 gap-4">
-              {["Authenticated user billing", "Per-user Azure deployments", "Payment-gated AI code changes"].map((feature) => (
+              {["Authenticated user billing", "Per-user cloud deployments", "Payment-gated AI code changes"].map((feature) => (
                 <div key={feature} className="flex items-center gap-2 text-xs font-semibold text-foreground-muted">
                   <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
                     <Check size={12} className="text-success" />

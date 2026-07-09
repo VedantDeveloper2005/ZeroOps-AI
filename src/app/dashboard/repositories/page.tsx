@@ -31,6 +31,9 @@ interface AnalysisResult {
   environmentVariables: string[];
   confidence: number | null;
   deploymentTarget: string | null;
+  recommendedProvider?: string | null;
+  recommendedTarget?: string | null;
+  targetReason?: string | null;
   buildCommands: string | null;
   startCommands: string | null;
   port: string | null;
@@ -84,6 +87,9 @@ function toAnalysisResult(data: Record<string, unknown>): AnalysisResult {
     environmentVariables: asStringArray(data.environment_variables),
     confidence: asNumber(data.confidence),
     deploymentTarget: asString(data.deployment_target) || asString(data.deployment_strategy),
+    recommendedProvider: asString(data.recommended_provider),
+    recommendedTarget: asString(data.recommended_target),
+    targetReason: asString(data.target_reason),
     buildCommands: asString(data.build_commands) || asString(data.build_command),
     startCommands: asString(data.start_commands) || asString(data.start_command),
     port: asString(data.port),
@@ -325,9 +331,9 @@ export default function RepositoriesPage() {
       return;
     }
     try {
-      const azureConnection = await api.getAzureConnection();
-      if (!azureConnection.connected || !azureConnection.acr_login_server || !azureConnection.aks_cluster_name) {
-        addToast("Configure your Azure deployment target before launching.", "warning");
+      const deploymentTargets = await api.getDeploymentTargets();
+      if (!deploymentTargets.any_ready) {
+        addToast("Configure Azure AKS or Google GKE before launching.", "warning");
         router.push("/dashboard/settings?tab=azure");
         return;
       }
@@ -887,7 +893,7 @@ export default function RepositoriesPage() {
               <div>
                 <h3 className="text-lg font-bold text-foreground">Review Deployment Plan</h3>
                 <p className="text-xs text-foreground-muted">
-                  Review detected runtime settings and complete required Azure/environment configuration before deploying.
+                  Review detected runtime settings and complete required cloud/environment configuration before deploying.
                 </p>
               </div>
               <span className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
@@ -902,7 +908,7 @@ export default function RepositoriesPage() {
               </h4>
               <p className="text-xs text-foreground leading-relaxed">
                 {analysisResult?.why_this_plan ||
-                  "ZeroOps analyzed the repository and recorded only the configuration it could detect. Azure resources, external databases, payment-gated AI fixes, and missing secrets must be confirmed before deployment starts."}
+                  "ZeroOps analyzed the repository and recorded only the configuration it could detect. Cloud targets, external databases, payment-gated AI fixes, and missing secrets must be confirmed before deployment starts."}
               </p>
             </div>
 
@@ -935,6 +941,20 @@ export default function RepositoriesPage() {
                       <span className="text-foreground-muted font-bold">Runtime</span>
                       <span className="font-extrabold text-foreground">{displayValue(analysisResult?.runtime)}</span>
                     </div>
+                    <div className="py-1 border-b border-border/10 col-span-2 flex justify-between gap-3">
+                      <span className="text-foreground-muted font-bold">Cloud Target</span>
+                      <span className="font-extrabold text-foreground text-right truncate max-w-[60%]">
+                        {displayValue(analysisResult?.recommendedTarget || analysisResult?.deploymentTarget, "Configure target")}
+                      </span>
+                    </div>
+                    {analysisResult?.targetReason ? (
+                      <div className="py-1 border-b border-border/10 col-span-2 flex justify-between gap-3">
+                        <span className="text-foreground-muted font-bold">Target Reason</span>
+                        <span className="font-medium text-foreground-muted text-right max-w-[70%]">
+                          {analysisResult.targetReason}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="py-1 border-b border-border/10 flex justify-between">
                       <span className="text-foreground-muted font-bold">Database</span>
                       <span className="font-extrabold text-foreground">
@@ -997,7 +1017,7 @@ export default function RepositoriesPage() {
                               {dbName} dependency detected
                             </p>
                             <p className="text-[11px] text-foreground-muted leading-relaxed">
-                              Add a real Azure-backed connection string in project environment settings before deployment. ZeroOps will not invent database credentials.
+                              Add a real database connection string in project environment settings before deployment. ZeroOps will not invent database credentials.
                             </p>
                           </div>
                         </div>
@@ -1040,7 +1060,7 @@ export default function RepositoriesPage() {
                     </div>
                     <div className="flex justify-between py-1 border-b border-border/10">
                       <span className="text-foreground-muted font-semibold">Bandwidth & Monitoring</span>
-                      <span className="text-foreground-muted font-bold">Azure billing dependent</span>
+                      <span className="text-foreground-muted font-bold">Cloud billing dependent</span>
                     </div>
                     <div className="flex justify-between py-1.5 border-b border-primary/20 text-sm">
                       <span className="text-foreground font-bold">Estimated Monthly Total</span>
@@ -1065,7 +1085,7 @@ export default function RepositoriesPage() {
 
                 <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl text-[11px] text-foreground-muted leading-relaxed">
                   <span className="font-bold text-foreground block mb-0.5">Billing Policy</span>
-                  Production billing must be approved before AI code changes or automated remediation run. Azure resource charges depend on the user&apos;s connected Azure subscription.
+                  Production billing must be approved before AI code changes or automated remediation run. Cloud resource charges depend on the user&apos;s connected Azure or Google Cloud account.
                 </div>
               </div>
             </div>

@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import tempfile
+import shutil
 from typing import Generator
 
 try:
@@ -25,6 +26,95 @@ def _stream_process(cmd: list[str], cwd: str | None = None) -> Generator[str, No
         if line:
             yield f"  {line.strip()}\n"
     return process.returncode or 0
+
+
+def _run_checked(cmd: list[str], friendly_name: str, cwd: str | None = None) -> Generator[str, None, None]:
+    yield f"{friendly_name}...\n"
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    while True:
+        line = process.stdout.readline() if process.stdout else ""
+        if not line and process.poll() is not None:
+            break
+        if line:
+            yield f"  {line.strip()}\n"
+    if process.returncode != 0:
+        raise RuntimeError(f"{friendly_name} failed with return code {process.returncode}.")
+
+
+def configure_gke_context(
+    gcp_project_id: str,
+    cluster_name: str,
+    location: str,
+    artifact_registry_host: str,
+    service_account_json: str | None = None,
+) -> Generator[str, None, None]:
+    """Prepare gcloud, Docker auth, and kubectl context for a GKE deployment."""
+    global K8S_AVAILABLE
+    if not shutil.which("gcloud"):
+        raise RuntimeError("Google Cloud CLI is not installed or is not available on PATH.")
+    if not shutil.which("kubectl"):
+        raise RuntimeError("kubectl is not installed or is not available on PATH.")
+
+    key_path = None
+    try:
+        if service_account_json:
+            try:
+                parsed = json.loads(service_account_json)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("GKE service account JSON is invalid.") from exc
+
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w", encoding="utf-8") as f:
+                json.dump(parsed, f)
+                key_path = f.name
+
+            for line in _run_checked(
+                ["gcloud", "auth", "activate-service-account", "--key-file", key_path],
+                "Activating GKE service account credentials",
+            ):
+                yield line
+        else:
+            yield "Using existing gcloud identity for GKE deployment.\n"
+
+        for line in _run_checked(
+            ["gcloud", "config", "set", "project", gcp_project_id],
+            "Selecting Google Cloud project",
+        ):
+            yield line
+
+        for line in _run_checked(
+            ["gcloud", "auth", "configure-docker", artifact_registry_host, "--quiet"],
+            "Configuring Docker authentication for Artifact Registry",
+        ):
+            yield line
+
+        for line in _run_checked(
+            [
+                "gcloud",
+                "container",
+                "clusters",
+                "get-credentials",
+                cluster_name,
+                "--location",
+                location,
+                "--project",
+                gcp_project_id,
+            ],
+            "Configuring kubectl context for GKE",
+        ):
+            yield line
+        K8S_AVAILABLE = True
+    finally:
+        if key_path:
+            try:
+                os.remove(key_path)
+            except OSError:
+                pass
 
 
 def extract_project_id(manifests_yaml: str) -> str:

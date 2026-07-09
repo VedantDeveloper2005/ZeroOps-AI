@@ -105,7 +105,7 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     docker_support = False
     monorepo_structure = "None"
     database_dependencies = []
-    deployment_strategy = "Azure Kubernetes Service"
+    deployment_strategy = "Managed Kubernetes"
     build_commands = None
     start_commands = None
     
@@ -391,7 +391,7 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     db_text = f"{database_dependencies[0]} configuration" if database_dependencies else "no database dependency"
     why_this_plan = (
         f"ZeroOps detected {framework} with {db_text}. The estimate is a scanner heuristic only; "
-        "real Azure costs and resource names depend on the user's connected Azure subscription."
+        "real cloud costs and resource names depend on the user's connected deployment target."
     )
 
     # Build pricing breakdown dict
@@ -626,7 +626,7 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
         if "total_cost" not in data and compute_cost is not None and database_cost is not None and platform_fee is not None:
             data["total_cost"] = compute_cost + database_cost + platform_fee
         if "why_this_plan" not in data:
-            data["why_this_plan"] = "ZeroOps recorded detected repository signals. Azure resources and external services must be confirmed before deployment."
+            data["why_this_plan"] = "ZeroOps recorded detected repository signals. Cloud resources and external services must be confirmed before deployment."
             
         if "detected_vars_detail" not in data:
             detected_vars_detail = []
