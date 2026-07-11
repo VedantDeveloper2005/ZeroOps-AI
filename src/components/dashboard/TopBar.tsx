@@ -62,7 +62,7 @@ export function TopBar() {
   }, []);
 
   return (
-    <div className="h-16 border-b border-border flex items-center justify-between px-6 bg-background/50 backdrop-blur-sm flex-shrink-0 relative">
+    <div className="h-16 border-b border-border flex items-center justify-between px-4 sm:px-6 bg-background/75 backdrop-blur-xl flex-shrink-0 relative">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm">
         <span className="text-foreground-muted">Dashboard</span>
@@ -77,7 +77,7 @@ export function TopBar() {
       {/* Search */}
       <div className="hidden md:flex items-center glass-subtle rounded-xl px-4 py-2 gap-2 w-72">
         <Search size={16} className="text-foreground-muted" />
-        <input type="text" placeholder="Search deployments, repos..." className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full" />
+        <input aria-label="Search deployments and repositories" type="text" placeholder="Search deployments, repos..." className="bg-transparent border-none outline-none text-sm text-foreground placeholder:text-foreground-muted w-full" />
         <kbd className="text-[10px] text-foreground-muted bg-card px-1.5 py-0.5 rounded border border-border">⌘K</kbd>
       </div>
 
@@ -86,7 +86,9 @@ export function TopBar() {
         {/* Notifications Bell Dropdown */}
         <div className="relative" ref={notifRef}>
           <button 
-            onClick={() => setNotifOpen(!notifOpen)} 
+            onClick={() => setNotifOpen(!notifOpen)}
+            aria-label={notifOpen ? "Close notifications" : "Open notifications"}
+            aria-expanded={notifOpen}
             className={`p-2 rounded-lg transition-colors relative ${notifOpen ? "bg-card text-foreground" : "hover:bg-card text-foreground-muted hover:text-foreground"}`}
           >
             <Bell size={20} />
@@ -168,7 +170,7 @@ export function TopBar() {
           )}
         </div>
 
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-xs font-bold text-foreground cursor-pointer">
+        <div aria-label="Current user" className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-xs font-bold text-foreground cursor-pointer">
           {initials}
         </div>
       </div>

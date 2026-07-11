@@ -60,7 +60,7 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="dark flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4 text-foreground">
+    <main id="main-content" className="dark flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4 text-foreground">
       {/* Left Column (Hero & Video Background) */}
       <div className="w-[52%] hidden lg:flex relative flex-col items-center justify-end pb-32 px-12 rounded-3xl overflow-hidden shadow-2xl h-full border border-border/10 dark">
         {/* Background Video */}
@@ -174,7 +174,7 @@ export default function LoginPage() {
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
             {error && (
-              <div className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
+              <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
                 {error}
               </div>
             )}
@@ -201,6 +201,8 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
                     className="text-foreground-muted hover:text-foreground p-1 transition-colors focus:outline-none"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}

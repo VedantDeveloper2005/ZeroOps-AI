@@ -54,6 +54,7 @@ export default function RootLayout({
         >
           <NotificationProvider>
             <AuthProvider>
+              <a href="#main-content" className="skip-link">Skip to main content</a>
               {children}
               <ToastContainer />
             </AuthProvider>
