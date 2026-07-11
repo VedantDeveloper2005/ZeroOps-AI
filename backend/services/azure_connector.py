@@ -20,7 +20,7 @@ try:
     from backend.services import vault
 except ImportError:
     import models
-    import vault
+    from services import vault
 
 logger = logging.getLogger("zeroops.azure_connector")
 
