@@ -125,7 +125,7 @@ async def get_azure_clients_async(user_id: uuid.UUID, db) -> Optional[dict[str, 
 async def _unsupported_cluster_operation(user_id: uuid.UUID, params: dict, db) -> dict:
     return {
         "success": False,
-        "error": "Cluster operations are not supported. ZeroOps deploys applications to Azure Container Apps.",
+        "error": "Cluster operations are not supported. ZeroOps deploys applications to Azure App Service.",
     }
 
 

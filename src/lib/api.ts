@@ -344,7 +344,7 @@ export interface HealthScore {
     security: number;
     reliability: number;
     scalability: number;
-    cost: number;
+    cost: number | null;
   };
   recommendations: string[];
 }
@@ -385,17 +385,17 @@ export interface AzureConnection {
   region?: string | null;
   resource_group?: string | null;
   acr_login_server?: string | null;
-  container_apps_environment?: string | null;
+  app_service_plan?: string | null;
   namespace_prefix?: string | null;
 }
 
 export interface DeploymentTargetStatus {
-  provider: "azure-container-apps";
+  provider: "azure-app-service";
   label: string;
   ready: boolean;
   missing: string[];
   region?: string | null;
-  environment_name?: string | null;
+  plan_name?: string | null;
   registry?: string | null;
 }
 
@@ -423,13 +423,11 @@ export interface DeploymentHealth {
   active_deployments_running: number;
 }
 
-export interface ClusterResourceMetrics {
+export interface RuntimeResourceMetrics {
   available: boolean;
   message?: string;
   cpu?: number | null;
   memory?: number | null;
-  podsHealthy?: number;
-  podsTotal?: number;
   traffic?: number | null;
   errorRate?: number | null;
 }
@@ -469,7 +467,7 @@ export const api = {
     project_id: string;
     branch?: string;
     environment?: string;
-    target_provider?: "auto" | "azure" | "azure-container-apps";
+    target_provider?: "auto" | "azure" | "azure-app-service";
   }) => request<{ status: string; deployment_id: string; project_id: string }>(
     "/api/deployments/deploy",
     { method: "POST", body: JSON.stringify(data) }
@@ -554,7 +552,7 @@ export const api = {
     region?: string;
     resource_group?: string;
     acr_login_server?: string;
-    container_apps_environment?: string;
+    app_service_plan?: string;
     namespace_prefix?: string;
   }) =>
     request<AzureConnection>("/api/azure/connection", {
@@ -619,7 +617,7 @@ export const api = {
   // ── Monitoring ──
   getMetrics: (projectId?: string) => {
     const params = projectId ? `?project_id=${projectId}` : "";
-    return request<ClusterResourceMetrics>(`/api/monitoring/metrics${params}`);
+    return request<RuntimeResourceMetrics>(`/api/monitoring/metrics${params}`);
   },
 
   // ── Secrets ──

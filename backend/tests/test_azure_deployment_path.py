@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from backend.services import container_apps, deployment_targets
+    from backend.services import app_service, deployment_targets
 except ImportError:
-    from services import container_apps, deployment_targets
+    from services import app_service, deployment_targets
 
 
 def azure_connection(**overrides):
@@ -15,7 +15,7 @@ def azure_connection(**overrides):
         "client_id": "client-id",
         "resource_group": "apps-rg",
         "acr_login_server": "zeroopsapps.azurecr.io",
-        "container_apps_environment": "customer-apps",
+        "app_service_plan": "customer-linux-plan",
         "region": "eastus",
         "namespace_prefix": "team-a",
     }
@@ -23,22 +23,22 @@ def azure_connection(**overrides):
     return SimpleNamespace(**values)
 
 
-def test_azure_target_requires_container_apps_configuration():
-    connection = azure_connection(container_apps_environment="")
+def test_azure_target_requires_app_service_configuration():
+    connection = azure_connection(app_service_plan="")
 
     status = deployment_targets.status_payload(connection)
 
     assert status["any_ready"] is False
-    assert status["targets"][0]["provider"] == "azure-container-apps"
-    assert "Application environment" in status["targets"][0]["missing"]
+    assert status["targets"][0]["provider"] == "azure-app-service"
+    assert "Linux App Service plan" in status["targets"][0]["missing"]
 
 
-def test_azure_target_selects_only_azure_container_apps():
+def test_azure_target_selects_only_azure_app_service():
     target = deployment_targets.choose_target({}, azure_connection(), "auto")
 
-    assert target.provider == "azure-container-apps"
+    assert target.provider == "azure-app-service"
     assert deployment_targets.image_ref_for_target(target, "team-a-app", "v1") == "zeroopsapps.azurecr.io/team-a-app:v1"
-    assert deployment_targets.metadata_for_target(target)["container_apps_environment"] == "customer-apps"
+    assert deployment_targets.metadata_for_target(target)["app_service_plan"] == "customer-linux-plan"
 
 
 def test_rejects_non_azure_deployment_targets():
@@ -51,8 +51,8 @@ def test_rejects_non_azure_deployment_targets():
     [
         ("Team A / My App", "team-a-my-app"),
         ("__", "app"),
-        ("A" * 40, "a" * 32),
+        ("A" * 40, "a" * 40),
     ],
 )
-def test_container_app_name_normalization(value, expected):
-    assert container_apps.normalize_app_name(value) == expected
+def test_app_service_name_normalization(value, expected):
+    assert app_service.normalize_app_name(value) == expected

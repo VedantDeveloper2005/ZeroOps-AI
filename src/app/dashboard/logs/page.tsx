@@ -1,225 +1,69 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
-import { Search } from "lucide-react";
-import { createReconnectingWebSocket } from "@/lib/runtime-config";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, Search } from "lucide-react";
+import { api, type Deployment, type DeploymentLog } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api } from "@/lib/api";
 
-const levels = ["INFO", "WARN", "ERROR", "DEBUG"] as const;
+const levels = ["info", "warning", "error", "debug"] as const;
 const levelColor: Record<string, string> = {
-  INFO: "bg-primary/10 text-primary",
-  WARN: "bg-warning/10 text-warning",
-  ERROR: "bg-danger/10 text-danger",
-  DEBUG: "bg-foreground-muted/10 text-foreground-muted",
+  info: "bg-primary/10 text-primary", warning: "bg-warning/10 text-warning", error: "bg-danger/10 text-danger", debug: "bg-foreground-muted/10 text-foreground-muted",
 };
-
-interface LogEntry {
-  id: string;
-  timestamp: string;
-  level: "INFO" | "WARN" | "ERROR" | "DEBUG";
-  pod: string;
-  message: string;
-}
-
-function createLogId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `log-stream-${Date.now()}`;
-}
-
-function parseLogLine(line: string, fallbackPod: string): LogEntry | null {
-  try {
-    const trimmed = line.trim();
-    if (!trimmed) return null;
-
-    const match = trimmed.match(/^([\d:.]+)\s+\[(INFO|WARN|ERROR|DEBUG)\]\s+([^\s]+)\s+-\s+(.*)$/);
-    if (match) {
-      return {
-        id: createLogId(),
-        timestamp: match[1],
-        level: match[2] as LogEntry["level"],
-        pod: match[3],
-        message: match[4],
-      };
-    }
-
-    return {
-      id: createLogId(),
-      timestamp: new Date().toLocaleTimeString(),
-      level: "INFO",
-      pod: fallbackPod === "all" ? "cluster" : fallbackPod,
-      message: trimmed,
-    };
-  } catch (err) {
-    console.error("Error parsing log line:", err);
-    return null;
-  }
-}
 
 export default function LogsPage() {
   const { projects } = useNotifications();
   const [selectedProject, setSelectedProject] = useState("");
-  const [selectedPod, setSelectedPod] = useState("all");
-  const [streamStatus, setStreamStatus] = useState<"connecting" | "live" | "unavailable">("connecting");
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [logs, setLogs] = useState<DeploymentLog[]>([]);
+  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [activeLevels, setActiveLevels] = useState<Set<string>>(new Set(levels));
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { if (projects.length && !selectedProject) setSelectedProject(projects[0].id); }, [projects, selectedProject]);
 
   useEffect(() => {
-    if (projects.length > 0 && !selectedProject) {
-      setSelectedProject(projects[0].id);
-    }
-  }, [projects, selectedProject]);
+    if (!selectedProject) return;
+    setLoading(true);
+    api.getDeployments(100)
+      .then((items) => setDeployments(items.filter((item) => item.project_id === selectedProject)))
+      .catch(() => setDeployments([]))
+      .finally(() => setLoading(false));
+  }, [selectedProject]);
 
-  const toggleLevel = (level: string) => {
-    const next = new Set(activeLevels);
-    if (next.has(level)) {
-      next.delete(level);
-    } else {
-      next.add(level);
-    }
-    setActiveLevels(next);
-  };
-
+  const latest = deployments[0];
   useEffect(() => {
-    setStreamStatus("connecting");
+    if (!latest) { setLogs([]); return; }
+    setLoading(true);
+    api.getDeployment(latest.id)
+      .then((detail) => setLogs(detail.logs || []))
+      .catch(() => setLogs([]))
+      .finally(() => setLoading(false));
+  }, [latest?.id]);
 
-    const podParam = selectedPod === "all" ? (selectedProject || "all-pods") : selectedPod;
+  const filtered = useMemo(() => logs.filter((log) => {
+    const level = log.level.toLowerCase();
+    return activeLevels.has(level) && (!search || log.message.toLowerCase().includes(search.toLowerCase()));
+  }), [logs, search, activeLevels]);
 
-    const cleanup = createReconnectingWebSocket(`/ws/logs/${podParam}`, {
-      onOpen: () => {
-        setStreamStatus("live");
-      },
-      onMessage: (event) => {
-        const parsed = parseLogLine(event.data, podParam);
-        if (parsed) {
-          setLogs((prev) => {
-            const next = [...prev, parsed];
-            return next.length > 300 ? next.slice(next.length - 300) : next;
-          });
-        }
-      },
-      onError: () => {
-        setStreamStatus("unavailable");
-      },
-      onClose: () => {
-        setStreamStatus("unavailable");
-      },
-      maxRetries: 5,
-    });
+  const toggleLevel = (level: string) => setActiveLevels((current) => {
+    const next = new Set(current);
+    next.has(level) ? next.delete(level) : next.add(level);
+    return next;
+  });
 
-    return cleanup;
-  }, [selectedPod, selectedProject]);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs.length]);
-
-  const uniquePods = Array.from(new Set(logs.map((log) => log.pod)));
-  const filtered = logs.filter(
-    (log) =>
-      activeLevels.has(log.level) &&
-      (selectedPod === "all" || log.pod === selectedPod) &&
-      (search === "" || log.message.toLowerCase().includes(search.toLowerCase()))
-  );
-
-  return (
-    <div className="space-y-4 h-full flex flex-col">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="bg-card border border-border/80 rounded-xl px-4 py-2 flex items-center gap-2 flex-1 max-w-md shadow-sm">
-          <Search size={16} className="text-foreground-muted" />
-          <input
-            type="text"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search stream / filter logs..."
-            className="bg-transparent border-none outline-none text-xs text-foreground placeholder:text-foreground-muted w-full font-semibold"
-          />
-        </div>
-
-        <select
-          value={selectedProject}
-          onChange={(event) => setSelectedProject(event.target.value)}
-          className="rounded-xl px-3 py-2 text-xs font-semibold text-foreground bg-card border border-border/80 shadow-sm cursor-pointer outline-none focus:ring-1 focus:ring-primary"
-        >
-          <option value="">All Projects</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.name}</option>
-          ))}
-        </select>
-
-        <select
-          value={selectedPod}
-          onChange={(event) => setSelectedPod(event.target.value)}
-          className="rounded-xl px-3 py-2 text-xs font-semibold text-foreground bg-card border border-border/80 shadow-sm cursor-pointer outline-none focus:ring-1 focus:ring-primary"
-        >
-          <option value="all">All Pods</option>
-          {uniquePods.map((pod) => (
-            <option key={pod} value={pod}>{pod}</option>
-          ))}
-        </select>
-
-        <div className="flex gap-1.5 bg-background-secondary p-0.5 rounded-lg border border-border/50">
-          {levels.map((level) => {
-            const isActive = activeLevels.has(level);
-            return (
-              <button
-                key={level}
-                onClick={() => toggleLevel(level)}
-                className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition select-none cursor-pointer ${
-                  isActive ? `${levelColor[level]} shadow-sm border border-border/40` : "text-foreground-muted hover:text-foreground"
-                }`}
-              >
-                {level}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="bg-card border border-border rounded-xl overflow-hidden flex-1 shadow-sm"
-      >
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background-secondary">
-          <div className={`w-2 h-2 rounded-full ${streamStatus === "live" ? "bg-success animate-pulse" : "bg-foreground-muted"}`} />
-          <span className="text-[10px] uppercase font-bold text-foreground-muted font-mono tracking-wider">
-            {streamStatus === "live" ? "Live stream" : streamStatus === "connecting" ? "Connecting" : "Stream unavailable"} - {filtered.length} entries
-          </span>
-        </div>
-        <div
-          ref={scrollRef}
-          className="p-4 font-mono text-[11px] leading-7 overflow-y-auto no-scrollbar bg-background-secondary/40"
-          style={{ maxHeight: "calc(100vh - 320px)" }}
-        >
-          {filtered.map((log) => (
-            <div key={log.id} className="flex gap-3 hover:bg-card/40 px-2 py-0.5 rounded border border-transparent hover:border-border/20 transition-colors">
-              <span className="text-foreground-muted w-24 flex-shrink-0 font-bold">{log.timestamp}</span>
-              <span className={`w-14 text-center rounded text-[9px] font-bold py-0.5 shrink-0 ${levelColor[log.level]}`}>
-                {log.level}
-              </span>
-              <span className="text-foreground-muted w-36 truncate flex-shrink-0 font-bold">{log.pod}</span>
-              <span className={`truncate ${log.level === "ERROR" ? "text-danger" : log.level === "WARN" ? "text-warning" : "text-foreground"}`}>
-                {log.message}
-              </span>
-            </div>
-          ))}
-          {filtered.length === 0 && (
-            <p className="text-foreground-muted">
-              {streamStatus === "unavailable"
-                ? "Live log stream is unavailable. Start the backend WebSocket service or open a recorded deployment log."
-                : "No log lines received yet."}
-            </p>
-          )}
-        </div>
-      </motion.div>
+  return <div className="flex h-full flex-col space-y-4">
+    <div className="flex flex-wrap items-center gap-3">
+      <label className="flex max-w-md flex-1 items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 shadow-sm"><Search size={16} className="text-foreground-muted" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search recorded logs" className="w-full border-none bg-transparent text-xs font-semibold text-foreground outline-none placeholder:text-foreground-muted" /></label>
+      <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="cursor-pointer rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-sm outline-none focus:ring-1 focus:ring-primary">{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+      <div className="flex gap-1.5 rounded-lg border border-border/50 bg-background-secondary p-0.5">{levels.map((level) => <button key={level} onClick={() => toggleLevel(level)} className={`cursor-pointer rounded-md px-3 py-1.5 text-[10px] font-bold uppercase transition ${activeLevels.has(level) ? `${levelColor[level]} border border-border/40 shadow-sm` : "text-foreground-muted hover:text-foreground"}`}>{level}</button>)}</div>
     </div>
-  );
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="border-b border-border bg-background-secondary px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{latest ? `Latest deployment · ${filtered.length} recorded entries` : "No deployment selected"}</div>
+      <div className="max-h-[calc(100vh-320px)] overflow-y-auto bg-background-secondary/40 p-4 font-mono text-[11px] leading-7">
+        {loading ? <div className="flex items-center gap-2 text-foreground-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" />Loading recorded logs…</div> : filtered.map((log) => { const level = log.level.toLowerCase(); return <div key={`${log.line_number}-${log.timestamp}`} className="flex gap-3 rounded px-2 py-0.5 hover:bg-card/40"><span className="w-24 shrink-0 font-bold text-foreground-muted">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}</span><span className={`w-16 shrink-0 rounded py-0.5 text-center text-[9px] font-bold ${levelColor[level] || levelColor.info}`}>{level}</span><span className={level === "error" ? "text-danger" : level === "warning" ? "text-warning" : "text-foreground"}>{log.message}</span></div>; })}
+        {!loading && !filtered.length && <p className="text-foreground-muted">No recorded log entries match this view. Logs appear after a deployment starts.</p>}
+      </div>
+    </motion.div>
+  </div>;
 }

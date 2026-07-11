@@ -26,12 +26,12 @@ uvicorn main:app --reload --port 8000
 
 The dashboard expects the FastAPI backend for repository analysis, deployments, logs, monitoring, security status, and settings data. If Azure Key Vault or required Azure hosting configuration is unavailable, launch stays blocked instead of showing synthetic production data.
 
-## Primary Demo Flow
+## Product Flow
 
 - Landing page -> Dashboard
 - Repositories -> Connect Repository
 - Analyze -> application review and build plan
-- Deploy -> live backend pipeline
+- Deploy -> verified Azure release when hosting is connected
 - Logs, Monitoring, Autoscaling, Security, Infrastructure, and Incidents remain available as supporting proof points
 
 ## Verification
@@ -39,7 +39,7 @@ The dashboard expects the FastAPI backend for repository analysis, deployments, 
 ```bash
 npm run lint
 npm run build
-python -m py_compile backend/main.py backend/config.py backend/services/ai.py backend/services/builder.py backend/services/git.py backend/services/k8s.py backend/services/pipeline.py backend/services/vault.py
+python -m py_compile backend/main.py backend/config.py backend/services/ai.py backend/services/app_service.py backend/services/git.py backend/services/pipeline.py backend/services/vault.py
 ```
 
 ## Azure App Service

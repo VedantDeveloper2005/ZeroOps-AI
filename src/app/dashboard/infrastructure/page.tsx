@@ -2,8 +2,8 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, Box, Database, Loader2, Server } from "lucide-react";
-import { api, type ClusterResourceMetrics, type Project } from "@/lib/api";
+import { Activity, AlertTriangle, Database, Loader2, Server, Zap } from "lucide-react";
+import { api, type RuntimeResourceMetrics } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
 
@@ -11,134 +11,59 @@ export default function InfrastructurePage() {
   const { hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [loading, setLoading] = useState(false);
-  const [metricsLoading, setMetricsLoading] = useState(false);
-  const [metrics, setMetrics] = useState<ClusterResourceMetrics | null>(null);
+  const [metrics, setMetrics] = useState<RuntimeResourceMetrics | null>(null);
 
   useEffect(() => {
-    if (!hasDeployed) return;
-    if (projects.length > 0 && !selectedProjectId) {
-      setSelectedProjectId(projects[0].id);
-    }
+    if (hasDeployed && projects.length && !selectedProjectId) setSelectedProjectId(projects[0].id);
   }, [hasDeployed, projects, selectedProjectId]);
 
   useEffect(() => {
-    if (!selectedProjectId) {
-      setMetrics(null);
-      return;
-    }
-
+    if (!selectedProjectId) return;
     let active = true;
-    async function loadMetrics() {
-      setMetricsLoading(true);
-      try {
-        const data = await api.getMetrics(selectedProjectId);
-        if (active) setMetrics(data);
-      } catch (err) {
-        console.error("Failed to load infrastructure metrics", err);
-        if (active) setMetrics({ available: false, message: "Infrastructure metrics endpoint is unavailable." });
-      } finally {
-        if (active) setMetricsLoading(false);
-      }
-    }
-
-    void loadMetrics();
-    return () => {
-      active = false;
-    };
+    setLoading(true);
+    api.getMetrics(selectedProjectId)
+      .then((data) => active && setMetrics(data))
+      .catch(() => active && setMetrics({ available: false, message: "Runtime metrics are not available yet." }))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, [selectedProjectId]);
 
-  if (!hasDeployed) {
-    return (
-      <div className="space-y-6">
-        <LockedView featureName="Infrastructure Topology" />
-      </div>
-    );
+  if (!hasDeployed) return <LockedView featureName="Runtime signals" />;
+  if (projectsLoading) {
+    return <div className="flex h-[60vh] items-center justify-center gap-3 text-sm font-medium text-foreground-muted"><Loader2 className="h-6 w-6 animate-spin text-primary" />Loading runtime signals…</div>;
   }
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-foreground-muted text-sm font-medium">Loading infrastructure context...</p>
-      </div>
-    );
-  }
-
-  const selectedProject = projects.find((project) => project.id === selectedProjectId);
-  const isAvailable = metrics?.available === true;
-  const podsHealthy = metrics?.podsHealthy ?? 0;
-  const podsTotal = metrics?.podsTotal ?? 0;
+  const project = projects.find((item) => item.id === selectedProjectId);
+  const stats = [
+    { label: "Project", value: project?.name || "Unknown", icon: Server, color: "text-primary" },
+    { label: "CPU", value: metrics?.cpu == null ? "No data" : `${metrics.cpu}%`, icon: Activity, color: "text-info" },
+    { label: "Memory", value: metrics?.memory == null ? "No data" : `${metrics.memory}%`, icon: Database, color: "text-accent" },
+    { label: "Requests", value: metrics?.traffic == null ? "No data" : String(metrics.traffic), icon: Zap, color: "text-success" },
+  ];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-card border border-border rounded-xl p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-primary/10 border border-primary/20 text-primary">
-            <Database size={20} />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-foreground">Infrastructure Metrics</h2>
-            <p className="text-[10px] text-foreground-muted">Reads Kubernetes state from the backend. No synthetic topology is shown.</p>
-          </div>
+      <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-bold text-foreground">Runtime signals</h2>
+          <p className="text-[10px] text-foreground-muted">Only recorded application telemetry is shown here.</p>
         </div>
-
-        <select
-          value={selectedProjectId}
-          onChange={(event) => setSelectedProjectId(event.target.value)}
-          className="bg-background-secondary border border-border text-xs rounded-lg px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold max-w-[240px]"
-        >
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.full_name}</option>
-          ))}
+        <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="max-w-[240px] rounded-lg border border-border bg-background-secondary px-3 py-1.5 text-xs font-semibold text-foreground outline-none focus:ring-1 focus:ring-primary">
+          {projects.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}
         </select>
       </div>
 
-      {metricsLoading ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3 bg-card border border-border rounded-xl shadow-sm">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <p className="text-xs text-foreground-muted">Querying Kubernetes metrics...</p>
-        </div>
-      ) : !isAvailable ? (
-        <div className="bg-card border border-border rounded-xl p-10 text-center shadow-sm">
-          <AlertTriangle className="w-10 h-10 mx-auto text-foreground-muted/40 mb-3" />
-          <h3 className="text-sm font-bold text-foreground mb-1">Infrastructure metrics unavailable</h3>
-          <p className="text-xs text-foreground-muted max-w-md mx-auto">
-            {metrics?.message || "The backend cannot reach an active Kubernetes context for this project."}
-          </p>
-        </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-3 rounded-xl border border-border bg-card py-20 text-xs text-foreground-muted"><Loader2 className="h-5 w-5 animate-spin text-primary" />Loading recorded metrics…</div>
+      ) : !metrics?.available ? (
+        <div className="rounded-xl border border-border bg-card p-10 text-center shadow-sm"><AlertTriangle className="mx-auto mb-3 h-10 w-10 text-foreground-muted/40" /><h3 className="text-sm font-bold text-foreground">No runtime data yet</h3><p className="mx-auto mt-1 max-w-md text-xs text-foreground-muted">{metrics?.message || "Deploy the application and connect telemetry to see real runtime signals."}</p></div>
       ) : (
-        <>
-          <div className="grid md:grid-cols-4 gap-4">
-            {[
-              { label: "Project", value: selectedProject?.name || "Unknown", icon: Server, color: "text-primary" },
-              { label: "Pods Healthy", value: `${podsHealthy}/${podsTotal}`, icon: Box, color: podsHealthy === podsTotal ? "text-success" : "text-warning" },
-              { label: "Node CPU", value: metrics?.cpu == null ? "No data" : `${metrics.cpu}%`, icon: Activity, color: "text-info" },
-              { label: "Node Memory", value: metrics?.memory == null ? "No data" : `${metrics.memory}%`, icon: Database, color: "text-accent" },
-            ].map((stat, index) => {
-              const Icon = stat.icon;
-              return (
-                <motion.div
-                  key={stat.label}
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.04 }}
-                  className="bg-card border border-border rounded-xl p-5 shadow-sm"
-                >
-                  <Icon size={18} className={`${stat.color} mb-3`} />
-                  <p className="text-xl font-bold text-foreground">{stat.value}</p>
-                  <p className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold mt-1">{stat.label}</p>
-                </motion.div>
-              );
-            })}
-          </div>
-
-          <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-foreground mb-2">Topology View</h3>
-            <p className="text-xs text-foreground-muted">
-              The backend currently exposes aggregate Kubernetes metrics only. Detailed node, service, and pod topology will appear here after a real topology endpoint is connected.
-            </p>
-          </div>
-        </>
+        <div className="grid gap-4 md:grid-cols-4">
+          {stats.map((stat, index) => {
+            const Icon = stat.icon;
+            return <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }} className="rounded-xl border border-border bg-card p-5 shadow-sm"><Icon className={`${stat.color} mb-3`} size={18} /><p className="text-xl font-bold text-foreground">{stat.value}</p><p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{stat.label}</p></motion.div>;
+          })}
+        </div>
       )}
     </div>
   );

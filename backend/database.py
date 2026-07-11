@@ -245,6 +245,7 @@ async def run_migrations():
         # Azure BYOS: add connection_status column to user_azure_connections
         "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS connection_status TEXT DEFAULT 'pending'",
         "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS container_apps_environment TEXT",
+        "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS app_service_plan TEXT",
         # Drop the obsolete client_secret_encrypted column (secrets go to Key Vault only)
         """DO $$ BEGIN
             IF EXISTS (

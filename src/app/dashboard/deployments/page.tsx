@@ -172,11 +172,6 @@ function metadataStringArray(metadata: Record<string, unknown> | null | undefine
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
-function metadataRecord(metadata: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
-  const value = metadata?.[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 function DeploymentsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -429,14 +424,6 @@ function DeploymentsPageContent() {
   const isFailed = currentDeployment?.status === "failed";
   const liveUrl = currentDeployment?.live_url || "";
   const infrastructureMetadata = currentDeployment?.infrastructure_metadata;
-  const targetMetadata = metadataRecord(infrastructureMetadata, "target");
-  const targetProvider = metadataString(infrastructureMetadata, "target_provider");
-  const targetCluster = metadataString(targetMetadata, "cluster_name")
-    || metadataString(targetMetadata, "aks_cluster_name")
-    || metadataString(infrastructureMetadata, "namespace");
-  const targetLabel = targetProvider
-    ? `${targetProvider.toUpperCase()}${targetCluster ? ` / ${targetCluster}` : ""}`
-    : "Not recorded";
   const databaseDependencies = metadataStringArray(infrastructureMetadata, "database_dependencies");
   const frameworkLabel = analysis?.framework || metadataString(infrastructureMetadata, "framework") || "Not detected";
   const deploymentDuration = currentDeployment?.duration
@@ -562,7 +549,7 @@ function DeploymentsPageContent() {
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
                 <Lock size={12} className="text-success" /> SSL Status
               </span>
-              <p className="font-extrabold text-xs text-foreground">{liveUrl ? "Depends on ingress" : "Not verified"}</p>
+              <p className="font-extrabold text-xs text-foreground">{liveUrl ? "Verified endpoint" : "Not verified"}</p>
             </div>
             <div className="p-3 bg-zinc-950/40 rounded-xl border border-border/40 space-y-1">
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold flex items-center gap-1.5">
@@ -570,7 +557,7 @@ function DeploymentsPageContent() {
               </span>
               <p className="font-extrabold text-xs text-foreground">
                 {databaseDependencies.length > 0
-                  ? `${databaseDependencies.join(", ")} configured`
+                  ? `${databaseDependencies.join(", ")} detected`
                   : "Not recorded"}
               </p>
             </div>
@@ -589,14 +576,10 @@ function DeploymentsPageContent() {
           </div>
 
           {/* Deployment Summary grid */}
-          <div className="relative z-20 grid grid-cols-2 md:grid-cols-5 gap-4 max-w-3xl mx-auto pt-4 border-t border-border/20 text-xs">
+          <div className="relative z-20 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto pt-4 border-t border-border/20 text-xs">
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Framework</span>
               <p className="font-extrabold text-foreground mt-0.5">{frameworkLabel}</p>
-            </div>
-            <div>
-              <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Cloud Target</span>
-              <p className="font-extrabold text-foreground mt-0.5 truncate">{targetLabel}</p>
             </div>
             <div>
               <span className="text-[10px] text-foreground-muted uppercase tracking-wider font-semibold">Deployment Time</span>

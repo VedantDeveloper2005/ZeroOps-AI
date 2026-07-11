@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle, Loader2, Wifi } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, type Project, type TelemetryMetric } from "@/lib/api";
+import { api, type TelemetryMetric } from "@/lib/api";
 
 export default function MonitoringPage() {
   const { projects, isLoading: projectsLoading } = useNotifications();

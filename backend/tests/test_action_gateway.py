@@ -339,7 +339,8 @@ async def test_cost_risk_rule_integration(db_session):
     from backend.services.agent import NvidiaNIMDevOpsAgent
     agent_instance = NvidiaNIMDevOpsAgent()
     
-    # Scale request with 10 nodes (at $100/node = $1000, exceeding $50 threshold)
+    # Automatic capacity changes are deliberately disabled until real App Service
+    # telemetry and Cost Management data are connected.
     success = await agent_instance.scale_resources(
         project_id=str(project.id),
         min_replicas=1,
@@ -347,18 +348,14 @@ async def test_cost_risk_rule_integration(db_session):
         db=db_session
     )
     
-    assert success is True
+    assert success is False
     
-    # Assert that a PendingApproval was created for the scale action
+    # Disabled operations must not create a synthetic approval or cost estimate.
     result_pending = await db_session.execute(
         select(models.PendingApproval).filter(models.PendingApproval.user_id == user.id)
     )
     pending = result_pending.scalars().first()
-    assert pending is not None
-    assert pending.action_type == "scale_aks_nodepool"
-    assert pending.parameters["node_count"] == 10
-    assert pending.parameters["estimated_cost_cents"] == 100000  # 10 * 10000 cents = 100,000 cents
-    assert pending.parameters["resource_tags"]["environment"] == "production"
+    assert pending is None
     
     azure_connector.delete_credential_from_vault(user.id)
 
@@ -423,7 +420,7 @@ async def test_auto_remediate_package_check_and_gating(db_session):
             )
             assert success is False
             
-            # 2. Attempt remediation with a valid real package name (e.g. "lodash").
+            # 2. Automatic source mutation stays disabled even for a valid package.
             fa.failure_summary = "missing dependency 'lodash'"
             fa.recommended_fix = "install 'lodash'"
             await db_session.commit()
@@ -433,26 +430,14 @@ async def test_auto_remediate_package_check_and_gating(db_session):
                 failure_reason="missing dependency 'lodash'",
                 db=db_session
             )
-            assert success_ok is True
+            assert success_ok is False
             
-            # Verify pending approval was created for "inject_dependency"
+            # Disabled remediation cannot queue a source-code mutation.
             result_pending = await db_session.execute(
                 select(models.PendingApproval).filter(models.PendingApproval.action_type == "inject_dependency")
             )
             pending = result_pending.scalars().first()
-            assert pending is not None
-            assert pending.parameters["package_name"] == "lodash"
-            assert pending.status == "pending"
-            
-            # Approve it and verify the safer MVP does not mutate source
-            # files automatically, even after a human approval.
-            approval_result = await action_gateway.decide_pending_action(
-                approval_id=pending.id,
-                decision="approved",
-                decided_by=user.id,
-                db=db_session
-            )
-            assert approval_result["success"] is False
+            assert pending is None
 
             # Verify lodash was not injected into the repository.
             with open(os.path.join(tmpdir, "package.json"), "r") as f:

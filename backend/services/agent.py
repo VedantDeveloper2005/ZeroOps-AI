@@ -140,7 +140,14 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         requirements: Dict,
         db = None
     ) -> Dict:
-        logger.info(f"Agent planning resource provisioning: {requirements}...")
+        logger.info("Infrastructure provisioning was requested but is disabled for this product stage.")
+        return {
+            "success": False,
+            "error": "Automatic infrastructure provisioning is disabled. Configure required Azure resources explicitly before deployment.",
+        }
+
+        # Retained below only for database migration compatibility; execution is
+        # intentionally unreachable while automatic provisioning is disabled.
         if db is None:
             from backend.database import AsyncSessionLocal
             async with AsyncSessionLocal() as session:
@@ -223,7 +230,11 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         max_replicas: int,
         db = None
     ) -> bool:
-        logger.info(f"Agent scale request for {project_id}: [{min_replicas} - {max_replicas}]")
+        logger.info("Automatic capacity changes are disabled pending real cost and telemetry controls.")
+        return False
+
+        # Retained below only for database migration compatibility; execution is
+        # intentionally unreachable while automatic capacity changes are disabled.
         if db is None:
             from backend.database import AsyncSessionLocal
             async with AsyncSessionLocal() as session:
@@ -309,7 +320,11 @@ class NvidiaNIMDevOpsAgent(AutonomousDevOpsAgent):
         failure_reason: str,
         db
     ) -> bool:
-        logger.info(f"Executing self-healing pipeline for failed run {deployment_id}...")
+        logger.info("Automatic source-code remediation is disabled.")
+        return False
+
+        # Retained below only for database migration compatibility; execution is
+        # intentionally unreachable while automatic source mutation is disabled.
         
         # 1. Fetch deployment & project
         from sqlalchemy.future import select

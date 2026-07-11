@@ -24,16 +24,28 @@ jobs:
           node-version: '22.x'
 
       - name: npm install, build, and test
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ secrets.NEXT_PUBLIC_API_BASE_URL || 'https://zeroops-backend.azurewebsites.net' }}
+          NEXT_PUBLIC_WS_BASE_URL: ${{ secrets.NEXT_PUBLIC_WS_BASE_URL || 'wss://zeroops-backend.azurewebsites.net' }}
         run: |
           npm install
           npm run build --if-present
           npm run test --if-present
+          mkdir -p .next/standalone/.next/
+          cp -R public .next/standalone/
+          cp -R .next/static .next/standalone/.next/
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .
+          path: |
+            .
+            !.git/
+            !.git.zip
+            !backend/
+            !node_modules/
+          include-hidden-files: true
 
   deploy:
     runs-on: ubuntu-latest
@@ -47,6 +59,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: node-app
+          path: .
       
       - name: Login to Azure
         uses: azure/login@v2
@@ -62,4 +75,4 @@ jobs:
           app-name: 'zeroopsai'
           slot-name: 'Production'
           package: .
-          
+          startup-command: 'node .next/standalone/server.js'

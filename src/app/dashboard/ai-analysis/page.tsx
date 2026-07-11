@@ -3,16 +3,15 @@
 import { motion } from "framer-motion";
 import { Brain, Loader2, ShieldCheck, TrendingUp } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
-import { api, type Project, type HealthScore, type CostOptimization } from "@/lib/api";
+import { api, type HealthScore, type CostOptimization } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
 export default function AIAnalysisPage() {
-  const { addToast, projects, isLoading: loadingProjects } = useNotifications();
+  const { projects, isLoading: loadingProjects } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [loadingData, setLoadingData] = useState(false);
   const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
   const [costOpt, setCostOpt] = useState<CostOptimization | null>(null);
-  const [requestingFixId, setRequestingFixId] = useState<string | null>(null);
 
   useEffect(() => {
     if (projects.length > 0 && !selectedProjectId) {
@@ -80,23 +79,6 @@ export default function AIAnalysisPage() {
 
     return [...healthRecommendations, ...costRecommendations];
   }, [healthScore, costOpt]);
-
-  const handleRequestPaidFix = async (id: string, recommendation: string) => {
-    setRequestingFixId(id);
-    try {
-      await api.createBillingOperation({
-        operation_type: "ai_code_fix",
-        project_id: selectedProjectId,
-        description: recommendation,
-      });
-      addToast("Paid fix request created. Complete payment before AI changes code.", "info");
-    } catch (err) {
-      console.error("Failed to create paid fix request", err);
-      addToast("Could not create paid fix request.", "error");
-    } finally {
-      setRequestingFixId(null);
-    }
-  };
 
   if (loadingProjects || (loadingData && !healthScore)) {
     return (
@@ -167,9 +149,7 @@ export default function AIAnalysisPage() {
           <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">AI Engineering Recommendations</h2>
         </div>
         <div className="grid md:grid-cols-2 gap-6">
-          {recommendations.length > 0 ? recommendations.map((rec, index) => {
-            const isRequesting = requestingFixId === rec.id;
-            return (
+          {recommendations.length > 0 ? recommendations.map((rec, index) => (
               <motion.div
                 key={rec.id}
                 initial={{ opacity: 0, y: 10 }}
@@ -189,24 +169,11 @@ export default function AIAnalysisPage() {
                     <p className="text-[11px] text-foreground-muted mt-1 leading-relaxed"><span className="font-bold text-foreground font-semibold">Recommendation:</span> {rec.recommendation}</p>
                   </div>
                 </div>
-                <div className="pt-4 border-t border-border/20 flex justify-end">
-                  <button
-                    onClick={() => handleRequestPaidFix(rec.id, rec.recommendation)}
-                    disabled={isRequesting}
-                    className="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-primary text-white hover:bg-primary-hover shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isRequesting ? (
-                      <>
-                        <Loader2 size={12} className="animate-spin" /> Creating request...
-                      </>
-                    ) : (
-                      "Request Paid Fix"
-                    )}
-                  </button>
-                </div>
+                <p className="pt-4 border-t border-border/20 text-[11px] font-medium text-foreground-muted">
+                  Review the recommendation and make the change in your source repository before launching a new version.
+                </p>
               </motion.div>
-            );
-          }) : (
+          )) : (
             <div className="md:col-span-2 bg-card border border-border rounded-2xl p-8 text-center">
               <p className="text-xs font-semibold text-foreground">No recommendations yet</p>
               <p className="text-[11px] text-foreground-muted mt-1">

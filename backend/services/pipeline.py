@@ -9,11 +9,11 @@ from fastapi import WebSocket
 from sqlalchemy.future import select
 
 try:
-    from backend.services import ai, azure_connector, container_apps, deployment_targets, git, vault
+    from backend.services import ai, app_service, azure_connector, deployment_targets, git, vault
     from backend.database import AsyncSessionLocal
     from backend import models
 except ImportError:
-    from services import ai, azure_connector, container_apps, deployment_targets, git, vault
+    from services import ai, app_service, azure_connector, deployment_targets, git, vault
     from database import AsyncSessionLocal
     import models
 
@@ -510,7 +510,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             if not client_secret:
                 raise RuntimeError("Azure credentials are unavailable. Reconnect Azure and try again.")
             await p_logger.log("▸ Building your application securely in Azure…", "info")
-            for log_line in container_apps.build_image(
+            for log_line in app_service.build_image(
                 connection=selected_target.connection,
                 client_secret=client_secret,
                 repo_path=repo_path,
@@ -547,7 +547,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 else:
                     runtime_variables[variable.key] = (variable.value, False)
             deploy_start = time.time()
-            for deployment_result in container_apps.deploy_image(
+            for deployment_result in app_service.deploy_image(
                 connection=selected_target.connection,
                 client_secret=client_secret,
                 app_name=project_id_raw,
@@ -555,7 +555,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 metadata=metadata,
                 environment_variables=runtime_variables,
             ):
-                if isinstance(deployment_result, container_apps.ContainerAppRelease):
+                if isinstance(deployment_result, app_service.AppServiceRelease):
                     release = deployment_result
                     live_url = release.live_url
                     await p_logger.log("  ✓ Azure has prepared a ready version.", "success")
@@ -575,7 +575,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(9, "active", "...")
             await p_logger.log("▸ Starting application health check validation...", "info")
-            container_apps.verify_public_endpoint(live_url)
+            app_service.verify_public_endpoint(live_url)
             await p_logger.log("  ✓ Your public address is responding.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(9, "completed", step_dur)

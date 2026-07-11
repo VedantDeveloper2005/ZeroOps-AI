@@ -15,7 +15,6 @@ import {
   type DeploymentHealth,
   type EnvVar,
   type HealthCheck,
-  type Project,
   type ProjectMember,
   type SystemHealth,
 } from "@/lib/api";
@@ -30,7 +29,7 @@ const emptyAzureForm = {
   region: "eastus",
   resource_group: "",
   acr_login_server: "",
-  container_apps_environment: "",
+  app_service_plan: "",
   namespace_prefix: "",
 };
 
@@ -141,7 +140,7 @@ export default function SettingsPage() {
         region: data.region || "eastus",
         resource_group: data.resource_group || "",
         acr_login_server: data.acr_login_server || "",
-        container_apps_environment: data.container_apps_environment || "",
+        app_service_plan: data.app_service_plan || "",
         namespace_prefix: data.namespace_prefix || "",
       });
     } catch (err) {
@@ -408,7 +407,7 @@ export default function SettingsPage() {
         region: azureForm.region.trim() || "eastus",
         resource_group: azureForm.resource_group.trim() || undefined,
         acr_login_server: azureForm.acr_login_server.trim().replace(/\/+$/, "") || undefined,
-        container_apps_environment: azureForm.container_apps_environment.trim() || undefined,
+        app_service_plan: azureForm.app_service_plan.trim() || undefined,
         namespace_prefix: azureForm.namespace_prefix.trim() || undefined,
       });
       setAzureConnection(updated);
@@ -647,11 +646,11 @@ export default function SettingsPage() {
                     </p>
                   </div>
                   <span className={`text-[10px] px-2.5 py-1 rounded-full border font-bold uppercase w-fit ${
-                    azureConnection?.connected && azureConnection.acr_login_server && azureConnection.container_apps_environment
+                    azureConnection?.connected && azureConnection.acr_login_server && azureConnection.app_service_plan
                       ? "bg-success/10 border-success/25 text-success"
                       : "bg-warning/10 border-warning/25 text-warning"
                   }`}>
-                    {azureConnection?.connected && azureConnection.acr_login_server && azureConnection.container_apps_environment
+                    {azureConnection?.connected && azureConnection.acr_login_server && azureConnection.app_service_plan
                       ? "Ready"
                       : "Needs Setup"}
                   </span>
@@ -733,13 +732,13 @@ export default function SettingsPage() {
                         />
                       </label>
                       <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Application environment</span>
+                        <span className="font-bold text-foreground-muted">Linux App Service plan</span>
                         <input
                           type="text"
                           required
-                          value={azureForm.container_apps_environment}
-                          onChange={(e) => handleAzureFieldChange("container_apps_environment", e.target.value)}
-                          placeholder="your-app-environment"
+                          value={azureForm.app_service_plan}
+                          onChange={(e) => handleAzureFieldChange("app_service_plan", e.target.value)}
+                          placeholder="your-linux-app-service-plan"
                           className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
                         />
                       </label>

@@ -2,13 +2,13 @@ import asyncio
 import json
 import uuid
 import requests
-import threading
 import logging
 import os
 import shutil
 import zipfile
 import hashlib
 import stat
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Any, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File
@@ -28,24 +28,40 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, k8s, pipeline, vault, agent
+    from backend.services import git, ai, pipeline, vault, agent
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, k8s, pipeline, vault, agent
+    from services import git, ai, pipeline, vault, agent
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
     import models, schemas, auth
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    initialized = await init_db()
+    if initialized:
+        await migrate_legacy_environment_secrets()
+        await recover_interrupted_deployments()
+    daemon_task = asyncio.create_task(self_healing_daemon())
+    try:
+        yield
+    finally:
+        daemon_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await daemon_task
+
 
 app = FastAPI(
     title="ZeroOps AI Backend",
     docs_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/docs",
     redoc_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/redoc",
     openapi_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/openapi.json",
+    lifespan=lifespan,
 )
 
 # Enable CORS for Next.js frontend
@@ -311,15 +327,6 @@ async def self_healing_daemon():
                         await db.commit()
         except Exception as e:
             logger.error(f"Error in self_healing_daemon: {e}")
-
-
-@app.on_event("startup")
-async def startup_db():
-    initialized = await init_db()
-    if initialized:
-        await migrate_legacy_environment_secrets()
-        await recover_interrupted_deployments()
-    asyncio.create_task(self_healing_daemon())
 
 
 # ──────────────────────────────────────────────
@@ -1033,7 +1040,11 @@ async def upload_code_project(
         safe_extract_zip(archive_path, extract_dir)
         source_root = normalize_upload_root(extract_dir)
         project_id_raw = f"upload-{str(upload_id)[:8]}"
-        analysis = ai.analyze_repo_local(source_root, project_id_raw)
+        try:
+            analysis = ai.analyze_repository(source_root, project_id_raw)
+        except (ValueError, RuntimeError) as ai_error:
+            logger.info("Repository review unavailable for uploaded project; using source scanner: %s", ai_error)
+            analysis = ai.analyze_repo_local(source_root, project_id_raw)
         pricing = analysis.get("pricing_breakdown") or {}
         for key in [
             "compute_cost",
@@ -1203,7 +1214,7 @@ async def get_azure_connection(
         "region": connection.region,
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
-        "container_apps_environment": connection.container_apps_environment,
+        "app_service_plan": connection.app_service_plan,
         "namespace_prefix": connection.namespace_prefix,
         "created_at": format_dt(connection.created_at),
         "updated_at": format_dt(connection.updated_at),
@@ -1243,7 +1254,7 @@ async def connect_azure(
         existing.region = req.region or config.AZURE_DEFAULT_REGION
         existing.resource_group = req.resource_group.strip()
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
-        existing.container_apps_environment = req.container_apps_environment.strip() if req.container_apps_environment else None
+        existing.app_service_plan = req.app_service_plan.strip() if req.app_service_plan else None
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
         existing.connection_status = "connected"
         existing.is_active = True
@@ -1258,7 +1269,7 @@ async def connect_azure(
             region=req.region or config.AZURE_DEFAULT_REGION,
             resource_group=req.resource_group.strip(),
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
-            container_apps_environment=req.container_apps_environment.strip() if req.container_apps_environment else None,
+            app_service_plan=req.app_service_plan.strip() if req.app_service_plan else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -1294,7 +1305,7 @@ async def connect_azure(
         "resource_group": connection.resource_group,
         "region": connection.region,
         "acr_login_server": connection.acr_login_server,
-        "container_apps_environment": connection.container_apps_environment,
+        "app_service_plan": connection.app_service_plan,
         "namespace_prefix": connection.namespace_prefix,
     }
 
@@ -1341,7 +1352,7 @@ async def upsert_azure_connection(
         existing.region = req.region or config.AZURE_DEFAULT_REGION
         existing.resource_group = req.resource_group.strip() if req.resource_group else existing.resource_group
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else existing.acr_login_server
-        existing.container_apps_environment = req.container_apps_environment.strip() if req.container_apps_environment else existing.container_apps_environment
+        existing.app_service_plan = req.app_service_plan.strip() if req.app_service_plan else existing.app_service_plan
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else existing.namespace_prefix
         existing.connection_status = "connected"
         existing.is_active = True
@@ -1356,7 +1367,7 @@ async def upsert_azure_connection(
             region=req.region or config.AZURE_DEFAULT_REGION,
             resource_group=req.resource_group.strip() if req.resource_group else None,
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
-            container_apps_environment=req.container_apps_environment.strip() if req.container_apps_environment else None,
+            app_service_plan=req.app_service_plan.strip() if req.app_service_plan else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -1370,7 +1381,7 @@ async def upsert_azure_connection(
         "region": connection.region,
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
-        "container_apps_environment": connection.container_apps_environment,
+        "app_service_plan": connection.app_service_plan,
     }
 
 
@@ -2317,6 +2328,11 @@ async def fix_deployment_automatically(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    raise HTTPException(
+        status_code=501,
+        detail="Automatic source-code changes are disabled. Review the recorded failure, update your repository, and launch a new version.",
+    )
+
     # 1. Fetch deployment
     result = await db.execute(
         select(models.Deployment).filter(
@@ -2862,16 +2878,19 @@ async def ai_chat(
                 "recommended": missing_recommended
             }
 
-            # 3. Cost Engine breakdown context
-            if analysis and analysis.pricing_breakdown:
+            # Only pass through real cost data. Repository analysis deliberately
+            # does not manufacture Azure pricing or subscription usage.
+            if analysis and analysis.pricing_breakdown and isinstance(
+                analysis.pricing_breakdown.get("total_cost"), (int, float)
+            ):
                 pricing = analysis.pricing_breakdown
                 project_metadata["cost"] = {
-                    "compute_cost": pricing.get("compute_cost", 0.0),
-                    "database_cost": pricing.get("database_cost", 0.0),
-                    "platform_fee": pricing.get("platform_fee", 0.0),
-                    "total_cost": pricing.get("total_cost", 0.0),
-                    "projected_growth_cost": pricing.get("projected_growth_cost", 0.0),
-                    "recommended_plan": pricing.get("recommended_plan", "Hobby Plan"),
+                    "compute_cost": pricing.get("compute_cost"),
+                    "database_cost": pricing.get("database_cost"),
+                    "platform_fee": pricing.get("platform_fee"),
+                    "total_cost": pricing.get("total_cost"),
+                    "projected_growth_cost": pricing.get("projected_growth_cost"),
+                    "recommended_plan": pricing.get("recommended_plan"),
                     "why_this_plan": pricing.get("why_this_plan", "")
                 }
 
@@ -2947,13 +2966,6 @@ async def ai_chat(
                     "recent_response_time_ms": f"{metrics[0].response_time_ms}ms"
                 }
                 
-                # Add cost optimization context if idle
-                if avg_cpu < 15.0:
-                    project_metadata["cost_optimization"] = {
-                        "recommendation": "Switch compute instance tier to Azure App Service B1.",
-                        "savings": "$8/month",
-                        "reason": f"Underutilized CPU footprint (avg: {round(avg_cpu, 1)}% < 15%)."
-                    }
             
             # 6. Calculate dynamic health score
             vulnerabilities_count = project_metadata.get("vulnerabilities_count", 0)
@@ -2961,8 +2973,10 @@ async def ai_chat(
             security = max(0, 100 - (vulnerabilities_count * 8))
             performance = max(0, 100 - int(max(0, avg_cpu - 50) * 0.5) - int(max(0, avg_mem - 80) * 1.0))
             scalability = 95 if len(deps) > 0 else 80
-            cost_score = 90
-            if analysis and analysis.pricing_breakdown:
+            cost_score = None
+            if analysis and analysis.pricing_breakdown and isinstance(
+                analysis.pricing_breakdown.get("total_cost"), (int, float)
+            ):
                 total_cost = analysis.pricing_breakdown.get("total_cost", 0.0)
                 if total_cost < 15:
                     cost_score = 95
@@ -2970,7 +2984,12 @@ async def ai_chat(
                     cost_score = 85
                 else:
                     cost_score = 70
-            health_score = int((reliability * 3 + security * 2 + performance * 2 + scalability * 1 + cost_score * 1) / 9)
+            health_total = reliability * 3 + security * 2 + performance * 2 + scalability
+            health_weight = 8
+            if cost_score is not None:
+                health_total += cost_score
+                health_weight += 1
+            health_score = int(health_total / health_weight)
             project_metadata["health_score"] = health_score
 
     reply = ai.generate_chat_response(req.message, project_metadata)
@@ -3774,13 +3793,35 @@ async def get_metrics(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    if project_id:
-        proj_result = await db.execute(
-            select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
-        )
-        if not proj_result.scalars().first():
-            raise HTTPException(status_code=404, detail="Project not found")
-    return k8s.get_cluster_resource_metrics(project_id)
+    if not project_id:
+        return {"available": False, "message": "Choose a project to view recorded runtime metrics."}
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid project ID") from error
+    project_result = await db.execute(
+        select(models.Project).filter(models.Project.id == project_uuid, models.Project.user_id == current_user.id)
+    )
+    if not project_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Project not found")
+    metrics_result = await db.execute(
+        select(models.DeploymentMetric)
+        .filter(models.DeploymentMetric.deployment_id.in_(
+            select(models.Deployment.id).filter(models.Deployment.project_id == project_uuid)
+        ))
+        .order_by(desc(models.DeploymentMetric.timestamp))
+        .limit(20)
+    )
+    metrics = metrics_result.scalars().all()
+    if not metrics:
+        return {"available": False, "message": "No recorded runtime metrics are available for this project."}
+    return {
+        "available": True,
+        "cpu": round(sum(metric.cpu_utilization for metric in metrics) / len(metrics), 1),
+        "memory": round(sum(metric.memory_utilization for metric in metrics) / len(metrics), 1),
+        "traffic": sum(metric.request_count for metric in metrics),
+        "errorRate": round(sum(metric.error_rate for metric in metrics) / len(metrics), 2),
+    }
 
 
 @app.post("/api/secrets")
@@ -3831,36 +3872,10 @@ async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSessi
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
-    if not k8s.K8S_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Kubernetes context is not available. Autoscaling cannot be configured.")
-    ns_name = f"zeroops-{req.projectId}"
-    name = req.projectId
-    hpa_manifest = f"""apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: {name}-hpa
-  namespace: {ns_name}
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: {name}
-  minReplicas: {req.minReplicas}
-  maxReplicas: {req.maxReplicas}
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: {req.cpuTarget}
-"""
-    try:
-        for log in k8s.apply_manifests_to_cluster(hpa_manifest, ns_name):
-            print(log.strip())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update HPA: {e}")
-    return {"status": "success", "minReplicas": req.minReplicas, "maxReplicas": req.maxReplicas}
+    raise HTTPException(
+        status_code=501,
+        detail="Capacity changes are managed by the selected Azure App Service plan and are not available in ZeroOps yet.",
+    )
 
 
 @app.get("/api/autoscaling/{project_id}")
@@ -3870,7 +3885,10 @@ async def get_autoscaling_status(project_id: str, db: AsyncSession = Depends(get
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
-    return k8s.get_hpa_status(project_id)
+    return {
+        "available": False,
+        "message": "Capacity controls are managed by the selected Azure App Service plan when hosting is connected.",
+    }
 
 
 @app.get("/api/security/status/{project_id}")
@@ -3996,7 +4014,7 @@ async def get_project_health_score(
                 "security": 0,
                 "reliability": 0,
                 "scalability": 0,
-                "cost": 0
+                "cost": None
             },
             "recommendations": ["Deploy this project to begin collecting production health signals."]
         }
@@ -4010,7 +4028,7 @@ async def get_project_health_score(
                 "security": 0,
                 "reliability": max(0, 100 - (failed_count * 10)),
                 "scalability": 0,
-                "cost": 0
+                "cost": None
             },
             "recommendations": ["No deployment metrics have been recorded for this project yet."]
         }
@@ -4036,17 +4054,10 @@ async def get_project_health_score(
     security = max(0, 100 - (vulnerabilities_count * 8))
     performance = max(0, 100 - int(max(0, avg_cpu - 50) * 0.5) - int(max(0, avg_mem - 80) * 1.0))
     scalability = 95 if len(deps) > 0 else 80
-    cost = 90
-    if analysis and analysis.pricing_breakdown:
-        total_cost = analysis.pricing_breakdown.get("total_cost", 0.0)
-        if total_cost < 15:
-            cost = 95
-        elif total_cost < 50:
-            cost = 85
-        else:
-            cost = 70
-    
-    overall_score = int((reliability * 3 + security * 2 + performance * 2 + scalability * 1 + cost * 1) / 9)
+    # Cost efficiency is unavailable until Azure Cost Management telemetry is
+    # connected. Do not turn a source-code heuristic into a health score.
+    cost = None
+    overall_score = int((reliability * 3 + security * 2 + performance * 2 + scalability) / 8)
     overall_score = max(0, min(100, overall_score))
     
     status_str = "Strong Reliability" if overall_score >= 90 else "Good Health" if overall_score >= 80 else "Needs Attention" if overall_score >= 60 else "Critical Status"
@@ -4090,26 +4101,10 @@ async def get_project_cost_optimization(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    deps_result = await db.execute(
-        select(models.Deployment.id).filter(models.Deployment.project_id == project_id)
+    raise HTTPException(
+        status_code=501,
+        detail="Cost optimization requires connected Azure Cost Management data. No estimate is shown until that data is available.",
     )
-    dep_ids = [r[0] for r in deps_result.all()]
-    metrics = []
-    if dep_ids:
-        metrics_result = await db.execute(
-            select(models.DeploymentMetric)
-            .filter(models.DeploymentMetric.deployment_id.in_(dep_ids))
-            .order_by(desc(models.DeploymentMetric.timestamp))
-            .limit(10)
-        )
-        metrics = metrics_result.scalars().all()
-        
-    return {
-        "current_cost": 0.0,
-        "recommended_cost": 0.0,
-        "savings": 0.0,
-        "recommendations": []
-    }
 
 @app.get("/api/projects/{project_id}/domains")
 async def get_project_domains(
@@ -4561,27 +4556,3 @@ async def deploy_websocket(websocket: WebSocket, deploy_id: str):
         pipeline.unregister_connection(deploy_id, websocket)
 
 
-@app.websocket("/ws/logs/{pod_name}")
-async def logs_websocket(websocket: WebSocket, pod_name: str):
-    await websocket.accept()
-    stop_stream = threading.Event()
-    try:
-        loop = asyncio.get_event_loop()
-
-        def stream():
-            for log_line in k8s.get_pod_logs(pod_name):
-                if stop_stream.is_set():
-                    break
-                future = asyncio.run_coroutine_threadsafe(websocket.send_text(log_line), loop)
-                try:
-                    future.result(timeout=10)
-                except Exception:
-                    break
-
-        await loop.run_in_executor(None, stream)
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        print(f"Logs WS error in {pod_name}: {e}")
-    finally:
-        stop_stream.set()

@@ -5,13 +5,12 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Database, DollarSign, Loader2, TrendingDown } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
-import { api, type CostOptimization, type Project } from "@/lib/api";
+import { api, type CostOptimization } from "@/lib/api";
 
 export default function CostOptimizationPage() {
   const { hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [costData, setCostData] = useState<CostOptimization | null>(null);
-  const [loading, setLoading] = useState(false);
   const [costLoading, setCostLoading] = useState(false);
 
   useEffect(() => {
@@ -38,7 +37,7 @@ export default function CostOptimizationPage() {
     );
   }
 
-  if (loading || projectsLoading) {
+  if (projectsLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />

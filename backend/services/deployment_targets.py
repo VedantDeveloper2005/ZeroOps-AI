@@ -11,7 +11,7 @@ class TargetStatus:
     ready: bool
     missing: list[str]
     region: str | None = None
-    environment_name: str | None = None
+    plan_name: str | None = None
     registry: str | None = None
 
 
@@ -28,7 +28,7 @@ def _clean(value: Any) -> str:
 
 
 def azure_missing(connection: Any | None) -> list[str]:
-    """Return only the fields required for a real Container Apps deployment."""
+    """Return only the fields required for a real App Service deployment."""
     if not connection:
         return ["Azure connection"]
 
@@ -38,7 +38,7 @@ def azure_missing(connection: Any | None) -> list[str]:
         "Client ID": getattr(connection, "client_id", None),
         "Resource group": getattr(connection, "resource_group", None),
         "Container registry": getattr(connection, "acr_login_server", None),
-        "Application environment": getattr(connection, "container_apps_environment", None),
+        "Linux App Service plan": getattr(connection, "app_service_plan", None),
     }
     return [label for label, value in required.items() if not _clean(value)]
 
@@ -47,12 +47,12 @@ def target_statuses(azure_connection: Any | None) -> list[TargetStatus]:
     missing = azure_missing(azure_connection)
     return [
         TargetStatus(
-            provider="azure-container-apps",
-            label="Azure application environment",
+            provider="azure-app-service",
+            label="Azure App Service",
             ready=not missing,
             missing=missing,
             region=getattr(azure_connection, "region", None) if azure_connection else None,
-            environment_name=getattr(azure_connection, "container_apps_environment", None) if azure_connection else None,
+            plan_name=getattr(azure_connection, "app_service_plan", None) if azure_connection else None,
             registry=getattr(azure_connection, "acr_login_server", None) if azure_connection else None,
         )
     ]
@@ -73,8 +73,12 @@ def choose_target(
 ) -> SelectedTarget:
     """Select the sole supported target without relying on generated AI hints."""
     requested = (requested_provider or "auto").strip().lower()
-    if requested not in {"auto", "azure", "azure-container-apps", "container-apps"}:
-        raise ValueError("Only Azure application environments are supported.")
+    if requested not in {
+        "auto", "azure", "azure-app-service", "app-service",
+        # Legacy stored deployment metadata is upgraded to the new sole target.
+        "azure-container-apps", "container-apps",
+    }:
+        raise ValueError("Only Azure App Service is supported.")
 
     missing = azure_missing(azure_connection)
     if missing:
@@ -83,10 +87,10 @@ def choose_target(
         )
 
     return SelectedTarget(
-        "azure-container-apps",
-        "Azure application environment",
+        "azure-app-service",
+        "Azure App Service",
         azure_connection,
-        "Azure is the configured hosting environment.",
+        "Azure App Service is the configured hosting environment.",
     )
 
 
@@ -110,5 +114,5 @@ def metadata_for_target(target: SelectedTarget) -> dict:
         "region": getattr(target.connection, "region", None),
         "resource_group": getattr(target.connection, "resource_group", None),
         "acr_login_server": getattr(target.connection, "acr_login_server", None),
-        "container_apps_environment": getattr(target.connection, "container_apps_environment", None),
+        "app_service_plan": getattr(target.connection, "app_service_plan", None),
     }

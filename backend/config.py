@@ -54,6 +54,10 @@ ALLOW_CREDENTIALS = True
 
 # OpenAI API config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# Repository analysis is a bounded review task.  Keep the model setting on the
+# server so customers never need to know, select, or receive a model identifier.
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+AI_MODEL_TIMEOUT_SECONDS = int(os.getenv("AI_MODEL_TIMEOUT_SECONDS", "30"))
 
 # GitHub Models API config
 GITHUB_MODELS_API_KEY = os.getenv("GITHUB_MODELS_API_KEY", "")

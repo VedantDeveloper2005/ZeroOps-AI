@@ -1,62 +1,51 @@
 # Azure Deployment Plan
 
-> **Status:** Planning — Azure subscription, region, and quota verification are still required before infrastructure deployment.
+> **Status:** Deferred — no Azure resources will be created until the owner explicitly requests deployment.
 
 ## Goal
 
-Operate ZeroOps as an Azure-only SaaS. A customer supplies code, approves launch, and receives a real URL only after Azure Container Apps reports a ready revision and the public endpoint is reachable.
+Run ZeroOps as an Azure-only SaaS. When a customer later launches a project, ZeroOps deploys that customer application to Azure App Service and records a live URL only after Azure reports the site running and the public endpoint responds.
 
-## Architecture
+## Selected architecture
 
-| Component | Azure service | Cost / safety choice |
+| Component | Azure service | Decision |
 |---|---|---|
-| Customer app build | Azure Container Registry Tasks | Cloud builds; no Docker daemon in the control plane |
-| Customer app runtime | Azure Container Apps, Consumption | External HTTPS ingress, scale-to-zero, max 2 replicas |
-| Private image pull | Managed identity + `AcrPull` | No registry passwords |
-| Deployment secrets | Azure Key Vault | No local filesystem fallback |
-| Release tracking | Existing PostgreSQL database | A release is `running` only after verified URL and revision |
-| Control plane async work | Isolated deployment worker | Customer build/release work never blocks the web request path |
+| Customer application runtime | Linux Azure App Service | One managed web app per customer project; simple operations and standard HTTPS endpoint |
+| Customer application build | Azure Container Registry Tasks | Build customer source remotely; no Docker daemon in the ZeroOps control plane |
+| App image access | System-assigned managed identity + `AcrPull` | No registry passwords in the database or UI |
+| App secrets | Azure Key Vault + App Service settings | Secret values remain out of the application database and product responses |
+| Release tracking | Existing PostgreSQL database | A release is `running` only after an Azure-reported site and endpoint reachability check |
+| Control-plane async work | Isolated deployment worker | Customer builds/releases never block a web request |
 
 ## Product decisions
 
-- Azure Container Apps replaces AKS/GKE as the only customer-hosting target.
-- No simulated deployment, fabricated database host, or guessed live URL is allowed.
-- Google Cloud endpoints return a retirement response; existing database rows remain untouched for safe migration.
-- Automatic source-code mutation is disabled. A user reviews and commits changes in their own repository.
-- Customer app secrets must be stored in Azure Key Vault; unavailable Key Vault blocks the operation.
+- Azure App Service is the sole supported future hosting target for customer applications.
+- Azure infrastructure, model/provider choices, registry details, and deployment-worker internals are not shown to customers.
+- No simulated deployment, fabricated database host, generated cost, or guessed live URL is allowed.
+- Automatic source-code mutation and automatic database provisioning are disabled.
+- Customer app secrets must be stored in Azure Key Vault; unavailable Key Vault blocks deployment.
 
-## Required Azure inputs
+## Required customer Azure connection (only when deployment is enabled)
 
-| Input | Status |
+| Input | Purpose |
 |---|---|
-| Subscription ID | Needs user confirmation |
-| Region | Needs user confirmation |
-| Resource group | Needs user confirmation |
-| Container Registry | Needs user confirmation |
-| Container Apps environment | Needs user confirmation |
-| Key Vault URL and managed-identity RBAC | Needs user confirmation |
+| Tenant ID, subscription ID, client ID, client secret | Short-lived authenticated deployment worker session |
+| Resource group and region | Ownership and placement of the customer application |
+| Existing Linux App Service plan | Capacity tier selected by the account owner |
+| Container Registry login server | Remote build and private image source |
+| Optional application-name prefix | Stable, readable customer application names |
 
-## Quota inventory (to validate after subscription and region are supplied)
+## Before the first deployment
 
-| Resource type | Planned quantity | Validation method |
-|---|---:|---|
-| `Microsoft.App/managedEnvironments` | 1 existing/customer environment | Azure quota CLI |
-| `Microsoft.App/containerApps` | One per customer app | Azure quota CLI / Resource Graph |
-| `Microsoft.ContainerRegistry/registries` | 1 existing/customer registry | Resource Graph + Azure limits |
-| `Microsoft.OperationalInsights/workspaces` | 1 per control-plane environment | Resource Graph + Azure limits |
-| `Microsoft.KeyVault/vaults` | 1 control-plane vault | Resource Graph + Azure limits |
+- Confirm the subscription and target region with the owner.
+- Validate provider registration, App Service plan availability, registry access, Key Vault access, and RBAC.
+- Run the Azure validation workflow, then deploy a non-production customer project and verify the resulting public URL.
 
-## Verification completed locally
+## Current verification
 
-- [x] Removed GKE target selection from the launch path and customer-facing settings.
-- [x] Replaced local Docker/Kubernetes deployment steps with ACR build + Container Apps release logic.
-- [x] Removed Key Vault filesystem fallback and mock credential validation.
-- [x] Added unit coverage for Azure-only target selection and application-name normalization.
-- [x] Documented the required Key Vault secrets, non-secret app settings, and minimum Azure roles.
-- [ ] Run Azure quota checks using the confirmed subscription and region.
-- [ ] Generate IaC and run the Azure validation workflow.
-- [ ] Deploy a non-production Azure environment and verify a real release end-to-end.
-
-## Next required action
-
-Provide the Azure subscription ID and target region. With those, ZeroOps can perform quota validation, create the Azure deployment artifacts, and safely publish the first non-production environment.
+- [x] Azure CLI authenticated to an enabled subscription.
+- [x] Azure deployment is intentionally deferred; no resource was created or modified.
+- [ ] Complete App Service deployment-path implementation and local verification.
+- [ ] Confirm Azure subscription, region, and user-selected App Service plan before any deployment.
+- [ ] Run Azure quota/readiness checks and the Azure validation workflow.
+- [ ] Perform the first non-production end-to-end release only with explicit owner approval.
