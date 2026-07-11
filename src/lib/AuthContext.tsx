@@ -75,14 +75,22 @@ if (typeof window !== "undefined") {
     // Automatically inject CSRF token header for state-changing calls
     const method = initCopy.method ? initCopy.method.toUpperCase() : "GET";
     if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-      const csrfToken = getCookie("csrf_token");
+      const csrfToken = getCookie("csrf_token") || sessionStorage.getItem("csrf_token");
       if (csrfToken) {
         headers.set("X-CSRF-Token", csrfToken);
       }
     }
     
     initCopy.headers = headers;
-    return originalFetch(targetInput, initCopy);
+    const response = await originalFetch(targetInput, initCopy);
+    
+    // Capture CSRF token from response headers if present (e.g. in cross-domain configurations)
+    const responseCsrf = response.headers.get("X-CSRF-Token");
+    if (responseCsrf) {
+      sessionStorage.setItem("csrf_token", responseCsrf);
+    }
+    
+    return response;
   };
 }
 

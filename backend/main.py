@@ -1,3 +1,14 @@
+import sys
+import os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import asyncio
 import json
 import uuid
@@ -71,6 +82,7 @@ app.add_middleware(
     allow_credentials=config.ALLOW_CREDENTIALS,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "Stripe-Signature"],
+    expose_headers=["X-CSRF-Token"],
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.ALLOWED_HOSTS)
 
@@ -86,7 +98,15 @@ request_counts = defaultdict(list)
 @app.middleware("http")
 async def csrf_middleware(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/ws") or path in ["/docs", "/openapi.json", "/favicon.ico"]:
+    if (
+        path.startswith("/ws") or 
+        path in ["/docs", "/openapi.json", "/favicon.ico"] or
+        path.startswith("/api/auth/login") or
+        path.startswith("/api/auth/signup") or
+        path.startswith("/api/auth/github") or
+        path.startswith("/api/auth/google") or
+        path.startswith("/api/auth/oauth")
+    ):
         return await call_next(request)
         
     has_cookie_auth = "session_token" in request.cookies or "refresh_token" in request.cookies
@@ -97,11 +117,26 @@ async def csrf_middleware(request: Request, call_next):
         
         if not cookie_csrf or not header_csrf or cookie_csrf != header_csrf:
             logger.warning(f"CSRF validation failed for path {path}. Cookie: {bool(cookie_csrf)}, Header: {bool(header_csrf)}")
+            # Return 403 with manual CORS headers to prevent cross-origin browser blocking
+            origin = request.headers.get("origin")
+            headers = {}
+            if origin and origin in config.CORS_ORIGINS:
+                headers["Access-Control-Allow-Origin"] = origin
+                headers["Access-Control-Allow-Credentials"] = "true"
             return JSONResponse(
                 status_code=403,
-                content={"detail": "CSRF token validation failed. Missing or mismatched token."}
+                content={"detail": "CSRF token validation failed. Missing or mismatched token."},
+                headers=headers
             )
             
+    # Always try to fetch csrf_token if exists, or prepare to generate
+    token = request.cookies.get("csrf_token")
+    newly_generated = False
+    if not token:
+        import secrets
+        token = secrets.token_urlsafe(32)
+        newly_generated = True
+
     response = await call_next(request)
 
     # API responses commonly carry account, deployment, or operational data and
@@ -113,10 +148,7 @@ async def csrf_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     
-    # Generate and set csrf_token cookie if missing
-    if "csrf_token" not in request.cookies:
-        import secrets
-        token = secrets.token_urlsafe(32)
+    if newly_generated:
         is_prod = config.APP_ENV == "production"
         response.set_cookie(
             key="csrf_token",
@@ -126,6 +158,10 @@ async def csrf_middleware(request: Request, call_next):
             samesite="none" if is_prod else "lax",
             secure=is_prod
         )
+
+    # Expose the CSRF token in the response headers for cross-domain clients
+    if token:
+        response.headers["X-CSRF-Token"] = token
         
     return response
 
@@ -171,9 +207,15 @@ async def rate_limit_middleware(request: Request, call_next):
         for expired_key in expired_keys:
             request_counts.pop(expired_key, None)
         if len(request_counts) >= config.MAX_RATE_LIMIT_KEYS:
+            origin = request.headers.get("origin")
+            headers = {}
+            if origin and origin in config.CORS_ORIGINS:
+                headers["Access-Control-Allow-Origin"] = origin
+                headers["Access-Control-Allow-Credentials"] = "true"
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Request capacity is temporarily full. Please retry shortly."},
+                headers=headers
             )
     
     # Filter request timestamps inside the active window
