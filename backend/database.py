@@ -3,6 +3,7 @@ import ssl
 import logging
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
@@ -96,7 +97,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             # shared database state unavailable.
             await session.rollback()
             raise
-        except Exception as e:
+        except SQLAlchemyError as e:
             await session.rollback()
             logger.error(f"Database session error: {e}")
             database_available = False
@@ -104,6 +105,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
                 status_code=503,
                 detail="Database connection lost or failed to respond."
             )
+        except Exception:
+            # Validation and other application errors are also propagated back
+            # through this dependency generator. They must retain their
+            # original response (for example, FastAPI's 422 validation error)
+            # and cannot make the shared database state unavailable.
+            await session.rollback()
+            raise
         finally:
             await session.close()
 

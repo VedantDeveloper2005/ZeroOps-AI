@@ -223,8 +223,9 @@ export default function SignupPage() {
               name="password"
               value={formData.password}
               onChange={handleInputChange}
+              minLength={12}
               required
-              helperText="Requires at least 8 symbols."
+              helperText="Requires at least 12 characters."
               rightElement={
                 <button
                   type="button"
