@@ -3,30 +3,20 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle, Loader2, Wifi } from "lucide-react";
+import { useNotifications } from "@/lib/NotificationContext";
 import { api, type Project, type TelemetryMetric } from "@/lib/api";
 
 export default function MonitoringPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [metrics, setMetrics] = useState<TelemetryMetric | null>(null);
-  const [loading, setLoading] = useState(true);
   const [metricsLoading, setMetricsLoading] = useState(false);
 
   useEffect(() => {
-    async function loadProjects() {
-      setLoading(true);
-      try {
-        const data = await api.getProjects();
-        setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].id);
-      } catch {
-        setProjects([]);
-      } finally {
-        setLoading(false);
-      }
+    if (projects.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
     }
-    loadProjects();
-  }, []);
+  }, [projects, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) return;
@@ -44,7 +34,7 @@ export default function MonitoringPage() {
     loadTelemetry();
   }, [selectedProjectId]);
 
-  if (loading) {
+  if (projectsLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />

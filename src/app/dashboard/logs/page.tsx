@@ -3,7 +3,8 @@
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { getWebSocketUrl } from "@/lib/runtime-config";
+import { createReconnectingWebSocket } from "@/lib/runtime-config";
+import { useNotifications } from "@/lib/NotificationContext";
 import { api } from "@/lib/api";
 
 const levels = ["INFO", "WARN", "ERROR", "DEBUG"] as const;
@@ -59,7 +60,7 @@ function parseLogLine(line: string, fallbackPod: string): LogEntry | null {
 }
 
 export default function LogsPage() {
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const { projects } = useNotifications();
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedPod, setSelectedPod] = useState("all");
   const [streamStatus, setStreamStatus] = useState<"connecting" | "live" | "unavailable">("connecting");
@@ -69,21 +70,10 @@ export default function LogsPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let active = true;
-    api
-      .getProjects()
-      .then((data) => {
-        if (!active) return;
-        setProjects(data.map((project) => ({ id: project.id, name: project.name })));
-        setSelectedProject((current) => current || data[0]?.id || "");
-      })
-      .catch(() => {
-        if (active) setProjects([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+    if (projects.length > 0 && !selectedProject) {
+      setSelectedProject(projects[0].id);
+    }
+  }, [projects, selectedProject]);
 
   const toggleLevel = (level: string) => {
     const next = new Set(activeLevels);
@@ -96,39 +86,33 @@ export default function LogsPage() {
   };
 
   useEffect(() => {
-    let connected = false;
     setStreamStatus("connecting");
 
     const podParam = selectedPod === "all" ? (selectedProject || "all-pods") : selectedPod;
-    const socket = new WebSocket(getWebSocketUrl(`/ws/logs/${podParam}`));
 
-    socket.onopen = () => {
-      connected = true;
-      setStreamStatus("live");
-    };
+    const cleanup = createReconnectingWebSocket(`/ws/logs/${podParam}`, {
+      onOpen: () => {
+        setStreamStatus("live");
+      },
+      onMessage: (event) => {
+        const parsed = parseLogLine(event.data, podParam);
+        if (parsed) {
+          setLogs((prev) => {
+            const next = [...prev, parsed];
+            return next.length > 300 ? next.slice(next.length - 300) : next;
+          });
+        }
+      },
+      onError: () => {
+        setStreamStatus("unavailable");
+      },
+      onClose: () => {
+        setStreamStatus("unavailable");
+      },
+      maxRetries: 5,
+    });
 
-    socket.onmessage = (event) => {
-      const parsed = parseLogLine(event.data, podParam);
-      if (parsed) {
-        setLogs((prev) => {
-          const next = [...prev, parsed];
-          return next.length > 300 ? next.slice(next.length - 300) : next;
-        });
-      }
-    };
-
-    socket.onerror = (err) => {
-      console.error("Logs WebSocket error:", err);
-      setStreamStatus("unavailable");
-    };
-
-    socket.onclose = () => {
-      if (!connected) setStreamStatus("unavailable");
-    };
-
-    return () => {
-      socket.close();
-    };
+    return cleanup;
   }, [selectedPod, selectedProject]);
 
   useEffect(() => {

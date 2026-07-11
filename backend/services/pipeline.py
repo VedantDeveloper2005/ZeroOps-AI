@@ -3,20 +3,19 @@ import json
 import time
 import uuid
 import logging
-import re
 from datetime import datetime
 from typing import Dict, List
 from fastapi import WebSocket
 from sqlalchemy.future import select
 
 try:
-    from backend.services import git, ai, builder, k8s, vault, deployment_targets, github_oauth
+    from backend.services import ai, azure_connector, container_apps, deployment_targets, git, vault
     from backend.database import AsyncSessionLocal
-    from backend import models, config
+    from backend import models
 except ImportError:
-    from services import git, ai, builder, k8s, vault, deployment_targets, github_oauth
+    from services import ai, azure_connector, container_apps, deployment_targets, git, vault
     from database import AsyncSessionLocal
-    import models, config
+    import models
 
 # Active websockets registry: deploy_id -> list of WebSockets
 connections: Dict[str, List[WebSocket]] = {}
@@ -115,8 +114,8 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
 
     print(f"Starting database-backed pipeline deployment {deploy_id} for {repo_name} (branch: {branch})")
     project_id_raw = normalize_project_id(repo_name)
-    ns_name = f"zeroops-{project_id_raw}"
     live_url = None
+    release = None
     
     # Instantiate logger
     p_logger = PipelineLogger(deploy_id)
@@ -193,16 +192,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 .limit(1)
             )
             azure_connection = azure_result.scalars().first()
-            gke_result = await db.execute(
-                select(models.UserGkeConnection)
-                .filter(models.UserGkeConnection.user_id == deployment.user_id, models.UserGkeConnection.is_active == True)
-                .order_by(models.UserGkeConnection.created_at.desc())
-                .limit(1)
-            )
-            gke_connection = gke_result.scalars().first()
-            target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+            target_status = deployment_targets.status_payload(azure_connection)
             if not target_status["any_ready"]:
-                raise RuntimeError("No deployment target is ready. Configure Azure AKS or Google GKE before deployment.")
+                raise RuntimeError("Azure hosting needs setup before this application can launch.")
 
             requested_provider = (deployment.infrastructure_metadata or {}).get("target_provider", "auto")
             initial_hint = {
@@ -213,19 +205,15 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             selected_target = deployment_targets.choose_target(
                 initial_hint,
                 azure_connection,
-                gke_connection,
                 requested_provider,
             )
             namespace_prefix = deployment_targets.namespace_prefix(selected_target, deployment.user_id)
             project_id_raw = normalize_project_id(f"{namespace_prefix}-{project.name}")
-            ns_name = f"zeroops-{project_id_raw}"
             image_ref = deployment.image or deployment_targets.image_ref_for_target(
                 selected_target,
                 project_id_raw,
                 deployment.version or "latest",
             )
-            if config.ZEROOPS_PUBLIC_BASE_DOMAIN:
-                live_url = f"https://{project_id_raw}.{config.ZEROOPS_PUBLIC_BASE_DOMAIN}"
             
             # ──────────────────────────────────────────────
             # Stage 1: Repository Verification
@@ -236,7 +224,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await p_logger.log("ZeroOps AI deployment engine online", "info")
             await p_logger.log(f"> Project identity resolved: {project_id_raw}", "info")
             await p_logger.log(f"> Cloud target: {selected_target.label} ({selected_target.reason})", "info")
-            await p_logger.log(f"> Namespace target: {ns_name}", "info")
+            await p_logger.log("> Launch settings confirmed. Your live address will be created after verification.", "info")
             await asyncio.sleep(0.5)
             await p_logger.log("  ✓ Repository configuration verified.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
@@ -332,7 +320,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await asyncio.sleep(0.5)
             await p_logger.log(f"  ◆ Build Command: {metadata.get('build_commands') or 'None'}", "info")
             await p_logger.log(f"  ◆ Startup Command: {metadata.get('start_commands') or 'None'}", "info")
-            await p_logger.log("  ✓ Dockerfile context and Kubernetes manifests compiled.", "success")
+            await p_logger.log("  ✓ Build instructions prepared.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(4, "completed", step_dur)
             await p_logger.flush_to_db(db)
@@ -518,35 +506,18 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(7, "active", "...")
             build_start = time.time()
-            image_name, image_tag = image_ref.rsplit(":", 1) if ":" in image_ref else (image_ref, "latest")
-
-            if selected_target.provider == "gke":
-                await p_logger.log("▸ Preparing Google GKE deployment context...", "info")
-                service_account_json = None
-                encrypted_json = getattr(selected_target.connection, "service_account_json_encrypted", None)
-                if encrypted_json:
-                    try:
-                        service_account_json = github_oauth.decrypt_token(encrypted_json)
-                    except Exception as cred_err:
-                        raise RuntimeError("Stored GKE service account credentials could not be decrypted.") from cred_err
-
-                for log_line in k8s.configure_gke_context(
-                    gcp_project_id=selected_target.connection.gcp_project_id,
-                    cluster_name=selected_target.connection.cluster_name,
-                    location=selected_target.connection.location,
-                    artifact_registry_host=selected_target.connection.artifact_registry_host,
-                    service_account_json=service_account_json,
-                ):
-                    await p_logger.log(log_line.strip(), "info")
-                    await asyncio.sleep(0.01)
-
-            await p_logger.log(f"$ docker build -t {image_ref} .", "command")
-            for log_line in builder.build_and_tag_image(repo_path, image_name, image_tag):
-                await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
-                await asyncio.sleep(0.01)
-            await p_logger.log(f"$ docker push {image_ref}", "command")
-            for log_line in builder.push_image(image_ref):
-                await p_logger.log(log_line.strip(), "success" if "successfully" in log_line.lower() else "info")
+            client_secret = azure_connector.get_credential_secret(deployment.user_id)
+            if not client_secret:
+                raise RuntimeError("Azure credentials are unavailable. Reconnect Azure and try again.")
+            await p_logger.log("▸ Building your application securely in Azure…", "info")
+            for log_line in container_apps.build_image(
+                connection=selected_target.connection,
+                client_secret=client_secret,
+                repo_path=repo_path,
+                image_ref=image_ref,
+                generated_dockerfile=metadata.get("dockerfile"),
+            ):
+                await p_logger.log(log_line.strip(), "success" if "ready" in log_line.lower() else "info")
                 await asyncio.sleep(0.01)
                 
             build_dur = f"{round(time.time() - build_start, 1)}s"
@@ -558,29 +529,41 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             # ──────────────────────────────────────────────
             step_start = time.time()
             await update_stage(8, "active", "...")
-            await p_logger.log("▸ Applying infrastructure settings to cluster namespace...", "info")
-            
-            # Setup isolated namespace
-            for log in k8s.setup_namespace(project_id_raw):
-                await p_logger.log(log.strip(), "info" if "Preparing" in log else "success")
-                await asyncio.sleep(0.01)
-            
-            # Sync vault secrets to namespace
-            secrets_to_sync = vault.get_project_secrets(str(project.id))
-            for log in k8s.sync_secrets_to_namespace(project_id_raw, secrets_to_sync):
-                await p_logger.log(log.strip(), "info" if "Synchronizing" in log else "success")
-                await asyncio.sleep(0.01)
-            
-            # Apply deployment manifests
-            manifests = metadata.get("kubernetes_manifest", "")
-            if not manifests:
-                raise RuntimeError("No Kubernetes manifest could be generated for this project.")
-            manifests = re.sub(r"image:\s*\S+", f"image: {image_ref}", manifests, count=1)
-            await p_logger.log(f"$ kubectl apply -f manifests.yaml", "command")
+            await p_logger.log("▸ Publishing your application…", "info")
+            env_result = await db.execute(
+                select(models.EnvironmentVariable).filter(
+                    models.EnvironmentVariable.environment_id == env.id
+                )
+            )
+            runtime_variables: dict[str, tuple[str, bool]] = {}
+            for variable in env_result.scalars().all():
+                if variable.is_secret:
+                    value = vault.get_project_secret(str(project.id), variable.key)
+                    if not value:
+                        raise RuntimeError(
+                            f"{variable.key} is marked as a secret but is unavailable in Azure Key Vault."
+                        )
+                    runtime_variables[variable.key] = (value, True)
+                else:
+                    runtime_variables[variable.key] = (variable.value, False)
             deploy_start = time.time()
-            for log_line in k8s.apply_manifests(manifests):
-                await p_logger.log(log_line.strip(), "success" if ("created" in log_line or "configured" in log_line or "applied successfully" in log_line.lower()) else "info")
+            for deployment_result in container_apps.deploy_image(
+                connection=selected_target.connection,
+                client_secret=client_secret,
+                app_name=project_id_raw,
+                image_ref=image_ref,
+                metadata=metadata,
+                environment_variables=runtime_variables,
+            ):
+                if isinstance(deployment_result, container_apps.ContainerAppRelease):
+                    release = deployment_result
+                    live_url = release.live_url
+                    await p_logger.log("  ✓ Azure has prepared a ready version.", "success")
+                    continue
+                await p_logger.log(str(deployment_result).strip(), "info")
                 await asyncio.sleep(0.01)
+            if not release:
+                raise RuntimeError("Azure did not return a ready application version.")
                 
             deploy_dur = f"{round(time.time() - deploy_start, 1)}s"
             await update_stage(8, "completed", deploy_dur)
@@ -592,10 +575,8 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(9, "active", "...")
             await p_logger.log("▸ Starting application health check validation...", "info")
-            for log_line in k8s.verify_rollout(project_id_raw):
-                await p_logger.log(log_line.strip(), "success" if "success" in log_line.lower() else "info")
-                await asyncio.sleep(0.01)
-            await p_logger.log("  ✓ Liveness probe ping completed successfully.", "success")
+            container_apps.verify_public_endpoint(live_url)
+            await p_logger.log("  ✓ Your public address is responding.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(9, "completed", step_dur)
             await p_logger.flush_to_db(db)
@@ -606,11 +587,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(10, "active", "...")
             await p_logger.log("Resolving public route metadata...", "info")
-            await asyncio.sleep(0.5)
-            if live_url:
-                await p_logger.log(f"  Public route recorded: {live_url}", "success")
-            else:
-                await p_logger.log("  No public base domain configured; live URL will remain empty until ingress/domain setup is complete.", "warning")
+            if not live_url:
+                raise RuntimeError("No verified public address was returned by Azure.")
+            await p_logger.log(f"  Your app is live: {live_url}", "success")
             await p_logger.log("Deployment rollout completed. Recording deployment state.", "success")
             
             step_dur = f"{round(time.time() - step_start, 1)}s"
@@ -635,21 +614,18 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             # Store final stages list in infrastructure_metadata
             meta = deployment.infrastructure_metadata or {}
             meta["stages"] = stages_metadata
-            meta["namespace"] = ns_name
             meta["region"] = (
-                getattr(selected_target.connection, "location", None)
-                or getattr(selected_target.connection, "region", None)
+                getattr(selected_target.connection, "region", None)
                 or deployment.project.region
                 or "eastus"
             )
             meta["image"] = image_ref
+            meta["application_name"] = release.app_name if release else None
+            meta["revision"] = release.revision if release else None
             meta["target_provider"] = selected_target.provider
             meta["target_reason"] = selected_target.reason
             meta["target"] = deployment_targets.metadata_for_target(selected_target)
-            if selected_target.provider == "azure":
-                meta["azure"] = meta["target"]
-            elif selected_target.provider == "gke":
-                meta["gke"] = meta["target"]
+            meta["azure"] = meta["target"]
             meta["framework"] = metadata.get("framework")
             meta["language"] = metadata.get("language")
             deployment.infrastructure_metadata = meta

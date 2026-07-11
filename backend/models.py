@@ -547,6 +547,9 @@ class UserAzureConnection(Base):
     region = Column(Text, default="eastus")
     resource_group = Column(Text, nullable=True)
     acr_login_server = Column(Text, nullable=True)
+    # Name of the existing Azure Container Apps environment used for customer apps.
+    # The legacy AKS field is retained only so existing databases can be upgraded safely.
+    container_apps_environment = Column(Text, nullable=True)
     aks_cluster_name = Column(Text, nullable=True)
     namespace_prefix = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)

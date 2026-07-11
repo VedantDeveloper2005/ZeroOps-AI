@@ -105,7 +105,7 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     docker_support = False
     monorepo_structure = "None"
     database_dependencies = []
-    deployment_strategy = "Managed Kubernetes"
+    deployment_strategy = "Managed application environment"
     build_commands = None
     start_commands = None
     
@@ -259,7 +259,9 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
 
     # Dynamic generation of templates
     dockerfile = generate_default_dockerfile(framework)
-    k8s_manifest = generate_default_k8s_manifest(framework, cpu, memory, project_id)
+    # Azure Container Apps derives the runtime configuration from the reviewed
+    # application and does not consume generated cluster manifests.
+    k8s_manifest = ""
     
     # Calculate CPU cores
     cpu_val = cpu.strip()
@@ -557,7 +559,7 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
     20. "dependencies": List of top 8 dependencies (name@version)
     21. "vulnerabilities": List of security warnings or recommendations (maps to UI vulnerabilities display)
     22. "dockerfile": Recommended or actual Dockerfile contents (string)
-    23. "kubernetes_manifest": Recommended manifests in YAML (string), specify target namespace 'zeroops-{{project_id}}', environment variables are injected via envFrom from secretRef 'project-secrets', ingress tls host '{{project_id}}.zeroops.dev'.
+    23. "kubernetes_manifest": Return an empty string. ZeroOps uses managed Azure application releases rather than generated cluster manifests.
     24. "explanation": A plain English summary (2-3 sentences) explaining what this codebase is and what it does based on the file list and package files (e.g. 'This is a Next.js web application built with TypeScript...').
     25. "recommended_compute_tier": Recommended compute tier (e.g., "Standard Production Core", "Managed Compute Core")
     26. "estimated_cost": Recommended monthly cost estimation as string (e.g., "$12/month", "$17/month")

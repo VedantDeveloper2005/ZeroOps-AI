@@ -1,16 +1,11 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Brain, Bell, Search, Info, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Check } from "lucide-react";
+import { Bell, Search, Info, CheckCircle2, AlertTriangle, AlertCircle, Trash2, Check } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
 
-
-interface TopBarProps {
-  onToggleFeed: () => void;
-  feedOpen: boolean;
-}
 
 const typeIcons = {
   info: Info,
@@ -33,7 +28,7 @@ const typeTextColors = {
   critical: "text-danger",
 };
 
-export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
+export function TopBar() {
   const pathname = usePathname();
   const { user } = useAuth();
   const segments = pathname.split("/").filter(Boolean);
@@ -49,7 +44,7 @@ export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
     ? firstName[0].toUpperCase()
     : user?.email
     ? user.email[0].toUpperCase()
-    : "VS";
+    : "U";
 
   const { notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -88,11 +83,6 @@ export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
 
       {/* Actions */}
       <div className="flex items-center gap-3">
-        <button onClick={onToggleFeed} className={`p-2 rounded-lg transition-colors relative ${feedOpen ? "bg-primary-subtle text-primary" : "hover:bg-card text-foreground-muted hover:text-foreground"}`}>
-          <Brain size={20} />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary animate-pulse" />
-        </button>
-
         {/* Notifications Bell Dropdown */}
         <div className="relative" ref={notifRef}>
           <button 
@@ -185,4 +175,3 @@ export function TopBar({ onToggleFeed, feedOpen }: TopBarProps) {
     </div>
   );
 }
-

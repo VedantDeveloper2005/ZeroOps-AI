@@ -33,7 +33,7 @@ type SecurityData = {
 const severityColor: Record<string, string> = { critical: "bg-danger/10 text-danger border-l-danger", high: "bg-warning/10 text-warning border-l-warning", medium: "bg-info/10 text-info border-l-info", low: "bg-foreground-muted/10 text-foreground-muted border-l-foreground-muted" };
 
 export default function SecurityPage() {
-  const { addToast, hasDeployed } = useNotifications();
+  const { addToast, hasDeployed, projects } = useNotifications();
   const [securityData, setSecurityData] = useState<SecurityData>({
     securityScore: 0,
     firewallStatus: "Unknown",
@@ -69,19 +69,12 @@ export default function SecurityPage() {
   }, []);
 
   useEffect(() => {
-    async function loadProjects() {
-      try {
-        const projs = await api.getProjects();
-        if (projs.length > 0) {
-          setSelectedProjectId(projs[0].id);
-          loadSecurityStatus(projs[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to load projects", err);
-      }
+    if (!hasDeployed || projects.length === 0) return;
+    if (!selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
+      loadSecurityStatus(projects[0].id);
     }
-    if (hasDeployed) loadProjects();
-  }, [hasDeployed, loadSecurityStatus]);
+  }, [hasDeployed, projects, selectedProjectId, loadSecurityStatus]);
 
   const handleSecurityScan = async () => {
     if (isScanning) return;

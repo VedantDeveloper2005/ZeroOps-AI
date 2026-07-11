@@ -1,6 +1,6 @@
 # ZeroOps AI
 
-AI-powered autonomous cloud deployment platform for turning GitHub repositories into Kubernetes-ready deployments.
+An Azure-first application launch platform for turning GitHub repositories and ZIP uploads into verified live applications.
 
 ## Local Runbook
 
@@ -24,13 +24,13 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-The dashboard expects the FastAPI backend for repository analysis, deployments, logs, monitoring, security status, and settings data. If Docker, Kubernetes, Azure Key Vault, or OpenAI are unavailable, the UI should show unavailable or empty states instead of synthetic production data.
+The dashboard expects the FastAPI backend for repository analysis, deployments, logs, monitoring, security status, and settings data. If Azure Key Vault or required Azure hosting configuration is unavailable, launch stays blocked instead of showing synthetic production data.
 
 ## Primary Demo Flow
 
 - Landing page -> Dashboard
 - Repositories -> Connect Repository
-- Analyze -> AI repository analysis and Kubernetes plan
+- Analyze -> application review and build plan
 - Deploy -> live backend pipeline
 - Logs, Monitoring, Autoscaling, Security, Infrastructure, and Incidents remain available as supporting proof points
 

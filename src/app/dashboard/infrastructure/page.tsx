@@ -8,40 +8,18 @@ import { useNotifications } from "@/lib/NotificationContext";
 import { LockedView } from "@/components/dashboard/LockedView";
 
 export default function InfrastructurePage() {
-  const { hasDeployed } = useNotifications();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metrics, setMetrics] = useState<ClusterResourceMetrics | null>(null);
 
   useEffect(() => {
-    if (!hasDeployed) {
-      setLoading(false);
-      return;
+    if (!hasDeployed) return;
+    if (projects.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
     }
-
-    let active = true;
-    async function loadProjects() {
-      setLoading(true);
-      try {
-        const projs = await api.getProjects();
-        if (!active) return;
-        setProjects(projs);
-        setSelectedProjectId(projs[0]?.id || "");
-      } catch (err) {
-        console.error("Failed to load projects", err);
-        if (active) setProjects([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-
-    void loadProjects();
-    return () => {
-      active = false;
-    };
-  }, [hasDeployed]);
+  }, [hasDeployed, projects, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) {

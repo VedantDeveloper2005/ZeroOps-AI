@@ -5,20 +5,17 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, Rocket, Brain,
-  Settings, ChevronLeft, ChevronRight, LogOut,
-  Lock,
+  LayoutDashboard, Rocket, ReceiptText,
+  ChevronLeft, ChevronRight, LogOut,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
-import { useNotifications } from "@/lib/NotificationContext";
 
 type NavItem = {
   name: string;
   icon: React.ElementType;
   href: string;
   activePaths: string[];
-  isLockedIfNoDeploy?: boolean;
 };
 
 type NavSection = {
@@ -28,12 +25,12 @@ type NavSection = {
 
 const navSections: NavSection[] = [
   {
-    label: "PLATFORM",
+    label: "WORKSPACE",
     items: [
-      { name: "Overview", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
-      { name: "Deploy", icon: Rocket, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories", "/dashboard/deployments"] },
-      { name: "Insights", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis", "/dashboard/security", "/dashboard/cost-optimization"] },
-      { name: "Settings", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings", "/dashboard/billing", "/dashboard/profile"] },
+      { name: "Home", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
+      { name: "New application", icon: Rocket, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories"] },
+      { name: "Activity", icon: Rocket, href: "/dashboard/deployments", activePaths: ["/dashboard/deployments"] },
+      { name: "Plan & billing", icon: ReceiptText, href: "/dashboard/billing", activePaths: ["/dashboard/billing"] },
     ],
   },
 ];
@@ -46,7 +43,6 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
-  const { hasDeployed } = useNotifications();
 
   const firstName = user?.firstName || user?.first_name || "";
   const lastName = user?.lastName || user?.last_name || "";
@@ -57,7 +53,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       ? firstName[0].toUpperCase()
       : user?.email
         ? user.email[0].toUpperCase()
-        : "VS";
+        : "U";
 
   const fullName = firstName && lastName
     ? `${firstName} ${lastName}`
@@ -65,7 +61,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       ? firstName
       : user?.email
         ? user.email.split("@")[0]
-        : "Vedant S.";
+        : "User";
 
   const isActive = (activePaths: string[]) => {
     return activePaths.some(path => {
@@ -121,7 +117,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {section.items.map((item) => {
               const active = isActive(item.activePaths);
               const Icon = item.icon;
-              const isLocked = !hasDeployed && item.isLockedIfNoDeploy === true;
               return (
                 <Link
                   key={item.href}
@@ -131,7 +126,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     active
                       ? "bg-primary-subtle text-primary"
                       : "text-foreground-muted hover:text-foreground hover:bg-card",
-                    isLocked && "opacity-60 hover:opacity-85"
                   )}
                 >
                   {active && (
@@ -141,7 +135,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
                     />
                   )}
-                  <Icon size={20} className={cn("flex-shrink-0", isLocked && "text-foreground-muted/70")} />
+                  <Icon size={20} className="flex-shrink-0" />
                   <AnimatePresence>
                     {!collapsed && (
                       <motion.span
@@ -154,9 +148,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       </motion.span>
                     )}
                   </AnimatePresence>
-                  {isLocked && !collapsed && (
-                    <Lock size={12} className="ml-auto text-foreground-muted/40 group-hover:text-foreground-muted/60" />
-                  )}
                 </Link>
               );
             })}
@@ -199,7 +190,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 className="overflow-hidden"
               >
                 <p className="text-sm font-medium text-foreground truncate">{fullName}</p>
-                <p className="text-[10px] text-foreground-muted">{user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : "Admin"}</p>
+                <p className="text-[10px] text-foreground-muted">{user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : "Starter"}</p>
               </motion.div>
             )}
           </AnimatePresence>

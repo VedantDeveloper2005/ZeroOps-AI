@@ -18,7 +18,7 @@ Save the following JSON content as `zeroops-operator-role.json`. Replace `YOUR_S
 {
   "Name": "ZeroOps Scoped Operator",
   "IsCustom": true,
-  "Description": "Allows ZeroOps AI to manage AKS, networking, and storage resources in a scoped resource group, preventing authorization adjustments.",
+  "Description": "Allows ZeroOps AI to build and publish managed applications in a scoped resource group without broad subscription access.",
   "Actions": [
     "Microsoft.ContainerService/*",
     "Microsoft.Network/*",

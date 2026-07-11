@@ -52,6 +52,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     let cancelled = false;
 
     async function loadData() {
+      // Skip API calls when no session exists — prevents 3× 401 cascades
+      // that hit the rate limiter and pollute the browser console.
+      if (typeof document !== "undefined") {
+        const hasSession = document.cookie.split(";").some((c) => c.trim().startsWith("session_token="));
+        if (!hasSession) {
+          setIsLoading(false);
+          return;
+        }
+      }
+
       setIsLoading(true);
       try {
         const [notifData, projectData, statsData] = await Promise.allSettled([

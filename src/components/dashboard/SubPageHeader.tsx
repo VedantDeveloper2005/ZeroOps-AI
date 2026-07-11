@@ -17,39 +17,19 @@ interface NavGroup {
 
 const navGroups: Record<string, NavGroup> = {
   delivery: {
-    title: "Deploy",
-    description: "Connect your repositories and deploy your applications.",
+    title: "Launch",
+    description: "Bring in your code, then choose when to go live.",
     tabs: [
-      { label: "Repositories", href: "/dashboard/repositories" },
-      { label: "Deployments", href: "/dashboard/deployments" },
-    ],
-  },
-  intelligence: {
-    title: "Insights",
-    description: "AI analysis, security checks, and cost optimization.",
-    tabs: [
-      { label: "AI Insights", href: "/dashboard/ai-analysis" },
-      { label: "Security", href: "/dashboard/security" },
-      { label: "Cost Savings", href: "/dashboard/cost-optimization" },
-    ],
-  },
-  operations: {
-    title: "Monitor",
-    description: "Health, performance, and live logs for your applications.",
-    tabs: [
-      { label: "Health", href: "/dashboard/monitoring" },
-      { label: "Topology", href: "/dashboard/infrastructure" },
-      { label: "Scaling", href: "/dashboard/autoscaling" },
-      { label: "Incidents", href: "/dashboard/incidents" },
-      { label: "Logs", href: "/dashboard/logs" },
+      { label: "New application", href: "/dashboard/repositories" },
+      { label: "Activity", href: "/dashboard/deployments" },
     ],
   },
   settings: {
-    title: "Settings",
-    description: "Account, integrations, and configuration.",
+    title: "Account",
+    description: "Manage your account, preferences, and paid actions.",
     tabs: [
-      { label: "General", href: "/dashboard/settings" },
-      { label: "Billing", href: "/dashboard/billing" },
+      { label: "Preferences", href: "/dashboard/settings" },
+      { label: "Plan & billing", href: "/dashboard/billing" },
       { label: "Profile", href: "/dashboard/profile" },
     ],
   },

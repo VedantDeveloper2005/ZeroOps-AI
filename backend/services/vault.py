@@ -1,113 +1,79 @@
+"""Azure Key Vault access for ZeroOps secrets.
+
+There is deliberately no filesystem fallback.  If Key Vault is unavailable the
+operation fails, preventing a customer secret from being written to a local disk
+or from a deployment being reported as successful with missing configuration.
+"""
+
+from __future__ import annotations
+
 import os
-import json
+import re
 
-# Local mock storage path for fallback (stored statefully in workspace directory)
-try:
-    from backend.config import WORKSPACE_DIR
-except ImportError:
-    from config import WORKSPACE_DIR
-VAULT_MOCK_FILE = os.path.join(WORKSPACE_DIR, "vault_secrets.json")
-
-# Ensure initial file exists
-if not os.path.exists(VAULT_MOCK_FILE):
-    with open(VAULT_MOCK_FILE, "w") as f:
-        json.dump({}, f)
-
-def read_mock_vault() -> dict:
-    try:
-        with open(VAULT_MOCK_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def write_mock_vault(data: dict):
-    try:
-        with open(VAULT_MOCK_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Failed to write to mock vault: {e}")
-
-# Try to import Azure SDK, fall back to mock if not installed or vault URL is empty
-AZURE_KEYVAULT_URL = os.getenv("AZURE_KEYVAULT_URL", "")
-
+AZURE_KEYVAULT_URL = os.getenv("AZURE_KEYVAULT_URL", "").strip()
 HAS_AZURE_KV = False
+kv_client = None
+
 if AZURE_KEYVAULT_URL:
     try:
         from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
-        
-        credential = DefaultAzureCredential()
-        kv_client = SecretClient(vault_url=AZURE_KEYVAULT_URL, credential=credential)
+
+        kv_client = SecretClient(
+            vault_url=AZURE_KEYVAULT_URL,
+            credential=DefaultAzureCredential(exclude_interactive_browser_credential=True),
+        )
         HAS_AZURE_KV = True
-        print(f"Azure Key Vault client successfully initialized at: {AZURE_KEYVAULT_URL}")
-    except Exception as e:
-        print(f"Azure Key Vault initialization failed: {e}. Falling back to mock vault.")
+    except Exception:
+        # Do not include connection details or secret material in startup logs.
+        HAS_AZURE_KV = False
+
+
+def _secret_name(project_id: str, key: str) -> str:
+    value = re.sub(r"[^0-9a-z-]", "-", f"zo-{project_id}-{key}".lower())
+    value = re.sub(r"-+", "-", value).strip("-")
+    return value[:127].rstrip("-")
+
+
+def _require_client():
+    if not HAS_AZURE_KV or kv_client is None:
+        raise RuntimeError("Azure Key Vault is not configured or unavailable.")
+    return kv_client
+
 
 def set_project_secret(project_id: str, key: str, value: str) -> bool:
-    """Store a secret for a project."""
-    # Enforce safe DNS-like names for AKV secret names (only alphanumeric and dashes are allowed)
-    # Format the secret name as: zo-{project_id}-{key}
-    akv_secret_name = f"zo-{project_id}-{key}".replace("_", "-").replace(" ", "-").lower()
-    
-    if HAS_AZURE_KV:
-        try:
-            kv_client.set_secret(akv_secret_name, value)
-            return True
-        except Exception as e:
-            print(f"Azure Key Vault set_secret failed: {e}. Saving to mock vault instead.")
-            
-    # Save to mock vault
-    vault = read_mock_vault()
-    if project_id not in vault:
-        vault[project_id] = {}
-    vault[project_id][key] = value
-    write_mock_vault(vault)
+    client = _require_client()
+    client.set_secret(_secret_name(project_id, key), value)
     return True
 
-def get_project_secrets(project_id: str) -> dict:
-    """Retrieve all secrets for a project (key-value pairs)."""
-    secrets = {}
-    
-    # Read from mock vault
-    vault = read_mock_vault()
-    if project_id in vault:
-        secrets.update(vault[project_id])
-        
-    # Read from Azure Key Vault if available (overwriting mock values if keys overlap)
-    if HAS_AZURE_KV:
+
+def get_project_secret(project_id: str, key: str) -> str | None:
+    client = _require_client()
+    try:
+        return client.get_secret(_secret_name(project_id, key)).value
+    except Exception:
+        return None
+
+
+def get_project_secrets(project_id: str) -> dict[str, str]:
+    """Return project secrets without ever persisting values outside Key Vault."""
+    client = _require_client()
+    prefix = _secret_name(project_id, "")
+    secrets: dict[str, str] = {}
+    for properties in client.list_properties_of_secrets():
+        if not properties.name.startswith(prefix):
+            continue
         try:
-            prefix = f"zo-{project_id}-".replace("_", "-").replace(" ", "-").lower()
-            secret_properties = kv_client.list_properties_of_secrets()
-            for secret_property in secret_properties:
-                if secret_property.name.startswith(prefix):
-                    key_part = secret_property.name[len(prefix):].replace("-", "_").upper()
-                    try:
-                        secret = kv_client.get_secret(secret_property.name)
-                        secrets[key_part] = secret.value
-                    except Exception as err:
-                        print(f"Failed to fetch secret value for {secret_property.name}: {err}")
-        except Exception as e:
-            print(f"Azure Key Vault list/get secrets failed: {e}")
-            
+            value = client.get_secret(properties.name).value
+        except Exception:
+            continue
+        key = properties.name[len(prefix):].lstrip("-").replace("-", "_").upper()
+        if key:
+            secrets[key] = value
     return secrets
 
+
 def delete_project_secret(project_id: str, key: str) -> bool:
-    """Delete a secret for a project."""
-    akv_secret_name = f"zo-{project_id}-{key}".replace("_", "-").replace(" ", "-").lower()
-    success = False
-    
-    if HAS_AZURE_KV:
-        try:
-            kv_client.begin_delete_secret(akv_secret_name)
-            success = True
-        except Exception as e:
-            print(f"Azure Key Vault delete_secret failed: {e}")
-            
-    # Delete from mock vault
-    vault = read_mock_vault()
-    if project_id in vault and key in vault[project_id]:
-        del vault[project_id][key]
-        write_mock_vault(vault)
-        success = True
-        
-    return success
+    client = _require_client()
+    client.begin_delete_secret(_secret_name(project_id, key))
+    return True

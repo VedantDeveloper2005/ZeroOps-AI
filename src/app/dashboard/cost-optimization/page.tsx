@@ -8,29 +8,18 @@ import { LockedView } from "@/components/dashboard/LockedView";
 import { api, type CostOptimization, type Project } from "@/lib/api";
 
 export default function CostOptimizationPage() {
-  const { hasDeployed } = useNotifications();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [costData, setCostData] = useState<CostOptimization | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [costLoading, setCostLoading] = useState(false);
 
   useEffect(() => {
-    if (!hasDeployed) return;
-    async function loadProjects() {
-      setLoading(true);
-      try {
-        const data = await api.getProjects();
-        setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].id);
-      } catch {
-        setProjects([]);
-      } finally {
-        setLoading(false);
-      }
+    if (!hasDeployed || projects.length === 0) return;
+    if (!selectedProjectId && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
     }
-    loadProjects();
-  }, [hasDeployed]);
+  }, [hasDeployed, projects, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) return;
@@ -49,7 +38,7 @@ export default function CostOptimizationPage() {
     );
   }
 
-  if (loading) {
+  if (loading || projectsLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />

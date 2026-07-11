@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from typing import Optional, List, Any
 from datetime import datetime
 import uuid
@@ -10,7 +10,7 @@ import uuid
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=12, max_length=128)
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     firstName: Optional[str] = None
@@ -35,8 +35,7 @@ class UserResponse(BaseModel):
     github_connected: bool = False
     github_username: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -63,7 +62,7 @@ class AzureConnectRequest(BaseModel):
     resource_group: str
     region: str = "eastus"
     acr_login_server: Optional[str] = None
-    aks_cluster_name: Optional[str] = None
+    container_apps_environment: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
 
@@ -77,15 +76,14 @@ class AzureConnectResponse(BaseModel):
     resource_group: str
     region: str
     acr_login_server: Optional[str] = None
-    aks_cluster_name: Optional[str] = None
+    container_apps_environment: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AzureConnectionUpsert(BaseModel):
-    """Legacy schema kept for backward compatibility with existing GKE-style endpoints."""
+    """Azure-only hosting connection settings. Client secrets are never returned."""
     tenant_id: str
     subscription_id: str
     client_id: Optional[str] = None
@@ -93,7 +91,7 @@ class AzureConnectionUpsert(BaseModel):
     region: str = "eastus"
     resource_group: Optional[str] = None
     acr_login_server: Optional[str] = None
-    aks_cluster_name: Optional[str] = None
+    container_apps_environment: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
 
@@ -108,8 +106,7 @@ class AuditLogResponse(BaseModel):
     result_detail: Optional[str] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PendingApprovalResponse(BaseModel):
@@ -121,8 +118,7 @@ class PendingApprovalResponse(BaseModel):
     status: str
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -161,8 +157,7 @@ class ProjectResponse(BaseModel):
     deployment_count: int = 0
     latest_deployment_status: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -193,8 +188,7 @@ class DeploymentResponse(BaseModel):
     completed_at: Optional[str] = None
     infrastructure_metadata: Optional[Any] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeploymentLogResponse(BaseModel):
     line_number: int
@@ -202,8 +196,7 @@ class DeploymentLogResponse(BaseModel):
     message: str
     timestamp: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeploymentDetailResponse(DeploymentResponse):
     logs: List[DeploymentLogResponse] = []
@@ -223,8 +216,7 @@ class NotificationResponse(BaseModel):
     action_url: Optional[str] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -242,8 +234,7 @@ class AIActionResponse(BaseModel):
     icon: str
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -295,8 +286,7 @@ class AIAnalysisResponse(BaseModel):
     why_this_plan: Optional[str] = None
     detected_vars_detail: Optional[List[Any]] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatRequest(BaseModel):
@@ -325,8 +315,7 @@ class DeploymentRecommendationResponse(BaseModel):
     recommended_region: Optional[str] = None
     expected_traffic: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -346,8 +335,7 @@ class FailureAnalysisResponse(BaseModel):
     impact: Optional[str] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ──────────────────────────────────────────────
@@ -378,8 +366,7 @@ class UserSettingsResponse(BaseModel):
     email_alerts: bool = True
     theme: str = "dark"
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserSettingsUpdate(BaseModel):
     predictive_scaling: Optional[bool] = None
@@ -408,8 +395,7 @@ class UserProfileResponse(BaseModel):
     total_deployments: int = 0
     active_deployments: int = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserProfileUpdate(BaseModel):
     first_name: Optional[str] = None
@@ -493,12 +479,11 @@ class EnvVarResponse(BaseModel):
     is_secret: bool
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class EnvVarCreate(BaseModel):
-    key: str
-    value: str
+    key: str = Field(..., min_length=1, max_length=255, pattern=r"^[A-Z][A-Z0-9_]*$")
+    value: str = Field(..., min_length=1, max_length=65536)
     is_secret: bool = False
 
 class TelemetryMetricResponse(BaseModel):
@@ -538,8 +523,7 @@ class DatabaseInstanceResponse(BaseModel):
     status: str
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SelfHealRequest(BaseModel):

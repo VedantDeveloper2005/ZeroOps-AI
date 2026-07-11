@@ -7,29 +7,18 @@ import { api, type Project, type HealthScore, type CostOptimization } from "@/li
 import { useNotifications } from "@/lib/NotificationContext";
 
 export default function AIAnalysisPage() {
-  const { addToast } = useNotifications();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { addToast, projects, isLoading: loadingProjects } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
   const [costOpt, setCostOpt] = useState<CostOptimization | null>(null);
   const [requestingFixId, setRequestingFixId] = useState<string | null>(null);
 
   useEffect(() => {
-    async function loadProjects() {
-      try {
-        const data = await api.getProjects();
-        setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].id);
-      } catch (err) {
-        console.error("Failed to load projects", err);
-      } finally {
-        setLoadingProjects(false);
-      }
+    if (projects.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
     }
-    loadProjects();
-  }, []);
+  }, [projects, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) return;

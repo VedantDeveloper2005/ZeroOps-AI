@@ -30,10 +30,12 @@ elif DATABASE_URL.startswith("postgres://"):
 connect_args = {}
 if "postgres.database.azure.com" in DATABASE_URL or os.getenv("DB_SSL", "true").lower() == "true":
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if not config.DB_SSL_VERIFY and not config.IS_PRODUCTION:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        logger.warning("Database TLS certificate verification is disabled for local development.")
     connect_args["ssl"] = ctx
-    logger.info("SSL enabled for PostgreSQL connection")
+    logger.info("TLS enabled for PostgreSQL connection")
 
 async_engine = None
 AsyncSessionLocal = None
@@ -242,6 +244,7 @@ async def run_migrations():
 
         # Azure BYOS: add connection_status column to user_azure_connections
         "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS connection_status TEXT DEFAULT 'pending'",
+        "ALTER TABLE user_azure_connections ADD COLUMN IF NOT EXISTS container_apps_environment TEXT",
         # Drop the obsolete client_secret_encrypted column (secrets go to Key Vault only)
         """DO $$ BEGIN
             IF EXISTS (

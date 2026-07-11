@@ -63,9 +63,9 @@ export default function BillingPage() {
     ? `${profile.first_name} ${profile.last_name || ""}`.trim()
     : profile?.email || "Account holder";
 
-  const planName = profile?.plan
+  const planName = profile?.plan && profile.plan !== "starter"
     ? `${profile.plan.charAt(0).toUpperCase()}${profile.plan.slice(1)} Plan`
-    : "Starter Plan";
+    : "Plan managed in billing";
 
   const totals = useMemo(() => {
     const pending = operations.filter((op) => op.status === "pending_payment");
@@ -77,7 +77,7 @@ export default function BillingPage() {
   const usageStats = [
     { name: "Deployment Records", value: String(profile?.total_deployments ?? 0), detail: "Stored in backend" },
     { name: "Active Deployments", value: String(profile?.active_deployments ?? 0), detail: "Currently running" },
-    { name: "Paid AI Fixes", value: String(totals.paid.length + totals.consumed.length), detail: "Approved operations" },
+    { name: "Paid changes", value: String(totals.paid.length + totals.consumed.length), detail: "Approved operations" },
     { name: "Pending Payments", value: String(totals.pending.length), detail: "Awaiting checkout" },
   ];
 
@@ -125,7 +125,7 @@ export default function BillingPage() {
                 </span>
                 <h3 className="text-2xl font-bold text-foreground mt-3">{planName}</h3>
                 <p className="text-foreground-muted text-xs mt-1">
-                  AI code changes are charged only after an explicit paid operation is created and approved.
+                  Paid changes always require an explicit checkout approval. There is no trial usage hidden in this workspace.
                 </p>
               </div>
               <div className="text-left sm:text-right">
@@ -137,7 +137,7 @@ export default function BillingPage() {
             <div className="border-t border-border/60 my-5" />
 
             <div className="grid md:grid-cols-3 gap-4">
-              {["Authenticated user billing", "Per-user cloud deployments", "Payment-gated AI code changes"].map((feature) => (
+              {["Authenticated account billing", "Per-user application activity", "Payment-gated changes"].map((feature) => (
                 <div key={feature} className="flex items-center gap-2 text-xs font-semibold text-foreground-muted">
                   <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
                     <Check size={12} className="text-success" />
@@ -196,7 +196,7 @@ export default function BillingPage() {
             transition={{ delay: 0.3 }}
             className="bg-card border border-border rounded-xl p-5 shadow-sm"
           >
-            <h3 className="text-sm font-bold text-foreground mb-4">Paid AI Operations</h3>
+            <h3 className="text-sm font-bold text-foreground mb-4">Paid actions</h3>
             <div className="space-y-3">
               {operations.length > 0 ? operations.map((operation) => (
                 <div key={operation.id} className="p-3 rounded-lg bg-background-secondary border border-border/50 hover:bg-card transition space-y-3">

@@ -39,9 +39,22 @@ def test_secret_redaction_utility():
     assert redacted["nested"]["safe_field"] == "public_data"
     assert redacted["list_field"][1]["safe_val"] == 42
 
-def test_credential_onboarding_memory_zeroing():
-    # Verify client secret memory zeroing inside azure_connector
+def test_credential_onboarding_uses_key_vault(monkeypatch):
+    """Credential storage is exercised with an in-test Key Vault double only."""
     import uuid
+    stored = {}
+
+    class FakeKeyVault:
+        def set_secret(self, name, value):
+            stored[name] = value
+
+        def get_secret(self, name):
+            return type("Secret", (), {"value": stored[name]})()
+
+        def begin_delete_secret(self, name):
+            stored.pop(name, None)
+
+    monkeypatch.setattr(azure_connector, "_key_vault_client", lambda: FakeKeyVault())
     user_id = uuid.uuid4()
     secret = "my-super-secret-key-1234"
     
@@ -49,7 +62,7 @@ def test_credential_onboarding_memory_zeroing():
     store_ok = azure_connector.store_credential_in_vault(user_id, secret)
     assert store_ok is True
     
-    # Check that we can fetch the secret from Key Vault (mocked or real)
+    # Check that we can fetch the secret from the Key Vault client.
     fetched_secret = azure_connector.get_credential_secret(user_id)
     assert fetched_secret == "my-super-secret-key-1234"
     

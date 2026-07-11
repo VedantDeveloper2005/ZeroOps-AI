@@ -8,11 +8,13 @@ import os
 import shutil
 import zipfile
 import hashlib
+import stat
 from datetime import datetime
 from typing import Any, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, desc, or_
@@ -39,16 +41,22 @@ except ImportError:
     from database import get_db, init_db, database_available, AsyncSessionLocal
     import models, schemas, auth
 
-app = FastAPI(title="ZeroOps AI Backend")
+app = FastAPI(
+    title="ZeroOps AI Backend",
+    docs_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/docs",
+    redoc_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/redoc",
+    openapi_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/openapi.json",
+)
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
     allow_credentials=config.ALLOW_CREDENTIALS,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "Stripe-Signature"],
 )
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.ALLOWED_HOSTS)
 
 
 import time
@@ -79,6 +87,15 @@ async def csrf_middleware(request: Request, call_next):
             )
             
     response = await call_next(request)
+
+    # API responses commonly carry account, deployment, or operational data and
+    # must not be stored in intermediary browser or CDN caches.
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     
     # Generate and set csrf_token cookie if missing
     if "csrf_token" not in request.cookies:
@@ -127,6 +144,21 @@ async def rate_limit_middleware(request: Request, call_next):
         limit = 100
 
     key = (client_ip, category)
+
+    # Bound the number of tracked clients so a stream of unique source IPs
+    # cannot grow this in-process safeguard without limit.
+    if len(request_counts) >= config.MAX_RATE_LIMIT_KEYS and key not in request_counts:
+        expired_keys = [
+            item for item, values in request_counts.items()
+            if not values or now - values[-1] >= RATE_LIMIT_WINDOW
+        ]
+        for expired_key in expired_keys:
+            request_counts.pop(expired_key, None)
+        if len(request_counts) >= config.MAX_RATE_LIMIT_KEYS:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Request capacity is temporarily full. Please retry shortly."},
+            )
     
     # Filter request timestamps inside the active window
     timestamps = [t for t in request_counts[key] if now - t < RATE_LIMIT_WINDOW]
@@ -283,7 +315,10 @@ async def self_healing_daemon():
 
 @app.on_event("startup")
 async def startup_db():
-    await init_db()
+    initialized = await init_db()
+    if initialized:
+        await migrate_legacy_environment_secrets()
+        await recover_interrupted_deployments()
     asyncio.create_task(self_healing_daemon())
 
 
@@ -316,6 +351,58 @@ def format_duration(seconds: Optional[int]) -> str:
 
 def format_dt(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
+
+
+async def migrate_legacy_environment_secrets() -> None:
+    """Move legacy database secret values to Key Vault before clearing them."""
+    if not vault.HAS_AZURE_KV or AsyncSessionLocal is None:
+        if config.IS_PRODUCTION:
+            logger.error("Key Vault is unavailable; legacy environment secrets were not migrated.")
+        return
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(models.EnvironmentVariable, models.Environment.project_id)
+            .join(models.Environment, models.EnvironmentVariable.environment_id == models.Environment.id)
+            .filter(models.EnvironmentVariable.is_secret == True, models.EnvironmentVariable.value != "")
+        )
+        migrated = 0
+        for variable, project_id in result.all():
+            try:
+                vault.set_project_secret(str(project_id), variable.key, variable.value)
+                variable.value = ""
+                migrated += 1
+            except Exception:
+                logger.exception("Unable to migrate an environment secret to Key Vault")
+        if migrated:
+            await db.commit()
+            logger.info("Migrated %s legacy environment secrets to Key Vault.", migrated)
+
+
+async def recover_interrupted_deployments() -> None:
+    """Fail unfinished in-process work after a restart instead of leaving it stuck."""
+    if AsyncSessionLocal is None:
+        return
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(models.Deployment).filter(models.Deployment.status.in_(["queued", "building"]))
+        )
+        deployments = result.scalars().all()
+        if not deployments:
+            return
+        now = datetime.utcnow()
+        for deployment in deployments:
+            deployment.status = "failed"
+            deployment.failure_reason = "Deployment worker restarted before this release completed. Retry the release safely."
+            deployment.completed_at = now
+            project_result = await db.execute(
+                select(models.Project).filter(models.Project.id == deployment.project_id)
+            )
+            project = project_result.scalars().first()
+            if project and project.status == "deploying":
+                project.status = "failed"
+        await db.commit()
+        logger.warning("Marked %s interrupted deployment(s) as failed after restart.", len(deployments))
 
 
 def get_frontend_redirect_url() -> str:
@@ -496,13 +583,36 @@ async def consume_paid_operation(
 
 
 def safe_extract_zip(zip_path: str, target_dir: str):
+    """Extract a user archive with path, symlink, and zip-bomb safeguards."""
     target_abs = os.path.abspath(target_dir)
     with zipfile.ZipFile(zip_path) as archive:
+        members = archive.infolist()
+        if len(members) > config.MAX_UPLOAD_ARCHIVE_FILES:
+            raise HTTPException(status_code=400, detail="Upload archive contains too many files.")
+
+        total_uncompressed = 0
         for member in archive.infolist():
+            if not member.filename or member.filename.endswith("/"):
+                continue
+            if stat.S_ISLNK(member.external_attr >> 16):
+                raise HTTPException(status_code=400, detail="Upload archive cannot contain symbolic links.")
+            total_uncompressed += member.file_size
+            if total_uncompressed > config.MAX_UPLOAD_UNCOMPRESSED_MB * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="Upload archive expands beyond the allowed size.")
+            if member.file_size and not member.compress_size:
+                raise HTTPException(status_code=400, detail="Upload archive has an unsafe compressed entry.")
+            if member.file_size and member.compress_size and member.file_size / member.compress_size > config.MAX_UPLOAD_COMPRESSION_RATIO:
+                raise HTTPException(status_code=400, detail="Upload archive compression ratio is unsafe.")
             member_path = os.path.abspath(os.path.join(target_abs, member.filename))
-            if not member_path.startswith(target_abs + os.sep) and member_path != target_abs:
+            try:
+                is_within_target = os.path.commonpath([target_abs, member_path]) == target_abs
+            except ValueError:
+                is_within_target = False
+            if not is_within_target:
                 raise HTTPException(status_code=400, detail="Upload archive contains unsafe paths.")
-        archive.extractall(target_abs)
+            os.makedirs(os.path.dirname(member_path), exist_ok=True)
+            with archive.open(member, "r") as source, open(member_path, "wb") as destination:
+                shutil.copyfileobj(source, destination)
 
 
 def normalize_upload_root(path: str) -> str:
@@ -870,7 +980,7 @@ async def create_project(
         db.add(models.EnvironmentVariable(
             environment_id=production_env.id,
             key=var_key,
-            value=secure_val,
+            value="" if is_secret else secure_val,
             is_secret=is_secret
         ))
         if is_secret:
@@ -1093,7 +1203,7 @@ async def get_azure_connection(
         "region": connection.region,
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
-        "aks_cluster_name": connection.aks_cluster_name,
+        "container_apps_environment": connection.container_apps_environment,
         "namespace_prefix": connection.namespace_prefix,
         "created_at": format_dt(connection.created_at),
         "updated_at": format_dt(connection.updated_at),
@@ -1133,7 +1243,7 @@ async def connect_azure(
         existing.region = req.region or config.AZURE_DEFAULT_REGION
         existing.resource_group = req.resource_group.strip()
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
-        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else None
+        existing.container_apps_environment = req.container_apps_environment.strip() if req.container_apps_environment else None
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
         existing.connection_status = "connected"
         existing.is_active = True
@@ -1148,7 +1258,7 @@ async def connect_azure(
             region=req.region or config.AZURE_DEFAULT_REGION,
             resource_group=req.resource_group.strip(),
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
-            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
+            container_apps_environment=req.container_apps_environment.strip() if req.container_apps_environment else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -1184,7 +1294,7 @@ async def connect_azure(
         "resource_group": connection.resource_group,
         "region": connection.region,
         "acr_login_server": connection.acr_login_server,
-        "aks_cluster_name": connection.aks_cluster_name,
+        "container_apps_environment": connection.container_apps_environment,
         "namespace_prefix": connection.namespace_prefix,
     }
 
@@ -1231,7 +1341,7 @@ async def upsert_azure_connection(
         existing.region = req.region or config.AZURE_DEFAULT_REGION
         existing.resource_group = req.resource_group.strip() if req.resource_group else existing.resource_group
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else existing.acr_login_server
-        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else existing.aks_cluster_name
+        existing.container_apps_environment = req.container_apps_environment.strip() if req.container_apps_environment else existing.container_apps_environment
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else existing.namespace_prefix
         existing.connection_status = "connected"
         existing.is_active = True
@@ -1246,7 +1356,7 @@ async def upsert_azure_connection(
             region=req.region or config.AZURE_DEFAULT_REGION,
             resource_group=req.resource_group.strip() if req.resource_group else None,
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
-            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
+            container_apps_environment=req.container_apps_environment.strip() if req.container_apps_environment else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -1260,7 +1370,7 @@ async def upsert_azure_connection(
         "region": connection.region,
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
-        "aks_cluster_name": connection.aks_cluster_name,
+        "container_apps_environment": connection.container_apps_environment,
     }
 
 
@@ -1368,22 +1478,7 @@ async def get_gke_connection(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    connection = await get_active_gke_connection(db, current_user.id)
-    if not connection:
-        return {"connected": False, "has_service_account_json": False}
-    return {
-        "connected": True,
-        "gcp_project_id": connection.gcp_project_id,
-        "service_account_email": connection.service_account_email,
-        "has_service_account_json": bool(connection.service_account_json_encrypted),
-        "location": connection.location,
-        "cluster_name": connection.cluster_name,
-        "artifact_registry_host": connection.artifact_registry_host,
-        "artifact_registry_repository": connection.artifact_registry_repository,
-        "namespace_prefix": connection.namespace_prefix,
-        "created_at": format_dt(connection.created_at),
-        "updated_at": format_dt(connection.updated_at),
-    }
+    raise HTTPException(status_code=410, detail="Google Cloud hosting is no longer supported.")
 
 
 @app.put("/api/gke/connection")
@@ -1392,64 +1487,7 @@ async def upsert_gke_connection(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not req.gcp_project_id.strip():
-        raise HTTPException(status_code=400, detail="gcp_project_id is required.")
-
-    service_account_json = req.service_account_json.strip() if req.service_account_json else ""
-    if service_account_json:
-        try:
-            parsed = json.loads(service_account_json)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Service account JSON is not valid JSON.")
-        client_email = str(parsed.get("client_email") or "").strip()
-        if client_email and not req.service_account_email:
-            req.service_account_email = client_email
-
-    existing = await get_active_gke_connection(db, current_user.id)
-    encrypted_json = github_oauth.encrypt_token(service_account_json) if service_account_json else None
-    host = req.artifact_registry_host.strip().rstrip("/") if req.artifact_registry_host else None
-    if host:
-        host = host.replace("https://", "").replace("http://", "")
-
-    if existing:
-        existing.gcp_project_id = req.gcp_project_id.strip()
-        existing.service_account_email = req.service_account_email.strip() if req.service_account_email else existing.service_account_email
-        if encrypted_json:
-            existing.service_account_json_encrypted = encrypted_json
-        existing.location = req.location.strip() if req.location else "us-central1"
-        existing.cluster_name = req.cluster_name.strip() if req.cluster_name else None
-        existing.artifact_registry_host = host
-        existing.artifact_registry_repository = req.artifact_registry_repository.strip().strip("/") if req.artifact_registry_repository else None
-        existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
-        existing.updated_at = datetime.utcnow()
-        connection = existing
-    else:
-        connection = models.UserGkeConnection(
-            user_id=current_user.id,
-            gcp_project_id=req.gcp_project_id.strip(),
-            service_account_email=req.service_account_email.strip() if req.service_account_email else None,
-            service_account_json_encrypted=encrypted_json,
-            location=req.location.strip() if req.location else "us-central1",
-            cluster_name=req.cluster_name.strip() if req.cluster_name else None,
-            artifact_registry_host=host,
-            artifact_registry_repository=req.artifact_registry_repository.strip().strip("/") if req.artifact_registry_repository else None,
-            namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
-            is_active=True,
-        )
-        db.add(connection)
-
-    await db.commit()
-    return {
-        "connected": True,
-        "gcp_project_id": connection.gcp_project_id,
-        "service_account_email": connection.service_account_email,
-        "has_service_account_json": bool(connection.service_account_json_encrypted),
-        "location": connection.location,
-        "cluster_name": connection.cluster_name,
-        "artifact_registry_host": connection.artifact_registry_host,
-        "artifact_registry_repository": connection.artifact_registry_repository,
-        "namespace_prefix": connection.namespace_prefix,
-    }
+    raise HTTPException(status_code=410, detail="Google Cloud hosting is no longer supported.")
 
 
 @app.get("/api/deployment-targets")
@@ -1458,8 +1496,7 @@ async def get_deployment_targets(
     db: AsyncSession = Depends(get_db),
 ):
     azure_connection = await get_active_azure_connection(db, current_user.id)
-    gke_connection = await get_active_gke_connection(db, current_user.id)
-    return deployment_targets.status_payload(azure_connection, gke_connection)
+    return deployment_targets.status_payload(azure_connection)
 
 
 @app.get("/api/billing/operations")
@@ -1662,12 +1699,12 @@ async def self_heal_project(
             jwt_secret_var = next((v for v in vars_list if v.key == "JWT_SECRET"), None)
             new_val = f"zo_sec_{secrets.token_hex(24)}"
             if jwt_secret_var:
-                jwt_secret_var.value = new_val
+                jwt_secret_var.value = ""
             else:
                 db.add(models.EnvironmentVariable(
                     environment_id=env.id,
                     key="JWT_SECRET",
-                    value=new_val,
+                    value="",
                     is_secret=True
                 ))
             vault.set_project_secret(str(project.id), "JWT_SECRET", new_val)
@@ -1714,10 +1751,9 @@ async def self_heal_project(
 
     elif action == "redeploy":
         azure_connection = await get_active_azure_connection(db, current_user.id)
-        gke_connection = await get_active_gke_connection(db, current_user.id)
         analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
         try:
-            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, gke_connection)
+            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-redeploy"
@@ -1772,7 +1808,6 @@ async def self_heal_project(
 
     elif action == "rollback":
         azure_connection = await get_active_azure_connection(db, current_user.id)
-        gke_connection = await get_active_gke_connection(db, current_user.id)
         rollback_dep_result = await db.execute(
             select(models.Deployment)
             .filter(models.Deployment.project_id == project.id, models.Deployment.status == "running")
@@ -1786,7 +1821,7 @@ async def self_heal_project(
         previous_provider = rollback_meta.get("target_provider") or (rollback_meta.get("target") or {}).get("provider") or "auto"
         analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
         try:
-            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, gke_connection, previous_provider)
+            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, previous_provider)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
             
@@ -1959,10 +1994,17 @@ async def create_project_variable(
         raise HTTPException(status_code=400, detail=f"Variable '{req.key}' already exists.")
 
     # 4. Create variable
+    if req.is_secret:
+        try:
+            vault.set_project_secret(str(project_id), req.key, req.value)
+        except Exception as exc:
+            logger.error("Unable to store a project secret in Key Vault: %s", exc)
+            raise HTTPException(status_code=503, detail="Azure Key Vault is unavailable. Secret was not saved.")
+
     new_var = models.EnvironmentVariable(
         environment_id=env.id,
         key=req.key,
-        value=req.value,
+        value="" if req.is_secret else req.value,
         is_secret=req.is_secret
     )
     db.add(new_var)
@@ -2004,7 +2046,16 @@ async def delete_project_variable(
     if not variable:
         raise HTTPException(status_code=404, detail="Variable not found.")
 
-    # 3. Delete variable
+    # 3. Delete the Key Vault value first. This prevents an orphaned secret
+    # when the database row is removed successfully.
+    if variable.is_secret:
+        try:
+            vault.delete_project_secret(str(project_id), variable.key)
+        except Exception as exc:
+            logger.error("Unable to delete a project secret from Key Vault: %s", exc)
+            raise HTTPException(status_code=503, detail="Azure Key Vault is unavailable. Secret was not deleted.")
+
+    # 4. Delete variable metadata
     await db.delete(variable)
     await db.commit()
     return {"status": "success", "message": "Variable deleted successfully."}
@@ -2138,12 +2189,11 @@ async def start_deploy(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     azure_connection = await get_active_azure_connection(db, current_user.id)
-    gke_connection = await get_active_gke_connection(db, current_user.id)
-    target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+    target_status = deployment_targets.status_payload(azure_connection)
     if not target_status["any_ready"]:
         raise HTTPException(
             status_code=400,
-            detail="Configure Azure AKS or Google GKE before starting a deployment."
+            detail="Connect your Azure application environment before starting a deployment."
         )
 
     analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
@@ -2151,7 +2201,6 @@ async def start_deploy(
         selected_target = deployment_targets.choose_target(
             analysis_hint,
             azure_connection,
-            gke_connection,
             req.target_provider,
         )
     except ValueError as exc:
@@ -2674,10 +2723,9 @@ async def analyze_repo(
     db.add(db_recommendation)
 
     azure_connection = await get_active_azure_connection(db, current_user.id)
-    gke_connection = await get_active_gke_connection(db, current_user.id)
-    target_status = deployment_targets.status_payload(azure_connection, gke_connection)
+    target_status = deployment_targets.status_payload(azure_connection)
     try:
-        selected_target = deployment_targets.choose_target(analysis, azure_connection, gke_connection)
+        selected_target = deployment_targets.choose_target(analysis, azure_connection)
         db_recommendation.recommended_target = selected_target.label
         db_recommendation.azure_configuration = {
             **(db_recommendation.azure_configuration or {}),
@@ -4439,8 +4487,7 @@ async def health_check():
         "status": "healthy",
         "service": "zeroops-backend",
         "environment": config.APP_ENV,
-        "dockerAvailable": config.DOCKER_AVAILABLE,
-        "kubernetesAvailable": config.K8S_AVAILABLE,
+        "azureDeploymentWorker": config.AZURE_CLI_AVAILABLE,
         "openAIConfigured": bool(config.OPENAI_API_KEY),
         "timestamp": datetime.utcnow().isoformat()
     }

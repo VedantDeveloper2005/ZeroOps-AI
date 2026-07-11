@@ -20,31 +20,20 @@ interface HPAStatus {
 }
 
 export default function AutoscalingPage() {
-  const { addToast, addNotification, hasDeployed } = useNotifications();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { addToast, addNotification, hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [hpaLoading, setHpaLoading] = useState(false);
   const [hpa, setHpa] = useState<HPAStatus>({});
   const [replicas, setReplicas] = useState(2);
   const [isScaling, setIsScaling] = useState(false);
 
   useEffect(() => {
-    if (!hasDeployed) return;
-    async function loadProjects() {
-      setLoading(true);
-      try {
-        const data = await api.getProjects();
-        setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].id);
-      } catch {
-        setProjects([]);
-      } finally {
-        setLoading(false);
-      }
+    if (!hasDeployed || projects.length === 0) return;
+    if (!selectedProjectId && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
     }
-    loadProjects();
-  }, [hasDeployed]);
+  }, [hasDeployed, projects, selectedProjectId]);
 
   const fetchHPAStatus = useCallback(() => {
     if (!selectedProjectId) return;

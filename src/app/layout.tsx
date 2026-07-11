@@ -5,7 +5,6 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { NotificationProvider } from "@/lib/NotificationContext";
 import { AuthProvider } from "@/lib/AuthContext";
 import { ToastContainer } from "@/components/ui/ToastContainer";
-import MobileBlocker from "@/components/MobileBlocker";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,21 +17,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ZeroOps — The Operating System for Autonomous Cloud Infrastructure",
+  title: "ZeroOps — Ship without the platform overhead",
   description:
-    "Deploy production-grade applications instantly with AI. ZeroOps autonomously analyzes, secures, deploys, scales, and manages your applications on Kubernetes without DevOps complexity.",
+    "Connect a repository or upload your code. ZeroOps prepares and runs your application while you stay in control.",
   keywords: [
-    "AI deployment",
-    "Kubernetes",
-    "DevOps automation",
-    "cloud infrastructure",
-    "AKS",
-    "autonomous deployment",
+    "application deployment",
+    "repository deployment",
+    "cloud operations",
+    "production readiness",
   ],
   openGraph: {
-    title: "ZeroOps — Deploy with AI",
+    title: "ZeroOps — Bring your code. Keep the control.",
     description:
-      "The autonomous cloud deployment platform. Zero DevOps required.",
+      "Bring your code. Keep the control. Leave the platform work to ZeroOps.",
     type: "website",
   },
 };
@@ -57,7 +54,6 @@ export default function RootLayout({
         >
           <NotificationProvider>
             <AuthProvider>
-              <MobileBlocker />
               {children}
               <ToastContainer />
             </AuthProvider>
@@ -67,4 +63,3 @@ export default function RootLayout({
     </html>
   );
 }
-

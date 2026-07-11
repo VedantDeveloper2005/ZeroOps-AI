@@ -385,29 +385,17 @@ export interface AzureConnection {
   region?: string | null;
   resource_group?: string | null;
   acr_login_server?: string | null;
-  aks_cluster_name?: string | null;
-  namespace_prefix?: string | null;
-}
-
-export interface GkeConnection {
-  connected: boolean;
-  gcp_project_id?: string | null;
-  service_account_email?: string | null;
-  has_service_account_json?: boolean;
-  location?: string | null;
-  cluster_name?: string | null;
-  artifact_registry_host?: string | null;
-  artifact_registry_repository?: string | null;
+  container_apps_environment?: string | null;
   namespace_prefix?: string | null;
 }
 
 export interface DeploymentTargetStatus {
-  provider: "azure" | "gke";
+  provider: "azure-container-apps";
   label: string;
   ready: boolean;
   missing: string[];
   region?: string | null;
-  cluster_name?: string | null;
+  environment_name?: string | null;
   registry?: string | null;
 }
 
@@ -420,8 +408,7 @@ export interface SystemHealth {
   status: string;
   service: string;
   environment: string;
-  dockerAvailable: boolean;
-  kubernetesAvailable: boolean;
+  azureDeploymentWorker: boolean;
   openAIConfigured: boolean;
 }
 
@@ -482,7 +469,7 @@ export const api = {
     project_id: string;
     branch?: string;
     environment?: string;
-    target_provider?: "auto" | "azure" | "gke";
+    target_provider?: "auto" | "azure" | "azure-container-apps";
   }) => request<{ status: string; deployment_id: string; project_id: string }>(
     "/api/deployments/deploy",
     { method: "POST", body: JSON.stringify(data) }
@@ -567,7 +554,7 @@ export const api = {
     region?: string;
     resource_group?: string;
     acr_login_server?: string;
-    aks_cluster_name?: string;
+    container_apps_environment?: string;
     namespace_prefix?: string;
   }) =>
     request<AzureConnection>("/api/azure/connection", {
@@ -576,23 +563,6 @@ export const api = {
     }),
 
   // ── Google GKE Deployment Target ──
-  getGkeConnection: () => request<GkeConnection>("/api/gke/connection"),
-
-  updateGkeConnection: (data: {
-    gcp_project_id: string;
-    service_account_email?: string;
-    service_account_json?: string;
-    location?: string;
-    cluster_name?: string;
-    artifact_registry_host?: string;
-    artifact_registry_repository?: string;
-    namespace_prefix?: string;
-  }) =>
-    request<GkeConnection>("/api/gke/connection", {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
-
   getDeploymentTargets: () => request<DeploymentTargetsStatus>("/api/deployment-targets"),
 
   // ── GitHub OAuth ──
@@ -626,8 +596,7 @@ export const api = {
     status: string;
     service: string;
     environment: string;
-    dockerAvailable: boolean;
-    kubernetesAvailable: boolean;
+    azureDeploymentWorker: boolean;
     openAIConfigured: boolean;
   }>("/api/health"),
 

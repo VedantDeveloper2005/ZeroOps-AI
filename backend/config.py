@@ -48,6 +48,7 @@ for url in [FRONTEND_ORIGIN, FRONTEND_URL]:
 
 # Remove duplicates while preserving order
 CORS_ORIGINS = list(dict.fromkeys(CORS_ORIGINS))
+ALLOWED_HOSTS = parse_csv_env("ALLOWED_HOSTS", ["*"] if not IS_PRODUCTION else [])
 
 ALLOW_CREDENTIALS = True
 
@@ -82,9 +83,8 @@ GOOGLE_OAUTH_SCOPES = os.getenv("GOOGLE_OAUTH_SCOPES", "openid email profile")
 AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
 
-# Azure BYOS (Bring Your Own Subscription) configuration
-# ZeroOps Key Vault URL – used to store customer SP secrets via Managed Identity.
-# Leave empty to fall back to local mock secret storage (dev only).
+# Azure BYOS (Bring Your Own Subscription) configuration. Customer deployment
+# credentials and application secrets are held only in this Key Vault.
 AZURE_KEYVAULT_URL = os.getenv("AZURE_KEYVAULT_URL", "")
 
 # Risk classifier thresholds
@@ -102,30 +102,33 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
 # Direct upload controls
 MAX_CODE_UPLOAD_MB = int(os.getenv("MAX_CODE_UPLOAD_MB", "50"))
+MAX_UPLOAD_ARCHIVE_FILES = int(os.getenv("MAX_UPLOAD_ARCHIVE_FILES", "10000"))
+MAX_UPLOAD_UNCOMPRESSED_MB = int(os.getenv("MAX_UPLOAD_UNCOMPRESSED_MB", "250"))
+MAX_UPLOAD_COMPRESSION_RATIO = int(os.getenv("MAX_UPLOAD_COMPRESSION_RATIO", "100"))
+MAX_RATE_LIMIT_KEYS = int(os.getenv("MAX_RATE_LIMIT_KEYS", "10000"))
+DB_SSL_VERIFY = os.getenv("DB_SSL_VERIFY", "true").lower() == "true"
 
 # Workspace folder for temporary checkouts
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
-# Autodetect runtime environments
-def check_docker():
+# Deployment workers build remotely in Azure Container Registry, so the control
+# plane intentionally does not depend on Docker or a cluster context.
+AZURE_CLI_PATH = os.getenv("AZURE_CLI_PATH", "az")
+
+def check_azure_cli():
     try:
-        # Run docker ps with short timeout to verify daemon responsiveness
-        res = subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        res = subprocess.run([AZURE_CLI_PATH, "version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         return res.returncode == 0
     except Exception:
         return False
 
-def check_kubernetes():
-    try:
-        # Run kubectl config current-context to verify context existence
-        res = subprocess.run(["kubectl", "config", "current-context"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-        return res.returncode == 0
-    except Exception:
-        return False
-
-DOCKER_AVAILABLE = check_docker()
-K8S_AVAILABLE = check_kubernetes()
+AZURE_CLI_AVAILABLE = check_azure_cli()
+# Compatibility flags for retired internal modules. They are intentionally
+# always false: no production launch path can fall back to local Docker or a
+# cluster context.
+DOCKER_AVAILABLE = False
+K8S_AVAILABLE = False
 
 # Database & Authentication configurations
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -145,13 +148,21 @@ if IS_PRODUCTION and not FRONTEND_URL:
 if IS_PRODUCTION and FRONTEND_URL.lower().startswith("http://"):
     raise RuntimeError("FRONTEND_URL must use HTTPS when APP_ENV=production.")
 
+if IS_PRODUCTION and not AZURE_KEYVAULT_URL:
+    raise RuntimeError("AZURE_KEYVAULT_URL must be configured when APP_ENV=production.")
+
+if IS_PRODUCTION and not ALLOWED_HOSTS:
+    raise RuntimeError("ALLOWED_HOSTS must list the public API hostname when APP_ENV=production.")
+
+if IS_PRODUCTION and not DB_SSL_VERIFY:
+    raise RuntimeError("DB_SSL_VERIFY must remain enabled when APP_ENV=production.")
+
 if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     print("  WARNING: JWT_SECRET is not set. Generated an ephemeral local-development secret.")
 
 print(f"ZeroOps Backend Config:")
-print(f"  Docker Host Responsive: {DOCKER_AVAILABLE}")
-print(f"  Kubernetes Context Active: {K8S_AVAILABLE}")
+print(f"  Azure Deployment Worker Ready: {AZURE_CLI_AVAILABLE}")
 print(f"  OpenAI API Key Configured: {bool(OPENAI_API_KEY)}")
 print(f"  Environment: {APP_ENV}")
 print(f"  CORS Origins: {', '.join(CORS_ORIGINS)}")

@@ -51,27 +51,19 @@ async def test_execute_low_risk_action(db_session):
     user = result_user.scalars().first()
     assert user is not None
     
-    # Configure mock user connection status to connected and store mock secret
-    conn = models.UserAzureConnection(
-        user_id=user.id,
-        tenant_id="mock",
-        client_id="mock",
-        subscription_id="mock-sub",
-        resource_group="mock-rg",
-        connection_status="connected"
-    )
-    db_session.add(conn)
-    azure_connector.store_credential_in_vault(user.id, "mock")
-    await db_session.commit()
-    
-    # We call a low-risk action "list_resources" which executes immediately
-    res = await action_gateway.execute_azure_action(
-        user_id=user.id,
-        agent_name="scaling_agent",
-        action_type="list_resources",
-        parameters={},
-        db=db_session
-    )
+    async def list_resources(*args, **kwargs):
+        return {"success": True, "resources": []}
+
+    # Unit tests replace the Azure SDK boundary explicitly; application code has
+    # no mock credential or local-vault fallback.
+    with patch.dict(action_gateway.ACTION_DISPATCHER, {"list_resources": list_resources}):
+        res = await action_gateway.execute_azure_action(
+            user_id=user.id,
+            agent_name="scaling_agent",
+            action_type="list_resources",
+            parameters={},
+            db=db_session
+        )
     
     assert res.get("success") is True
     assert "resources" in res
@@ -94,9 +86,6 @@ async def test_execute_low_risk_action(db_session):
     pending = result_pending.scalars().first()
     assert pending is None
     
-    # Cleanup vault
-    azure_connector.delete_credential_from_vault(user.id)
-
 @pytest.mark.asyncio
 async def test_execute_high_risk_action_blocks(db_session):
     result_user = await db_session.execute(select(models.User))
@@ -157,18 +146,6 @@ async def test_decide_approval_approve(db_session):
     result_user = await db_session.execute(select(models.User))
     user = result_user.scalars().first()
     
-    conn = models.UserAzureConnection(
-        user_id=user.id,
-        tenant_id="mock",
-        client_id="mock",
-        subscription_id="mock-sub",
-        resource_group="mock-rg",
-        connection_status="connected"
-    )
-    db_session.add(conn)
-    azure_connector.store_credential_in_vault(user.id, "mock")
-    await db_session.commit()
-    
     # Create block state manually
     audit = models.AuditLogEntry(
         user_id=user.id,
@@ -195,12 +172,16 @@ async def test_decide_approval_approve(db_session):
     await db_session.commit()
     
     # Approve the action using the decider endpoint logic
-    decision_res = await action_gateway.decide_pending_action(
-        approval_id=pending.id,
-        decision="approved",
-        decided_by=user.id,
-        db=db_session
-    )
+    async def delete_resource(*args, **kwargs):
+        return {"success": True, "detail": "Deleted by test double."}
+
+    with patch.dict(action_gateway.ACTION_DISPATCHER, {"delete_resource": delete_resource}):
+        decision_res = await action_gateway.decide_pending_action(
+            approval_id=pending.id,
+            decision="approved",
+            decided_by=user.id,
+            db=db_session
+        )
     
     assert decision_res.get("success") is True
     
@@ -212,7 +193,7 @@ async def test_decide_approval_approve(db_session):
     assert pending.decided_by == user.id
     assert audit.approval_status == "approved"
     assert audit.result_status == "success"
-    assert "deleted successfully" in audit.result_detail
+    assert audit.result_detail == "Deleted by test double."
     
     azure_connector.delete_credential_from_vault(user.id)
 
@@ -447,19 +428,6 @@ async def test_auto_remediate_package_check_and_gating(db_session):
             fa.recommended_fix = "install 'lodash'"
             await db_session.commit()
             
-            # Store connection first
-            conn = models.UserAzureConnection(
-                user_id=user.id,
-                tenant_id="mock",
-                client_id="mock",
-                subscription_id="mock-sub",
-                resource_group="mock-rg",
-                connection_status="connected"
-            )
-            db_session.add(conn)
-            azure_connector.store_credential_in_vault(user.id, "mock")
-            await db_session.commit()
-            
             success_ok = await agent_instance.auto_remediate_failure(
                 deployment_id=str(deployment.id),
                 failure_reason="missing dependency 'lodash'",
@@ -476,18 +444,17 @@ async def test_auto_remediate_package_check_and_gating(db_session):
             assert pending.parameters["package_name"] == "lodash"
             assert pending.status == "pending"
             
-            # Approve it and verify file was written to disk
-            await action_gateway.decide_pending_action(
+            # Approve it and verify the safer MVP does not mutate source
+            # files automatically, even after a human approval.
+            approval_result = await action_gateway.decide_pending_action(
                 approval_id=pending.id,
                 decision="approved",
                 decided_by=user.id,
                 db=db_session
             )
-            
-            # Verify lodash is now in the package.json
+            assert approval_result["success"] is False
+
+            # Verify lodash was not injected into the repository.
             with open(os.path.join(tmpdir, "package.json"), "r") as f:
                 data = json.load(f)
-            assert data["dependencies"]["lodash"] == "latest"
-            
-            azure_connector.delete_credential_from_vault(user.id)
-
+            assert "lodash" not in data["dependencies"]

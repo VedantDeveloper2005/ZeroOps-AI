@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Shield, RefreshCw, Key, Globe, Bell, Activity,
-  Loader2, Brain, CheckCircle, Plus, Trash2, Globe2, ShieldCheck, Settings, Users, Cloud
+  Loader2, Brain, CheckCircle, Plus, Trash2, Globe2, ShieldCheck, Settings, Users
 } from "lucide-react";
 import { useNotifications } from "@/lib/NotificationContext";
 import {
@@ -12,7 +12,6 @@ import {
   getErrorMessage,
   type CustomDomain,
   type AzureConnection,
-  type GkeConnection,
   type DeploymentHealth,
   type EnvVar,
   type HealthCheck,
@@ -31,29 +30,16 @@ const emptyAzureForm = {
   region: "eastus",
   resource_group: "",
   acr_login_server: "",
-  aks_cluster_name: "",
-  namespace_prefix: "",
-};
-
-const emptyGkeForm = {
-  gcp_project_id: "",
-  service_account_email: "",
-  service_account_json: "",
-  location: "us-central1",
-  cluster_name: "",
-  artifact_registry_host: "",
-  artifact_registry_repository: "",
+  container_apps_environment: "",
   namespace_prefix: "",
 };
 
 export default function SettingsPage() {
-  const { addToast, addNotification, resetOnboarding } = useNotifications();
+  const { addToast, addNotification, resetOnboarding, projects, isLoading: loadingProjects } = useNotifications();
   const [activeTab, setActiveTab] = useState<TabId>("general");
 
   // Project selector states
-  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [loadingProjects, setLoadingProjects] = useState(true);
 
   // API Key state
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
@@ -70,10 +56,6 @@ export default function SettingsPage() {
   const [loadingAzure, setLoadingAzure] = useState(true);
   const [savingAzure, setSavingAzure] = useState(false);
   const [azureForm, setAzureForm] = useState(emptyAzureForm);
-  const [gkeConnection, setGkeConnection] = useState<GkeConnection | null>(null);
-  const [loadingGke, setLoadingGke] = useState(true);
-  const [savingGke, setSavingGke] = useState(false);
-  const [gkeForm, setGkeForm] = useState(emptyGkeForm);
 
   // Domain states
   const [domains, setDomains] = useState<CustomDomain[]>([]);
@@ -127,22 +109,14 @@ export default function SettingsPage() {
     }
   }, []);
 
-  // Load Projects on startup
+  // Set selected project ID when projects load
   useEffect(() => {
-    async function loadProjects() {
-      try {
-        const data = await api.getProjects();
-        setProjects(data);
-        if (data.length > 0) {
-          setSelectedProjectId(data[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to load projects", err);
-      } finally {
-        setLoadingProjects(false);
-      }
+    if (projects.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
     }
-    loadProjects();
+  }, [projects, selectedProjectId]);
+
+  useEffect(() => {
     refreshHealthChecks();
   }, [refreshHealthChecks]);
 
@@ -167,7 +141,7 @@ export default function SettingsPage() {
         region: data.region || "eastus",
         resource_group: data.resource_group || "",
         acr_login_server: data.acr_login_server || "",
-        aks_cluster_name: data.aks_cluster_name || "",
+        container_apps_environment: data.container_apps_environment || "",
         namespace_prefix: data.namespace_prefix || "",
       });
     } catch (err) {
@@ -178,33 +152,9 @@ export default function SettingsPage() {
     }
   }, [addToast]);
 
-  const loadGkeConnection = useCallback(async () => {
-    setLoadingGke(true);
-    try {
-      const data = await api.getGkeConnection();
-      setGkeConnection(data);
-      setGkeForm({
-        gcp_project_id: data.gcp_project_id || "",
-        service_account_email: data.service_account_email || "",
-        service_account_json: "",
-        location: data.location || "us-central1",
-        cluster_name: data.cluster_name || "",
-        artifact_registry_host: data.artifact_registry_host || "",
-        artifact_registry_repository: data.artifact_registry_repository || "",
-        namespace_prefix: data.namespace_prefix || "",
-      });
-    } catch (err) {
-      console.error("Failed to load GKE connection", err);
-      addToast("Failed to load GKE deployment target.", "error");
-    } finally {
-      setLoadingGke(false);
-    }
-  }, [addToast]);
-
   useEffect(() => {
     loadAzureConnection();
-    loadGkeConnection();
-  }, [loadAzureConnection, loadGkeConnection]);
+  }, [loadAzureConnection]);
 
   // Load project-specific data when selected project changes
   useEffect(() => {
@@ -446,10 +396,6 @@ export default function SettingsPage() {
     setAzureForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleGkeFieldChange = (field: keyof typeof gkeForm, value: string) => {
-    setGkeForm((prev) => ({ ...prev, [field]: value }));
-  };
-
   const handleSaveAzureConnection = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingAzure(true);
@@ -462,7 +408,7 @@ export default function SettingsPage() {
         region: azureForm.region.trim() || "eastus",
         resource_group: azureForm.resource_group.trim() || undefined,
         acr_login_server: azureForm.acr_login_server.trim().replace(/\/+$/, "") || undefined,
-        aks_cluster_name: azureForm.aks_cluster_name.trim() || undefined,
+        container_apps_environment: azureForm.container_apps_environment.trim() || undefined,
         namespace_prefix: azureForm.namespace_prefix.trim() || undefined,
       });
       setAzureConnection(updated);
@@ -475,33 +421,9 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSaveGkeConnection = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingGke(true);
-    try {
-      const updated = await api.updateGkeConnection({
-        gcp_project_id: gkeForm.gcp_project_id.trim(),
-        service_account_email: gkeForm.service_account_email.trim() || undefined,
-        service_account_json: gkeForm.service_account_json.trim() || undefined,
-        location: gkeForm.location.trim() || "us-central1",
-        cluster_name: gkeForm.cluster_name.trim() || undefined,
-        artifact_registry_host: gkeForm.artifact_registry_host.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || undefined,
-        artifact_registry_repository: gkeForm.artifact_registry_repository.trim().replace(/^\/+|\/+$/g, "") || undefined,
-        namespace_prefix: gkeForm.namespace_prefix.trim() || undefined,
-      });
-      setGkeConnection(updated);
-      setGkeForm((prev) => ({ ...prev, service_account_json: "" }));
-      addToast("GKE deployment target saved.", "success");
-    } catch (err: unknown) {
-      addToast(getErrorMessage(err, "Failed to save GKE deployment target."), "error");
-    } finally {
-      setSavingGke(false);
-    }
-  };
-
   const tabs = [
     { id: "general" as const, label: "General", icon: Settings },
-    { id: "azure" as const, label: "Cloud Targets", icon: Cloud },
+    { id: "azure" as const, label: "Hosting", icon: Globe2 },
     { id: "domains" as const, label: "Domains", icon: Globe },
     { id: "security" as const, label: "Security & Secrets", icon: Shield },
     { id: "team" as const, label: "Team Access", icon: Users },
@@ -711,25 +633,25 @@ export default function SettingsPage() {
             </motion.div>
           )}
 
-          {/* CLOUD TARGETS TAB */}
+          {/* HOSTING TAB */}
           {activeTab === "azure" && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-5">
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-border/40 pb-4">
                   <div className="space-y-1">
                     <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
-                      <Globe2 size={16} className="text-primary" /> Azure AKS Target
+                      <Globe2 size={16} className="text-primary" /> Azure hosting
                     </h3>
                     <p className="text-xs text-foreground-muted leading-relaxed">
-                      Store the Azure subscription and cluster metadata ZeroOps uses to build per-user namespaces, image names, and deployments.
+                      Connect the Azure environment where your applications will be built and published. ZeroOps keeps the infrastructure details out of your day-to-day workflow.
                     </p>
                   </div>
                   <span className={`text-[10px] px-2.5 py-1 rounded-full border font-bold uppercase w-fit ${
-                    azureConnection?.connected && azureConnection.acr_login_server && azureConnection.aks_cluster_name
+                    azureConnection?.connected && azureConnection.acr_login_server && azureConnection.container_apps_environment
                       ? "bg-success/10 border-success/25 text-success"
                       : "bg-warning/10 border-warning/25 text-warning"
                   }`}>
-                    {azureConnection?.connected && azureConnection.acr_login_server && azureConnection.aks_cluster_name
+                    {azureConnection?.connected && azureConnection.acr_login_server && azureConnection.container_apps_environment
                       ? "Ready"
                       : "Needs Setup"}
                   </span>
@@ -777,7 +699,7 @@ export default function SettingsPage() {
                           type="password"
                           value={azureForm.client_secret}
                           onChange={(e) => handleAzureFieldChange("client_secret", e.target.value)}
-                          placeholder={azureConnection?.connected ? "Leave blank to keep existing" : "Optional for managed identity"}
+                          placeholder={azureConnection?.connected ? "Leave blank to keep existing" : "Required to verify this connection"}
                           className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
                         />
                       </label>
@@ -811,17 +733,18 @@ export default function SettingsPage() {
                         />
                       </label>
                       <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">AKS Cluster Name</span>
+                        <span className="font-bold text-foreground-muted">Application environment</span>
                         <input
                           type="text"
                           required
-                          value={azureForm.aks_cluster_name}
-                          onChange={(e) => handleAzureFieldChange("aks_cluster_name", e.target.value)}
+                          value={azureForm.container_apps_environment}
+                          onChange={(e) => handleAzureFieldChange("container_apps_environment", e.target.value)}
+                          placeholder="your-app-environment"
                           className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
                         />
                       </label>
                       <label className="space-y-1.5 md:col-span-2">
-                        <span className="font-bold text-foreground-muted">Namespace Prefix</span>
+                        <span className="font-bold text-foreground-muted">Application name prefix</span>
                         <input
                           type="text"
                           value={azureForm.namespace_prefix}
@@ -833,7 +756,7 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-[11px] text-foreground-muted leading-relaxed">
-                      Deployments are isolated into namespaces derived from this prefix and the project name. The backend still requires the Azure runtime identity to have ACR push and AKS deploy permissions.
+                      ZeroOps builds each release in Azure, then assigns a secure public address only after Azure reports the new version ready and it responds to a reachability check. The connected identity needs permission to build images, publish applications, and assign image-pull access in this resource group.
                     </div>
 
                     <div className="flex justify-end">
@@ -847,7 +770,7 @@ export default function SettingsPage() {
                             <Loader2 size={12} className="animate-spin" /> Saving...
                           </>
                         ) : (
-                          "Save Azure Target"
+                          "Save hosting connection"
                         )}
                       </button>
                     </div>
@@ -855,141 +778,6 @@ export default function SettingsPage() {
                 )}
               </div>
 
-              <div className="bg-card border border-border rounded-xl p-6 shadow-sm space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-border/40 pb-4">
-                  <div className="space-y-1">
-                    <h3 className="font-extrabold text-sm text-foreground flex items-center gap-1.5">
-                      <Cloud size={16} className="text-primary" /> Google GKE Target
-                    </h3>
-                    <p className="text-xs text-foreground-muted leading-relaxed">
-                      Connect a Google Kubernetes Engine cluster and Artifact Registry repository for apps that ZeroOps can deploy cleanly to GKE.
-                    </p>
-                  </div>
-                  <span className={`text-[10px] px-2.5 py-1 rounded-full border font-bold uppercase w-fit ${
-                    gkeConnection?.connected && gkeConnection.cluster_name && gkeConnection.artifact_registry_host && gkeConnection.artifact_registry_repository
-                      ? "bg-success/10 border-success/25 text-success"
-                      : "bg-warning/10 border-warning/25 text-warning"
-                  }`}>
-                    {gkeConnection?.connected && gkeConnection.cluster_name && gkeConnection.artifact_registry_host && gkeConnection.artifact_registry_repository
-                      ? "Ready"
-                      : "Needs Setup"}
-                  </span>
-                </div>
-
-                {loadingGke ? (
-                  <div className="flex items-center gap-2 text-foreground-muted font-medium py-8 text-xs">
-                    <Loader2 size={14} className="animate-spin text-primary" /> Loading GKE target...
-                  </div>
-                ) : (
-                  <form onSubmit={handleSaveGkeConnection} className="space-y-5 text-xs">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Google Cloud Project ID</span>
-                        <input
-                          type="text"
-                          required
-                          value={gkeForm.gcp_project_id}
-                          onChange={(e) => handleGkeFieldChange("gcp_project_id", e.target.value)}
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">GKE Location</span>
-                        <input
-                          type="text"
-                          required
-                          value={gkeForm.location}
-                          onChange={(e) => handleGkeFieldChange("location", e.target.value)}
-                          placeholder="us-central1 or us-central1-a"
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Cluster Name</span>
-                        <input
-                          type="text"
-                          required
-                          value={gkeForm.cluster_name}
-                          onChange={(e) => handleGkeFieldChange("cluster_name", e.target.value)}
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Service Account Email</span>
-                        <input
-                          type="email"
-                          value={gkeForm.service_account_email}
-                          onChange={(e) => handleGkeFieldChange("service_account_email", e.target.value)}
-                          placeholder="zeroops-deployer@project.iam.gserviceaccount.com"
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Artifact Registry Host</span>
-                        <input
-                          type="text"
-                          required
-                          value={gkeForm.artifact_registry_host}
-                          onChange={(e) => handleGkeFieldChange("artifact_registry_host", e.target.value)}
-                          placeholder="us-central1-docker.pkg.dev"
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="font-bold text-foreground-muted">Artifact Registry Repository</span>
-                        <input
-                          type="text"
-                          required
-                          value={gkeForm.artifact_registry_repository}
-                          onChange={(e) => handleGkeFieldChange("artifact_registry_repository", e.target.value)}
-                          placeholder="zeroops-apps"
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5 md:col-span-2">
-                        <span className="font-bold text-foreground-muted">Namespace Prefix</span>
-                        <input
-                          type="text"
-                          value={gkeForm.namespace_prefix}
-                          onChange={(e) => handleGkeFieldChange("namespace_prefix", e.target.value)}
-                          placeholder="team-or-customer-slug"
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono"
-                        />
-                      </label>
-                      <label className="space-y-1.5 md:col-span-2">
-                        <span className="font-bold text-foreground-muted">Service Account JSON</span>
-                        <textarea
-                          value={gkeForm.service_account_json}
-                          onChange={(e) => handleGkeFieldChange("service_account_json", e.target.value)}
-                          placeholder={gkeConnection?.has_service_account_json ? "Leave blank to keep existing credentials" : "Paste JSON key, or leave blank to use the backend gcloud identity"}
-                          rows={4}
-                          className="w-full bg-background-secondary border border-border rounded-xl px-4 py-2.5 text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none font-mono resize-none"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-[11px] text-foreground-muted leading-relaxed">
-                      ZeroOps builds images as host/project/repository/app:version, configures GKE credentials during deployment, and keeps each app in its own namespace.
-                    </div>
-
-                    <div className="flex justify-end">
-                      <button
-                        type="submit"
-                        disabled={savingGke}
-                        className="px-5 py-2.5 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-md shadow-primary/10 disabled:opacity-50 flex items-center gap-1.5"
-                      >
-                        {savingGke ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" /> Saving...
-                          </>
-                        ) : (
-                          "Save GKE Target"
-                        )}
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
             </motion.div>
           )}
 
@@ -1347,7 +1135,7 @@ export default function SettingsPage() {
                   <div className="flex items-start justify-between gap-3 border-t border-border/20 pt-4">
                     <div>
                       <p className="font-bold text-foreground">Discord Operations Integration</p>
-                      <p className="text-[10px] text-foreground-muted mt-0.5">Not connected in this MVP build</p>
+                      <p className="text-[10px] text-foreground-muted mt-0.5">Coming soon — contact support for early access</p>
                     </div>
                     <input
                       type="checkbox"
