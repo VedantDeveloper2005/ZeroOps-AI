@@ -88,6 +88,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+        except HTTPException:
+            # Route and authentication errors are raised back through a
+            # dependency generator by FastAPI.  They are valid application
+            # responses (for example, an anonymous request to /api/auth/me),
+            # not database failures.  Do not turn them into 503s or mark the
+            # shared database state unavailable.
+            await session.rollback()
+            raise
         except Exception as e:
             await session.rollback()
             logger.error(f"Database session error: {e}")
