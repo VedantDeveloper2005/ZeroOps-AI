@@ -71,4 +71,3 @@ jobs:
           app-name: 'zeroops-backend'
           slot-name: 'Production'
           package: .
-          startup-command: 'gunicorn -w 1 -k uvicorn.workers.UvicornWorker --timeout 180 main:app'
