@@ -24,28 +24,16 @@ jobs:
           node-version: '22.x'
 
       - name: npm install, build, and test
-        env:
-          NEXT_PUBLIC_API_BASE_URL: https://zeroops-backend-brdeabbybncchtg5.eastus-01.azurewebsites.net
-          NEXT_PUBLIC_WS_BASE_URL: wss://zeroops-backend-brdeabbybncchtg5.eastus-01.azurewebsites.net
         run: |
           npm install
           npm run build --if-present
           npm run test --if-present
-          mkdir -p .next/standalone/.next/
-          cp -R public .next/standalone/
-          cp -R .next/static .next/standalone/.next/
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: |
-            .
-            !.git/
-            !.git.zip
-            !backend/
-            !node_modules/
-          include-hidden-files: true
+          path: .
 
   deploy:
     runs-on: ubuntu-latest
@@ -63,9 +51,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_14D6400BA82C47EB9F539FE729B31D4C }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_03E6B580D2984430B6E8D9AC37C9123E }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_52EF969515B24270A128C16412AF3781 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1D49659F5B5345268A7FCB8EFD04FA52 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E6673234A5024B008E866F7F2B0F07E9 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BC200405435F4679AAE56FA9C421C8B9 }}
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
