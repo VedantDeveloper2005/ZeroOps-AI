@@ -127,6 +127,18 @@ class User(Base):
     plan = Column(Text, default="starter")
     api_key = Column(Text, nullable=True, unique=True)
     refresh_token = Column(Text, nullable=True)
+    last_primary_auth_at = Column(DateTime, nullable=True)
+
+    # MFA secrets are Fernet-encrypted at rest. Recovery codes are bcrypt
+    # hashes and are consumed after a successful use.
+    mfa_enabled = Column(Boolean, nullable=False, default=False)
+    mfa_secret_encrypted = Column(Text, nullable=True)
+    mfa_setup_secret_encrypted = Column(Text, nullable=True)
+    mfa_setup_expires_at = Column(DateTime, nullable=True)
+    mfa_recovery_code_hashes = Column(JSON, default=list)
+    mfa_last_used_counter = Column(Integer, nullable=True)
+    mfa_challenge_id = Column(Text, nullable=True)
+    mfa_challenge_expires_at = Column(DateTime, nullable=True)
 
     # GitHub OAuth fields
     github_id = Column(Text, nullable=True, unique=True, index=True)
@@ -167,6 +179,7 @@ class User(Base):
             "github_username": self.github_username,
             "github_avatar_url": self.github_avatar_url,
             "github_connected": self.github_connected or False,
+            "mfa_enabled": self.mfa_enabled or False,
         }
 
 

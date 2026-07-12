@@ -10,19 +10,22 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 import asyncio
+import base64
+import hmac
 import json
 import uuid
 import requests
 import logging
 import os
+import secrets
 import shutil
 import zipfile
 import hashlib
 import stat
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
-from typing import Any, Optional, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File
+from datetime import datetime, timedelta
+from typing import Any, Optional, List, Union
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -187,6 +190,12 @@ async def rate_limit_middleware(request: Request, call_next):
         limit = 10
     elif path == "/api/auth/signup":
         category = "signup"
+        limit = 5
+    elif path.startswith("/api/auth/mfa/verify"):
+        category = "mfa_verify"
+        limit = 10
+    elif path.startswith("/api/auth/mfa/setup/confirm"):
+        category = "mfa_setup"
         limit = 5
     elif path.startswith("/api/auth/github") or path.startswith("/api/auth/google"):
         category = "oauth"
@@ -390,6 +399,7 @@ def map_user_response(user: models.User) -> schemas.UserResponse:
         created_at=user.created_at.isoformat() if user.created_at else None,
         github_connected=user.github_connected or False,
         github_username=user.github_username,
+        mfa_enabled=user.mfa_enabled or False,
     )
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -673,107 +683,105 @@ def normalize_upload_root(path: str) -> str:
     return path
 
 
+async def establish_authenticated_session(
+    user: models.User,
+    response: Response,
+    db: AsyncSession,
+) -> schemas.UserResponse:
+    """Persist a rotated refresh token and set the full-session cookies."""
+    access_token, refresh_token = auth.get_session_tokens(str(user.id))
+    user.refresh_token = auth.hash_refresh_token(refresh_token)
+    user.mfa_challenge_id = None
+    user.mfa_challenge_expires_at = None
+    db.add(user)
+    await db.commit()
+    auth.clear_mfa_challenge_cookie(response)
+    auth.set_session_cookies(response, access_token, refresh_token)
+    return map_user_response(user)
+
+
+async def begin_mfa_challenge(
+    user: models.User,
+    response: Response,
+    db: AsyncSession,
+) -> schemas.MFAChallengeResponse:
+    """Create one pre-authentication challenge and remove any full session."""
+    challenge_id = secrets.token_urlsafe(32)
+    user.mfa_challenge_id = challenge_id
+    user.mfa_challenge_expires_at = datetime.utcnow() + timedelta(minutes=config.MFA_CHALLENGE_EXPIRE_MINUTES)
+    user.refresh_token = None
+    db.add(user)
+    await db.commit()
+    auth.clear_session_cookies(response)
+    auth.set_mfa_challenge_cookie(response, auth.create_mfa_challenge_token(str(user.id), challenge_id))
+    return schemas.MFAChallengeResponse()
+
+
 @app.post("/api/auth/signup", response_model=schemas.UserResponse)
 async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
     first_name = req.first_name or req.firstName
     last_name = req.last_name or req.lastName
-    logger.info(f"Signup attempt for: {email}")
 
     try:
         result = await db.execute(select(models.User).filter(models.User.email == email))
         existing_user = result.scalars().first()
-    except Exception as e:
-        logger.error(f"Signup DB check error: {e}")
-        raise HTTPException(status_code=503, detail="Database is currently unavailable.")
+    except Exception as error:
+        logger.exception("Unable to check whether a signup email already exists.")
+        raise HTTPException(status_code=503, detail="Database is currently unavailable.") from error
 
     if existing_user:
-        raise HTTPException(status_code=400, detail="A user with this email address already exists.")
-
-    password_hash = auth.get_password_hash(req.password)
+        raise HTTPException(status_code=409, detail="A user with this email address already exists.")
 
     new_user = models.User(
         id=uuid.uuid4(),
         first_name=first_name,
         last_name=last_name,
         email=email,
-        password_hash=password_hash,
+        password_hash=auth.get_password_hash(req.password),
         provider="local",
-        plan="starter"
+        plan="starter",
+        last_primary_auth_at=datetime.utcnow(),
     )
 
     try:
         db.add(new_user)
         await db.flush()
-        # Create default settings for new user
-        default_settings = models.UserSettings(user_id=new_user.id)
-        db.add(default_settings)
-        # Create welcome notification
-        welcome_notif = models.Notification(
+        db.add(models.UserSettings(user_id=new_user.id))
+        db.add(models.Notification(
             user_id=new_user.id,
             title="Welcome to ZeroOps AI",
             message="Your autonomous cloud deployment platform is ready. Connect a repository to get started.",
             type="success",
-            category="system"
-        )
-        db.add(welcome_notif)
+            category="system",
+        ))
         await db.commit()
         await db.refresh(new_user)
-    except Exception as e:
+    except Exception as error:
         await db.rollback()
-        logger.error(f"Signup DB insert error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to register user.")
+        logger.exception("Unable to create a new user account.")
+        raise HTTPException(status_code=500, detail="Failed to register user.") from error
 
-    access_token = auth.create_access_token(data={"sub": str(new_user.id)})
-    refresh_token = auth.create_refresh_token(data={"sub": str(new_user.id)})
-    new_user.refresh_token = refresh_token
-    db.add(new_user)
-    await db.commit()
-    
-    is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=access_token, httponly=True,
-                        max_age=15 * 60,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
-                        max_age=7 * 24 * 3600,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    logger.info(f"Signup success: {email}")
-    return map_user_response(new_user)
+    return await establish_authenticated_session(new_user, response, db)
 
 
-@app.post("/api/auth/login", response_model=schemas.UserResponse)
+@app.post("/api/auth/login", response_model=Union[schemas.UserResponse, schemas.MFAChallengeResponse])
 async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
-    logger.info(f"Login attempt for: {email}")
-
     try:
         result = await db.execute(select(models.User).filter(models.User.email == email))
         user = result.scalars().first()
-    except Exception as e:
-        logger.error(f"Login DB error: {e}")
-        raise HTTPException(status_code=503, detail="Database is currently unavailable.")
+    except Exception as error:
+        logger.exception("Unable to look up a login account.")
+        raise HTTPException(status_code=503, detail="Database is currently unavailable.") from error
 
-    if not user or not user.password_hash:
-        raise HTTPException(status_code=400, detail="Invalid email or password.")
+    if not user or not user.password_hash or not auth.verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
-    if not auth.verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Invalid email or password.")
-
-    access_token = auth.create_access_token(data={"sub": str(user.id)})
-    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
-    user.refresh_token = refresh_token
-    db.add(user)
-    await db.commit()
-    
-    is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=access_token, httponly=True,
-                        max_age=15 * 60,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
-                        max_age=7 * 24 * 3600,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    logger.info(f"Login success: {email}")
-    return map_user_response(user)
+    user.last_primary_auth_at = datetime.utcnow()
+    if user.mfa_enabled and user.mfa_secret_encrypted:
+        return await begin_mfa_challenge(user, response, db)
+    return await establish_authenticated_session(user, response, db)
 
 
 @app.get("/api/auth/me", response_model=schemas.UserResponse)
@@ -789,72 +797,166 @@ async def logout(
 ):
     if current_user:
         current_user.refresh_token = None
+        current_user.mfa_challenge_id = None
+        current_user.mfa_challenge_expires_at = None
         db.add(current_user)
         await db.commit()
-        logger.info(f"Session revoked and refresh token invalidated for user: {current_user.id}")
-
-    is_prod = config.APP_ENV == "production"
-    response.delete_cookie(key="session_token", samesite="none" if is_prod else "lax", secure=is_prod, httponly=True)
-    response.delete_cookie(key="refresh_token", samesite="none" if is_prod else "lax", secure=is_prod, httponly=True)
+    auth.clear_session_cookies(response)
+    auth.clear_mfa_challenge_cookie(response)
     return {"status": "success", "message": "Logged out successfully."}
 
 
-@app.post("/api/auth/oauth", response_model=schemas.UserResponse)
-async def oauth_authenticate(req: schemas.OAuthRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@app.post("/api/auth/oauth", status_code=status.HTTP_410_GONE)
+async def legacy_oauth_authenticate():
+    """Reject the former client-asserted OAuth endpoint.
+
+    Identity data must only come from a verified provider callback, never from a
+    browser POST body.
+    """
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="Use the provider sign-in flow instead.")
+
+
+@app.post("/api/auth/mfa/verify", response_model=schemas.UserResponse)
+async def verify_mfa_challenge(
+    req: schemas.MFACodeRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    challenge = auth.decode_mfa_challenge(request)
     try:
-        result = await db.execute(
-            select(models.User).filter(
-                (models.User.provider == req.provider) & (models.User.provider_id == req.provider_id)
-            )
-        )
-        user = result.scalars().first()
+        user_id = uuid.UUID(challenge["sub"])
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your verification session is invalid. Sign in again.") from error
 
-        if not user:
-            result_email = await db.execute(select(models.User).filter(models.User.email == req.email))
-            existing_email = result_email.scalars().first()
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    user = result.scalars().first()
+    if (
+        not user
+        or not user.mfa_enabled
+        or not user.mfa_secret_encrypted
+        or not user.mfa_challenge_id
+        or not user.mfa_challenge_expires_at
+        or user.mfa_challenge_expires_at < datetime.utcnow()
+        or not hmac.compare_digest(user.mfa_challenge_id, challenge["challenge_id"])
+    ):
+        auth.clear_mfa_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your verification session has expired. Sign in again.")
 
-            if existing_email:
-                user = existing_email
-                user.provider = req.provider
-                user.provider_id = req.provider_id
-                if req.avatar_url:
-                    user.avatar_url = req.avatar_url
-                await db.commit()
-                await db.refresh(user)
-            else:
-                user = models.User(
-                    id=uuid.uuid4(), first_name=req.first_name, last_name=req.last_name,
-                    email=req.email, password_hash=None, provider=req.provider,
-                    provider_id=req.provider_id, avatar_url=req.avatar_url, plan="starter"
-                )
-                db.add(user)
-                await db.flush()
-                db.add(models.UserSettings(user_id=user.id))
-                db.add(models.Notification(
-                    user_id=user.id, title="Welcome to ZeroOps AI",
-                    message="Your autonomous cloud deployment platform is ready.",
-                    type="success", category="system"
-                ))
-                await db.commit()
-                await db.refresh(user)
-    except Exception as e:
-        logger.error(f"OAuth error: {e}")
-        raise HTTPException(status_code=500, detail="Database failure during authentication.")
+    secret = auth.decrypt_mfa_secret(user.mfa_secret_encrypted)
+    counter = auth.verify_totp_code(secret, req.code) if secret else None
+    if counter is not None:
+        if user.mfa_last_used_counter is not None and counter <= user.mfa_last_used_counter:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
+        user.mfa_last_used_counter = counter
+    elif not auth.consume_recovery_code(user, req.code):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authenticator or recovery code.")
 
-    access_token = auth.create_access_token(data={"sub": str(user.id)})
-    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
-    user.refresh_token = refresh_token
-    db.add(user)
+    return await establish_authenticated_session(user, response, db)
+
+
+@app.get("/api/auth/mfa/status", response_model=schemas.MFAStatusResponse)
+async def get_mfa_status(current_user: models.User = Depends(auth.get_current_user)):
+    return schemas.MFAStatusResponse(
+        enabled=bool(current_user.mfa_enabled and current_user.mfa_secret_encrypted),
+        recovery_codes_remaining=len(current_user.mfa_recovery_code_hashes or []),
+    )
+
+
+@app.post("/api/auth/mfa/setup", response_model=schemas.MFASetupResponse)
+async def start_mfa_setup(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Multi-factor authentication is already enabled.")
+    if not auth.is_recent_primary_authentication(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sign out and sign in again before changing multi-factor authentication.")
+
+    secret = auth.generate_totp_secret()
+    expires_at = datetime.utcnow() + timedelta(minutes=config.MFA_CHALLENGE_EXPIRE_MINUTES)
+    current_user.mfa_setup_secret_encrypted = auth.encrypt_mfa_secret(secret)
+    current_user.mfa_setup_expires_at = expires_at
+    db.add(current_user)
     await db.commit()
-    
-    is_prod = config.APP_ENV == "production"
-    response.set_cookie(key="session_token", value=access_token, httponly=True,
-                        max_age=15 * 60,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True,
-                        max_age=7 * 24 * 3600,
-                        samesite="none" if is_prod else "lax", secure=is_prod)
-    return map_user_response(user)
+
+    try:
+        from io import BytesIO
+        import qrcode
+
+        otpauth_uri = auth.build_totp_uri(secret, current_user.email)
+        image_buffer = BytesIO()
+        qrcode.make(otpauth_uri).save(image_buffer, format="PNG")
+        qr_code_data_uri = "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")
+    except Exception as error:
+        logger.exception("Unable to generate an MFA QR code.")
+        raise HTTPException(status_code=500, detail="Unable to prepare MFA enrollment. Please try again.") from error
+
+    return schemas.MFASetupResponse(
+        manual_key=secret,
+        otpauth_uri=otpauth_uri,
+        qr_code_data_uri=qr_code_data_uri,
+        expires_at=expires_at,
+    )
+
+
+@app.post("/api/auth/mfa/setup/confirm", response_model=schemas.MFASetupConfirmResponse)
+async def confirm_mfa_setup(
+    req: schemas.MFACodeRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not current_user.mfa_setup_secret_encrypted or not current_user.mfa_setup_expires_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Start MFA setup before confirming it.")
+    if current_user.mfa_setup_expires_at < datetime.utcnow():
+        current_user.mfa_setup_secret_encrypted = None
+        current_user.mfa_setup_expires_at = None
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA setup expired. Start again to get a fresh QR code.")
+
+    secret = auth.decrypt_mfa_secret(current_user.mfa_setup_secret_encrypted)
+    counter = auth.verify_totp_code(secret, req.code) if secret else None
+    if counter is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="The authenticator code is invalid. Check the device time and try again.")
+
+    recovery_codes, recovery_code_hashes = auth.generate_recovery_codes()
+    current_user.mfa_enabled = True
+    current_user.mfa_secret_encrypted = current_user.mfa_setup_secret_encrypted
+    current_user.mfa_setup_secret_encrypted = None
+    current_user.mfa_setup_expires_at = None
+    current_user.mfa_recovery_code_hashes = recovery_code_hashes
+    current_user.mfa_last_used_counter = counter
+    db.add(current_user)
+    await db.commit()
+    return schemas.MFASetupConfirmResponse(recovery_codes=recovery_codes)
+
+
+@app.post("/api/auth/mfa/disable")
+async def disable_mfa(
+    req: schemas.MFACodeRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not current_user.mfa_enabled or not current_user.mfa_secret_encrypted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multi-factor authentication is not enabled.")
+
+    secret = auth.decrypt_mfa_secret(current_user.mfa_secret_encrypted)
+    counter = auth.verify_totp_code(secret, req.code) if secret else None
+    if counter is not None:
+        if current_user.mfa_last_used_counter is not None and counter <= current_user.mfa_last_used_counter:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
+    elif not auth.consume_recovery_code(current_user, req.code):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authenticator or recovery code.")
+
+    current_user.mfa_enabled = False
+    current_user.mfa_secret_encrypted = None
+    current_user.mfa_setup_secret_encrypted = None
+    current_user.mfa_setup_expires_at = None
+    current_user.mfa_recovery_code_hashes = []
+    current_user.mfa_last_used_counter = None
+    db.add(current_user)
+    await db.commit()
+    return {"status": "success", "message": "Multi-factor authentication has been disabled."}
 
 
 # ──────────────────────────────────────────────
@@ -3396,22 +3498,21 @@ async def github_oauth_redirect(request: Request):
     if not config.GITHUB_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GitHub OAuth is not configured. Set GITHUB_CLIENT_ID.")
 
-    import secrets
     state = secrets.token_urlsafe(32)
     authorization_url = github_oauth.get_authorization_url(state)
     
     redirect_response = RedirectResponse(url=authorization_url, status_code=302)
     
-    is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https")
+    is_prod_cookie = config.IS_PRODUCTION
     redirect_response.set_cookie(
         key="oauth_state",
         value=state,
         httponly=True,
         secure=True if is_prod_cookie else False,
-        samesite="none" if is_prod_cookie else "lax",
-        max_age=600  # 10 minutes
+        samesite="lax",
+        max_age=600,
+        path="/",
     )
-    logger.info(f"[OAuth Redirect Telemetry] Generated state: {state}, is_prod_cookie: {is_prod_cookie}")
     return redirect_response
 
 
@@ -3425,62 +3526,53 @@ async def github_oauth_callback(
     db: AsyncSession = Depends(get_db)
 ):
     frontend_url = get_frontend_redirect_url()
-    logger.info(
-        "[OAuth Callback Telemetry] FRONTEND_URL configured, request host: %s, scheme: %s, APP_ENV: %s",
-        request.url.hostname if request else None,
-        request.url.scheme if request else None,
-        config.APP_ENV,
-    )
-
     # Helper to construct redirect response with cleared oauth_state cookie
     def get_redirect_and_clean_state(url_target: str) -> RedirectResponse:
         res = RedirectResponse(url=url_target, status_code=302)
-        is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https") or ("localhost" not in frontend_url)
+        is_prod_cookie = config.IS_PRODUCTION
         res.delete_cookie(
             key="oauth_state",
             path="/",
             secure=True if is_prod_cookie else False,
-            samesite="none" if is_prod_cookie else "lax"
+            samesite="lax",
+            httponly=True,
         )
         return res
 
     # Handle errors from GitHub
     if error:
-        logger.warning(f"GitHub OAuth error: {error}")
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error={error}")
+        logger.warning("GitHub OAuth provider returned an authorization error: %s", error)
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error={error}&provider=github")
 
     # Validate required parameters
     if not code or not state:
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=missing_params")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=missing_params&provider=github")
 
     # Validate CSRF state from cookie
     cookie_state = request.cookies.get("oauth_state")
-    logger.info(f"[OAuth Callback Telemetry] Received state query param: {state}, state cookie: {cookie_state}")
-    if not state or not cookie_state or state != cookie_state:
-        logger.warning("GitHub OAuth state validation failed (mismatch or missing cookie)")
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=invalid_state")
+    if not cookie_state or not hmac.compare_digest(state, cookie_state):
+        logger.warning("GitHub OAuth state validation failed.")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=invalid_state&provider=github")
 
     # Exchange code for access token
     access_token = await github_oauth.exchange_code_for_token(code)
     if not access_token:
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=token_exchange_failed")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=token_exchange_failed&provider=github")
 
     # Fetch GitHub user profile
     gh_user = await github_oauth.get_github_user(access_token)
     if not gh_user:
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=github_user_fetch_failed")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=github_user_fetch_failed&provider=github")
 
     github_id = str(gh_user.get("id", ""))
     github_username = gh_user.get("login", "")
     github_avatar = gh_user.get("avatar_url", "")
     github_name = gh_user.get("name", "") or github_username
 
-    # Get email (may not be public on profile)
-    email = gh_user.get("email")
+    # Always require the verified email API result before linking an account.
+    email = await github_oauth.get_github_user_email(access_token)
     if not email:
-        email = await github_oauth.get_github_user_email(access_token)
-    if not email:
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=no_email")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=no_verified_email&provider=github")
 
     email = email.strip().lower()
 
@@ -3556,39 +3648,20 @@ async def github_oauth_callback(
 
     except Exception as e:
         await db.rollback()
-        logger.error(f"GitHub OAuth database error: {e}")
-        return get_redirect_and_clean_state(f"{frontend_url}/auth/github/callback?error=server_error")
+        logger.exception("GitHub OAuth database error")
+        return get_redirect_and_clean_state(f"{frontend_url}/login?oauth_error=server_error&provider=github")
 
-    # Generate JWT access token and refresh token
-    access_token = auth.create_access_token(data={"sub": str(user.id)})
-    refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
-    user.refresh_token = refresh_token
+    user.last_primary_auth_at = datetime.utcnow()
     db.add(user)
     await db.commit()
 
-    # Create redirect response with session cookie and clean up state cookie
-    redirect_url = f"{frontend_url}/auth/github/callback?token={access_token}"
-    redirect_response = get_redirect_and_clean_state(redirect_url)
+    if user.mfa_enabled and user.mfa_secret_encrypted:
+        redirect_response = get_redirect_and_clean_state(f"{frontend_url}/login?mfa=required&provider=github")
+        await begin_mfa_challenge(user, redirect_response, db)
+        return redirect_response
 
-    # Secure cross-domain token cookies handling
-    is_prod_cookie = config.APP_ENV == "production" or (request and request.url.scheme == "https") or ("localhost" not in frontend_url)
-    redirect_response.set_cookie(
-        key="session_token",
-        value=access_token,
-        httponly=True,
-        max_age=15 * 60,
-        samesite="none" if is_prod_cookie else "lax",
-        secure=True if is_prod_cookie else False,
-    )
-    redirect_response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        max_age=7 * 24 * 3600,
-        samesite="none" if is_prod_cookie else "lax",
-        secure=True if is_prod_cookie else False,
-    )
-
+    redirect_response = get_redirect_and_clean_state(f"{frontend_url}/dashboard/repositories?auth=success")
+    await establish_authenticated_session(user, redirect_response, db)
     return redirect_response
 
 
@@ -3598,20 +3671,31 @@ async def google_oauth_redirect(request: Request):
     if not config.GOOGLE_CLIENT_ID or not config.GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.")
 
-    import secrets
     state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
     redirect_uri = str(request.url_for("google_oauth_callback"))
-    authorization_url = google_oauth.get_authorization_url(state, redirect_uri)
+    authorization_url = google_oauth.get_authorization_url(state, redirect_uri, code_challenge)
 
     redirect_response = RedirectResponse(url=authorization_url, status_code=302)
-    is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https"
+    is_prod_cookie = config.IS_PRODUCTION
     redirect_response.set_cookie(
         key="google_oauth_state",
         value=state,
         httponly=True,
         secure=True if is_prod_cookie else False,
-        samesite="none" if is_prod_cookie else "lax",
+        samesite="lax",
         max_age=600,
+        path="/",
+    )
+    redirect_response.set_cookie(
+        key="google_oauth_verifier",
+        value=code_verifier,
+        httponly=True,
+        secure=True if is_prod_cookie else False,
+        samesite="lax",
+        max_age=600,
+        path="/",
     )
     return redirect_response
 
@@ -3627,38 +3711,41 @@ async def google_oauth_callback(
     frontend_url = get_frontend_redirect_url()
 
     def redirect_to_frontend(query: str) -> RedirectResponse:
-        res = RedirectResponse(url=f"{frontend_url}/auth/github/callback?provider=google&{query}", status_code=302)
-        is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https" or ("localhost" not in frontend_url)
-        res.delete_cookie(
-            key="google_oauth_state",
-            path="/",
-            secure=True if is_prod_cookie else False,
-            samesite="none" if is_prod_cookie else "lax",
-        )
+        res = RedirectResponse(url=f"{frontend_url}/login?provider=google&{query}", status_code=302)
+        is_prod_cookie = config.IS_PRODUCTION
+        for cookie_name in ("google_oauth_state", "google_oauth_verifier"):
+            res.delete_cookie(
+                key=cookie_name,
+                path="/",
+                secure=True if is_prod_cookie else False,
+                samesite="lax",
+                httponly=True,
+            )
         return res
 
     if error:
-        return redirect_to_frontend(f"error={error}")
+        return redirect_to_frontend(f"oauth_error={error}")
     if not code or not state:
-        return redirect_to_frontend("error=missing_params")
+        return redirect_to_frontend("oauth_error=missing_params")
 
     cookie_state = request.cookies.get("google_oauth_state")
-    if not cookie_state or cookie_state != state:
-        return redirect_to_frontend("error=invalid_state")
+    code_verifier = request.cookies.get("google_oauth_verifier")
+    if not cookie_state or not code_verifier or not hmac.compare_digest(cookie_state, state):
+        return redirect_to_frontend("oauth_error=invalid_state")
 
     redirect_uri = str(request.url_for("google_oauth_callback"))
-    google_access_token = await google_oauth.exchange_code_for_token(code, redirect_uri)
+    google_access_token = await google_oauth.exchange_code_for_token(code, redirect_uri, code_verifier)
     if not google_access_token:
-        return redirect_to_frontend("error=token_exchange_failed")
+        return redirect_to_frontend("oauth_error=token_exchange_failed")
 
     google_user = await google_oauth.get_google_user(google_access_token)
     if not google_user:
-        return redirect_to_frontend("error=google_user_fetch_failed")
+        return redirect_to_frontend("oauth_error=google_user_fetch_failed")
 
     google_id = str(google_user.get("sub", ""))
     email = (google_user.get("email") or "").strip().lower()
-    if not google_id or not email:
-        return redirect_to_frontend("error=no_email")
+    if not google_id or not email or google_user.get("email_verified") is not True:
+        return redirect_to_frontend("oauth_error=no_verified_email")
 
     try:
         result = await db.execute(select(models.User).filter(models.User.google_id == google_id))
@@ -3701,34 +3788,30 @@ async def google_oauth_callback(
                 category="system",
             ))
 
-        jwt_access_token = auth.create_access_token(data={"sub": str(user.id)})
-        refresh_token = auth.create_refresh_token(data={"sub": str(user.id)})
-        user.refresh_token = refresh_token
+        user.last_primary_auth_at = datetime.utcnow()
         db.add(user)
         await db.commit()
     except Exception as e:
         await db.rollback()
-        logger.error(f"Google OAuth database error: {e}")
-        return redirect_to_frontend("error=server_error")
+        logger.exception("Google OAuth database error")
+        return redirect_to_frontend("oauth_error=server_error")
 
-    redirect_response = redirect_to_frontend(f"token={jwt_access_token}")
-    is_prod_cookie = config.APP_ENV == "production" or request.url.scheme == "https" or ("localhost" not in frontend_url)
-    redirect_response.set_cookie(
-        key="session_token",
-        value=jwt_access_token,
-        httponly=True,
-        max_age=15 * 60,
-        samesite="none" if is_prod_cookie else "lax",
-        secure=True if is_prod_cookie else False,
-    )
-    redirect_response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        max_age=7 * 24 * 3600,
-        samesite="none" if is_prod_cookie else "lax",
-        secure=True if is_prod_cookie else False,
-    )
+    if user.mfa_enabled and user.mfa_secret_encrypted:
+        redirect_response = redirect_to_frontend("mfa=required")
+        await begin_mfa_challenge(user, redirect_response, db)
+        return redirect_response
+
+    redirect_response = RedirectResponse(url=f"{frontend_url}/dashboard/repositories?auth=success", status_code=302)
+    is_prod_cookie = config.IS_PRODUCTION
+    for cookie_name in ("google_oauth_state", "google_oauth_verifier"):
+        redirect_response.delete_cookie(
+            key=cookie_name,
+            path="/",
+            secure=True if is_prod_cookie else False,
+            samesite="lax",
+            httponly=True,
+        )
+    await establish_authenticated_session(user, redirect_response, db)
     return redirect_response
 
 

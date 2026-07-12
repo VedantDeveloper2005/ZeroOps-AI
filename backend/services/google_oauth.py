@@ -17,7 +17,7 @@ except ImportError:
 logger = logging.getLogger("zeroops.google_oauth")
 
 
-def get_authorization_url(state: str, redirect_uri: str) -> str:
+def get_authorization_url(state: str, redirect_uri: str, code_challenge: str) -> str:
     params = {
         "client_id": config.GOOGLE_CLIENT_ID,
         "redirect_uri": redirect_uri,
@@ -26,11 +26,13 @@ def get_authorization_url(state: str, redirect_uri: str) -> str:
         "state": state,
         "access_type": "offline",
         "prompt": "select_account",
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
 
-async def exchange_code_for_token(code: str, redirect_uri: str) -> Optional[str]:
+async def exchange_code_for_token(code: str, redirect_uri: str, code_verifier: str) -> Optional[str]:
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -40,6 +42,7 @@ async def exchange_code_for_token(code: str, redirect_uri: str) -> Optional[str]
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )

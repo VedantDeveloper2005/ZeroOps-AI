@@ -18,12 +18,24 @@ export interface User {
   created_at?: string;
   github_connected?: boolean;
   github_username?: string;
+  mfa_enabled?: boolean;
+}
+
+export interface MfaChallenge {
+  mfa_required: true;
+}
+
+export type LoginResult = User | MfaChallenge;
+
+export function isMfaChallenge(result: LoginResult): result is MfaChallenge {
+  return "mfa_required" in result && result.mfa_required === true;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<User>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  verifyMfa: (code: string) => Promise<User>;
   signup: (firstName: string, lastName: string, email: string, password: string) => Promise<User>;
   loginWithGitHub: () => void;
   loginWithGoogle: () => void;
@@ -49,18 +61,18 @@ function getCookie(name: string): string | null {
   return null;
 }
 
+function notifyAuthenticationSucceeded() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("zeroops:authenticated"));
+  }
+}
+
 // Global fetch interceptor to automatically route client-side relative API requests to backend
 if (typeof window !== "undefined") {
   const originalFetch = window.fetch;
   window.fetch = async function (input, init) {
     const initCopy = init ? { ...init } : {};
     const headers = new Headers(initCopy.headers || {});
-    
-    // Automatically inject Bearer token if stored in localStorage
-    const token = localStorage.getItem("session_token");
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
     
     let targetInput = input;
     if (API_BASE_URL && typeof targetInput === "string" && targetInput.startsWith("/api/")) {
@@ -161,7 +173,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, loading, pathname, router, addToast]);
 
   // Login handler
-  const login = async (email: string, password: string): Promise<User> => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: "POST",
       credentials: "include",
@@ -176,9 +188,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(errorData.detail || "Invalid email or password");
     }
 
-    const data = await res.json();
+    const data = await res.json() as LoginResult;
+    if (isMfaChallenge(data)) {
+      setUser(null);
+      return data;
+    }
     setUser(data);
+    notifyAuthenticationSucceeded();
     addToast("Successfully logged in", "success");
+    return data;
+  };
+
+  const verifyMfa = async (code: string): Promise<User> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/mfa/verify`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Verification failed" }));
+      throw new Error(errorData.detail || "Unable to verify your authentication code");
+    }
+
+    const data = await res.json() as User;
+    setUser(data);
+    notifyAuthenticationSucceeded();
+    addToast("Identity verified", "success");
     return data;
   };
 
@@ -210,6 +247,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const data = await res.json();
     setUser(data);
+    notifyAuthenticationSucceeded();
     addToast("Successfully registered account", "success");
     return data;
   };
@@ -254,6 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         loading,
         login,
+        verifyMfa,
         signup,
         loginWithGitHub,
         loginWithGoogle,

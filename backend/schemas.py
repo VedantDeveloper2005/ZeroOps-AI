@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from typing import Optional, List, Any
 from datetime import datetime
 import uuid
@@ -15,6 +15,19 @@ class UserCreate(BaseModel):
     last_name: Optional[str] = None
     firstName: Optional[str] = None
     lastName: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, password: str) -> str:
+        if not any(character.islower() for character in password):
+            raise ValueError("Password must include a lowercase letter.")
+        if not any(character.isupper() for character in password):
+            raise ValueError("Password must include an uppercase letter.")
+        if not any(character.isdigit() for character in password):
+            raise ValueError("Password must include a number.")
+        if not any(not character.isalnum() for character in password):
+            raise ValueError("Password must include a symbol.")
+        return password
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -34,8 +47,41 @@ class UserResponse(BaseModel):
     created_at: Optional[str] = None
     github_connected: bool = False
     github_username: Optional[str] = None
+    mfa_enabled: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MFAChallengeResponse(BaseModel):
+    mfa_required: bool = True
+
+
+class MFACodeRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=16)
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, code: str) -> str:
+        normalized = code.strip()
+        if not normalized:
+            raise ValueError("Enter your authenticator or recovery code.")
+        return normalized
+
+
+class MFASetupResponse(BaseModel):
+    manual_key: str
+    otpauth_uri: str
+    qr_code_data_uri: str
+    expires_at: datetime
+
+
+class MFASetupConfirmResponse(BaseModel):
+    recovery_codes: List[str]
+
+
+class MFAStatusResponse(BaseModel):
+    enabled: bool
+    recovery_codes_remaining: int
 
 
 # ──────────────────────────────────────────────

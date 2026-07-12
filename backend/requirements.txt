@@ -21,5 +21,6 @@ authlib
 email-validator
 httpx
 cryptography
+qrcode[pil]
 python-multipart
 stripe

@@ -1,14 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { Circle, Eye, EyeOff, ArrowRight, ShieldCheck } from "lucide-react";
 import Link from "next/link";
-import { useAuth } from "@/lib/AuthContext";
+import { isMfaChallenge, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function LoginPage() {
-  const { login, loginWithGitHub, loginWithGoogle } = useAuth();
+  const { login, verifyMfa, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
@@ -18,6 +18,26 @@ export default function LoginPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requiresMfa, setRequiresMfa] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mfa") === "required") setRequiresMfa(true);
+
+    const oauthError = params.get("oauth_error");
+    if (oauthError) {
+      const messages: Record<string, string> = {
+        access_denied: "The provider sign-in was cancelled.",
+        invalid_state: "The sign-in request expired or could not be verified. Please try again.",
+        token_exchange_failed: "The provider could not complete sign-in. Please try again.",
+        no_verified_email: "Your provider account needs a verified email address before it can sign in.",
+        github_user_fetch_failed: "We could not retrieve your GitHub profile. Please try again.",
+        google_user_fetch_failed: "We could not retrieve your Google profile. Please try again.",
+      };
+      setError(messages[oauthError] || "Provider sign-in failed. Please try again.");
+    }
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -29,10 +49,26 @@ export default function LoginPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      await login(formData.email, formData.password);
-      // Success redirection is handled automatically by AuthContext
+      const result = await login(formData.email, formData.password);
+      if (isMfaChallenge(result)) {
+        setRequiresMfa(true);
+        setMfaCode("");
+        setIsSubmitting(false);
+      }
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Invalid email or password"));
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await verifyMfa(mfaCode);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Unable to verify your authentication code"));
       setIsSubmitting(false);
     }
   };
@@ -124,15 +160,17 @@ export default function LoginPage() {
           {/* Header */}
           <div className="space-y-2 text-left w-full">
             <h2 className="text-3xl font-medium tracking-tight text-foreground">
-              Sign In to ZeroOps
+              {requiresMfa ? "Verify it’s you" : "Sign In to ZeroOps"}
             </h2>
             <p className="text-foreground-muted text-sm">
-              Input your account details to resume the journey.
+              {requiresMfa
+                ? "Enter a code from your authenticator app or one of your recovery codes."
+                : "Input your account details to resume the journey."}
             </p>
           </div>
 
           {/* Social login buttons */}
-          <div className="grid grid-cols-2 gap-4 w-full">
+          {!requiresMfa && <div className="grid grid-cols-2 gap-4 w-full">
             <SocialButton
               icon={ChromeIcon}
               label={isGoogleRedirecting ? "Redirecting..." : "Google"}
@@ -159,25 +197,48 @@ export default function LoginPage() {
               )}
               <span className="text-sm">{isGitHubRedirecting ? "Redirecting..." : "GitHub"}</span>
             </button>
-          </div>
+          </div>}
 
           {/* Divider */}
-          <div className="relative w-full flex py-2 items-center justify-center">
+          {!requiresMfa && <div className="relative w-full flex py-2 items-center justify-center">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-border/40"></div>
             </div>
             <span className="relative z-10 bg-background px-4 text-xs font-medium text-foreground-muted uppercase tracking-widest">
               Or
             </span>
-          </div>
+          </div>}
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
+          <form onSubmit={requiresMfa ? handleMfaSubmit : handleSubmit} className="space-y-4 w-full text-left">
             {error && (
               <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
                 {error}
               </div>
             )}
+            {requiresMfa ? (
+              <>
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-foreground-muted">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-foreground"><ShieldCheck size={16} className="text-primary" /> Multi-factor authentication</div>
+                  Use the current six-digit code from your authenticator app. If you do not have it, enter an unused recovery code in the format <span className="font-mono text-foreground">XXXX-XXXX</span>.
+                </div>
+                <InputGroup
+                  label="Authentication code"
+                  placeholder="123456 or XXXX-XXXX"
+                  type="text"
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  autoFocus
+                  required
+                />
+                <button type="submit" disabled={isSubmitting || !mfaCode.trim()} className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
+                  {isSubmitting ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><span>Verify and continue</span><ArrowRight size={16} /></>}
+                </button>
+              </>
+            ) : (
+              <>
             <InputGroup
               label="Email"
               placeholder="name@company.com"
@@ -209,14 +270,6 @@ export default function LoginPage() {
                   </button>
                 }
               />
-              <div className="text-right">
-                <Link
-                  href="#"
-                  className="text-xs text-foreground-muted hover:text-primary hover:underline transition-all"
-                >
-                  Forgot password?
-                </Link>
-              </div>
             </div>
 
             {/* Submit Button */}
@@ -234,18 +287,21 @@ export default function LoginPage() {
                 </>
               )}
             </button>
+              </>
+            )}
           </form>
 
           {/* Footer Link */}
-          <p className="text-sm text-foreground-muted text-center w-full">
-            New to ZeroOps?{" "}
-            <Link
-              href="/signup"
-              className="text-foreground font-medium hover:underline hover:text-primary transition-all"
-            >
-              Create account
-            </Link>
-          </p>
+          {requiresMfa ? (
+            <button type="button" onClick={() => window.location.assign("/login")} className="w-full text-center text-sm text-foreground-muted hover:text-primary transition-all">
+              Use a different sign-in method
+            </button>
+          ) : (
+            <p className="text-sm text-foreground-muted text-center w-full">
+              New to ZeroOps?{" "}
+              <Link href="/signup" className="text-foreground font-medium hover:underline hover:text-primary transition-all">Create account</Link>
+            </p>
+          )}
         </motion.div>
       </div>
     </main>
@@ -361,12 +417,14 @@ function InputGroup({
   rightElement,
   ...props
 }: InputGroupProps) {
+  const inputId = props.id || props.name;
   return (
     <div className="flex flex-col gap-2 w-full">
-      <label className="text-sm font-medium text-foreground">{label}</label>
+      <label htmlFor={inputId} className="text-sm font-medium text-foreground">{label}</label>
       <div className="relative w-full">
         <input
           {...props}
+          id={inputId}
           className="w-full bg-brand-gray border border-border/40 rounded-xl h-11 px-4 text-foreground placeholder:text-foreground-muted/40 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all duration-200"
         />
         {rightElement && (

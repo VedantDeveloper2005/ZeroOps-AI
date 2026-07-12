@@ -83,6 +83,15 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_OAUTH_SCOPES = os.getenv("GOOGLE_OAUTH_SCOPES", "openid email profile")
 
+# MFA configuration. MFA_ENCRYPTION_KEY should be a dedicated Fernet key in
+# production. When it is intentionally omitted, the application derives a
+# compatibility key from JWT_SECRET so existing environments can adopt MFA
+# without invalidating their current configuration.
+MFA_ENCRYPTION_KEY = os.getenv("MFA_ENCRYPTION_KEY", "")
+MFA_ISSUER = os.getenv("MFA_ISSUER", "ZeroOps AI")
+MFA_CHALLENGE_EXPIRE_MINUTES = int(os.getenv("MFA_CHALLENGE_EXPIRE_MINUTES", "5"))
+MFA_REAUTH_WINDOW_MINUTES = int(os.getenv("MFA_REAUTH_WINDOW_MINUTES", "10"))
+
 # Azure deployment configuration. User-specific Azure targets are stored in DB.
 AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
@@ -138,7 +147,8 @@ K8S_AVAILABLE = False
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080")) # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 if IS_PRODUCTION and not DATABASE_URL:
     raise RuntimeError("DATABASE_URL must be configured when APP_ENV=production.")

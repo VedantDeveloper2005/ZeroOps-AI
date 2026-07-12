@@ -251,6 +251,18 @@ export interface UserSettings {
   theme: string;
 }
 
+export interface MFAStatus {
+  enabled: boolean;
+  recovery_codes_remaining: number;
+}
+
+export interface MFASetup {
+  manual_key: string;
+  otpauth_uri: string;
+  qr_code_data_uri: string;
+  expires_at: string;
+}
+
 export interface GitHubRepoItem {
   id: number;
   name: string;
@@ -531,6 +543,20 @@ export const api = {
 
   updateProfile: (data: { first_name?: string; last_name?: string; avatar_url?: string }) =>
     request<UserProfile>("/api/user/profile", { method: "PUT", body: JSON.stringify(data) }),
+
+  // â”€â”€ Account security / MFA â”€â”€
+  getMfaStatus: () => request<MFAStatus>("/api/auth/mfa/status"),
+  startMfaSetup: () => request<MFASetup>("/api/auth/mfa/setup", { method: "POST" }),
+  confirmMfaSetup: (code: string) =>
+    request<{ recovery_codes: string[] }>("/api/auth/mfa/setup/confirm", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  disableMfa: (code: string) =>
+    request<{ status: string; message: string }>("/api/auth/mfa/disable", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
 
   // ── User Settings ──
   getSettings: () => request<UserSettings>("/api/user/settings"),

@@ -54,14 +54,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     async function loadData() {
       // Skip API calls when no session exists — prevents 3× 401 cascades
       // that hit the rate limiter and pollute the browser console.
-      if (typeof document !== "undefined") {
-        const hasSession = document.cookie.split(";").some((c) => c.trim().startsWith("session_token="));
-        if (!hasSession) {
-          setIsLoading(false);
-          return;
-        }
-      }
-
       setIsLoading(true);
       try {
         const [notifData, projectData, statsData] = await Promise.allSettled([
@@ -89,7 +81,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
 
     loadData();
-    return () => { cancelled = true; };
+    window.addEventListener("zeroops:authenticated", loadData);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("zeroops:authenticated", loadData);
+    };
   }, []);
 
   // Directly derive unread count

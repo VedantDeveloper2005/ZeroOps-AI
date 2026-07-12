@@ -193,6 +193,7 @@ export default function SignupPage() {
                 name="firstName"
                 value={formData.firstName}
                 onChange={handleInputChange}
+                autoComplete="given-name"
                 required
               />
               <InputGroup
@@ -202,6 +203,7 @@ export default function SignupPage() {
                 name="lastName"
                 value={formData.lastName}
                 onChange={handleInputChange}
+                autoComplete="family-name"
                 required
               />
             </div>
@@ -213,6 +215,7 @@ export default function SignupPage() {
               name="email"
               value={formData.email}
               onChange={handleInputChange}
+              autoComplete="email"
               required
             />
 
@@ -223,9 +226,10 @@ export default function SignupPage() {
               name="password"
               value={formData.password}
               onChange={handleInputChange}
+              autoComplete="new-password"
               minLength={12}
               required
-              helperText="Requires at least 12 characters."
+              helperText="Use 12+ characters with uppercase, lowercase, a number, and a symbol."
               rightElement={
                 <button
                   type="button"
@@ -381,12 +385,14 @@ function InputGroup({
   rightElement,
   ...props
 }: InputGroupProps) {
+  const inputId = props.id || props.name;
   return (
     <div className="flex flex-col gap-2 w-full">
-      <label className="text-sm font-medium text-foreground">{label}</label>
+      <label htmlFor={inputId} className="text-sm font-medium text-foreground">{label}</label>
       <div className="relative w-full">
         <input
           {...props}
+          id={inputId}
           className="w-full bg-brand-gray border border-border/40 rounded-xl h-11 px-4 text-foreground placeholder:text-foreground-muted/40 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all duration-200"
         />
         {rightElement && (
