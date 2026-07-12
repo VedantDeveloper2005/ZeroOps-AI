@@ -3675,6 +3675,8 @@ async def google_oauth_redirect(request: Request):
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
     redirect_uri = str(request.url_for("google_oauth_callback"))
+    if config.IS_PRODUCTION or request.headers.get("x-forwarded-proto") == "https":
+        redirect_uri = redirect_uri.replace("http://", "https://")
     authorization_url = google_oauth.get_authorization_url(state, redirect_uri, code_challenge)
 
     redirect_response = RedirectResponse(url=authorization_url, status_code=302)
@@ -3734,6 +3736,8 @@ async def google_oauth_callback(
         return redirect_to_frontend("oauth_error=invalid_state")
 
     redirect_uri = str(request.url_for("google_oauth_callback"))
+    if config.IS_PRODUCTION or request.headers.get("x-forwarded-proto") == "https":
+        redirect_uri = redirect_uri.replace("http://", "https://")
     google_access_token = await google_oauth.exchange_code_for_token(code, redirect_uri, code_verifier)
     if not google_access_token:
         return redirect_to_frontend("oauth_error=token_exchange_failed")
