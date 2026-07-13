@@ -19,16 +19,29 @@ export interface User {
   github_connected?: boolean;
   github_username?: string;
   mfa_enabled?: boolean;
+  mfa_method?: string;
+  email_verified?: boolean;
 }
 
 export interface MfaChallenge {
   mfa_required: true;
+  mfa_method?: string;
+}
+
+export interface EmailVerificationPending {
+  email_verification_required: true;
+  email: string;
 }
 
 export type LoginResult = User | MfaChallenge;
+export type SignupResult = User | EmailVerificationPending;
 
 export function isMfaChallenge(result: LoginResult): result is MfaChallenge {
   return "mfa_required" in result && result.mfa_required === true;
+}
+
+export function isEmailVerificationPending(result: SignupResult): result is EmailVerificationPending {
+  return "email_verification_required" in result && result.email_verification_required === true;
 }
 
 interface AuthContextType {
@@ -36,7 +49,10 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
   verifyMfa: (code: string) => Promise<User>;
-  signup: (firstName: string, lastName: string, email: string, password: string) => Promise<User>;
+  signup: (firstName: string, lastName: string, email: string, password: string) => Promise<SignupResult>;
+  verifyEmail: (token: string) => Promise<void>;
+  resendVerification: (email: string) => Promise<void>;
+  resendMfaOtp: () => Promise<void>;
   loginWithGitHub: () => void;
   loginWithGoogle: () => void;
   logout: () => Promise<void>;
@@ -225,7 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastName: string,
     email: string,
     password: string
-  ): Promise<User> => {
+  ): Promise<SignupResult> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
       method: "POST",
       credentials: "include",
@@ -246,10 +262,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await res.json();
+    if (isEmailVerificationPending(data)) {
+      addToast("Account created. Please check your email for a verification link.", "info");
+      return data;
+    }
+
     setUser(data);
     notifyAuthenticationSucceeded();
     addToast("Successfully registered account", "success");
     return data;
+  };
+
+  const verifyEmail = async (token: string): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/verify-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Verification failed" }));
+      throw new Error(errorData.detail || "Verification failed");
+    }
+    
+    addToast("Email verified successfully! You can now log in.", "success");
+  };
+
+  const resendVerification = async (email: string): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/resend-verification`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Failed to resend verification email" }));
+      throw new Error(errorData.detail || "Failed to resend verification email");
+    }
+
+    addToast("Verification email has been resent.", "success");
+  };
+
+  const resendMfaOtp = async (): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/mfa/resend-otp`, {
+      method: "POST",
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Failed to resend verification code" }));
+      throw new Error(errorData.detail || "Failed to resend verification code");
+    }
+
+    addToast("Verification code resent to your email.", "success");
   };
 
   // GitHub OAuth login — redirects to backend which redirects to GitHub
@@ -294,6 +359,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         verifyMfa,
         signup,
+        verifyEmail,
+        resendVerification,
+        resendMfaOtp,
         loginWithGitHub,
         loginWithGoogle,
         logout,

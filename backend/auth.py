@@ -237,6 +237,48 @@ def is_recent_primary_authentication(user: User) -> bool:
     return datetime.utcnow() - user.last_primary_auth_at <= timedelta(minutes=config.MFA_REAUTH_WINDOW_MINUTES)
 
 
+# ──────────────────────────────────────────────
+# EMAIL VERIFICATION TOKENS
+# ──────────────────────────────────────────────
+
+def create_verification_token() -> str:
+    """Create a URL-safe token for email verification links."""
+    return secrets.token_urlsafe(48)
+
+
+def hash_verification_token(token: str) -> str:
+    """Hash a verification token with SHA-256 for safe database storage."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_verification_token(token: str, stored_hash: str) -> bool:
+    """Compare a raw verification token against a stored SHA-256 hash."""
+    return hmac.compare_digest(
+        hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        stored_hash,
+    )
+
+
+# ──────────────────────────────────────────────
+# EMAIL OTP
+# ──────────────────────────────────────────────
+
+def generate_email_otp(length: int = 6) -> str:
+    """Generate a cryptographically random numeric OTP code."""
+    return "".join(str(secrets.randbelow(10)) for _ in range(length))
+
+
+def hash_otp(otp: str) -> str:
+    """Hash an OTP code with bcrypt for secure storage."""
+    return get_password_hash(otp)
+
+
+def verify_otp(otp: str, otp_hash: str) -> bool:
+    """Verify a raw OTP code against a stored bcrypt hash."""
+    return verify_password(otp.strip(), otp_hash)
+
+
+
 def decode_mfa_challenge(request: Request) -> dict:
     token = request.cookies.get(MFA_CHALLENGE_COOKIE)
     if not token:

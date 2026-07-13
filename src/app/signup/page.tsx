@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Circle, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { Circle, Eye, EyeOff, ArrowRight, Mail } from "lucide-react";
 import Link from "next/link";
-import { useAuth } from "@/lib/AuthContext";
+import { isEmailVerificationPending, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function SignupPage() {
@@ -20,6 +20,7 @@ export default function SignupPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -31,13 +32,16 @@ export default function SignupPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      await signup(
+      const res = await signup(
         formData.firstName,
         formData.lastName,
         formData.email,
         formData.password
       );
-      // Success redirection is handled automatically by AuthContext
+      if (isEmailVerificationPending(res)) {
+        setVerificationRequired(true);
+        setIsSubmitting(false);
+      }
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Failed to create account"));
       setIsSubmitting(false);
@@ -128,148 +132,174 @@ export default function SignupPage() {
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="w-full max-w-xl space-y-8 lg:space-y-6 sm:space-y-10"
         >
-          {/* Header */}
-          <div className="space-y-2 text-left w-full">
-            <h2 className="text-3xl font-medium tracking-tight text-foreground">
-              Create New Profile
-            </h2>
-            <p className="text-foreground-muted text-sm">
-              Input your basic details to begin the journey.
-            </p>
-          </div>
-
-          {/* Social login buttons */}
-          <div className="grid grid-cols-2 gap-4 w-full">
-            <SocialButton
-              icon={ChromeIcon}
-              label={isGoogleRedirecting ? "Redirecting..." : "Google"}
-              disabled={isGoogleRedirecting}
-              loading={isGoogleRedirecting}
-              onClick={() => {
-                setIsGoogleRedirecting(true);
-                loginWithGoogle();
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => {
-                setIsGitHubRedirecting(true);
-                loginWithGitHub();
-              }}
-              disabled={isGitHubRedirecting}
-              className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
-            >
-              {isGitHubRedirecting ? (
-                <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <GithubIcon size={18} />
-              )}
-              <span className="text-sm">{isGitHubRedirecting ? "Redirecting..." : "GitHub"}</span>
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div className="relative w-full flex py-2 items-center justify-center">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-border/40"></div>
-            </div>
-            <span className="relative z-10 bg-background px-4 text-xs font-medium text-foreground-muted uppercase tracking-widest">
-              Or
-            </span>
-          </div>
-
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
-            {error && (
-              <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
-                {error}
+          {verificationRequired ? (
+            <div className="flex flex-col items-center justify-center text-center space-y-6 py-10 w-full">
+              <div className="h-16 w-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+                <Mail className="h-8 w-8 animate-bounce" />
               </div>
-            )}
-            <div className="grid grid-cols-2 gap-4">
-              <InputGroup
-                label="First Name"
-                placeholder="John"
-                type="text"
-                name="firstName"
-                value={formData.firstName}
-                onChange={handleInputChange}
-                autoComplete="given-name"
-                required
-              />
-              <InputGroup
-                label="Last Name"
-                placeholder="Doe"
-                type="text"
-                name="lastName"
-                value={formData.lastName}
-                onChange={handleInputChange}
-                autoComplete="family-name"
-                required
-              />
+              <div className="space-y-2">
+                <h2 className="text-3xl font-medium tracking-tight text-white">
+                  Check your email
+                </h2>
+                <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">
+                  We have sent a verification link to <span className="font-semibold text-white">{formData.email}</span>. Please click the link to verify your account.
+                </p>
+              </div>
+              <div className="w-full pt-4">
+                <Link
+                  href="/login"
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 border border-slate-700/60 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  Back to Login <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
             </div>
+          ) : (
+            <>
+              {/* Header */}
+              <div className="space-y-2 text-left w-full">
+                <h2 className="text-3xl font-medium tracking-tight text-foreground">
+                  Create New Profile
+                </h2>
+                <p className="text-foreground-muted text-sm">
+                  Input your basic details to begin the journey.
+                </p>
+              </div>
 
-            <InputGroup
-              label="Email"
-              placeholder="name@company.com"
-              type="email"
-              name="email"
-              value={formData.email}
-              onChange={handleInputChange}
-              autoComplete="email"
-              required
-            />
-
-            <InputGroup
-              label="Password"
-              placeholder="••••••••"
-              type={showPassword ? "text" : "password"}
-              name="password"
-              value={formData.password}
-              onChange={handleInputChange}
-              autoComplete="new-password"
-              minLength={12}
-              required
-              helperText="Use 12+ characters with uppercase, lowercase, a number, and a symbol."
-              rightElement={
+              {/* Social login buttons */}
+              <div className="grid grid-cols-2 gap-4 w-full">
+                <SocialButton
+                  icon={ChromeIcon}
+                  label={isGoogleRedirecting ? "Redirecting..." : "Google"}
+                  disabled={isGoogleRedirecting}
+                  loading={isGoogleRedirecting}
+                  onClick={() => {
+                    setIsGoogleRedirecting(true);
+                    loginWithGoogle();
+                  }}
+                />
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
-                  className="text-foreground-muted hover:text-foreground p-1 transition-colors focus:outline-none"
+                  onClick={() => {
+                    setIsGitHubRedirecting(true);
+                    loginWithGitHub();
+                  }}
+                  disabled={isGitHubRedirecting}
+                  className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {isGitHubRedirecting ? (
+                    <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <GithubIcon size={18} />
+                  )}
+                  <span className="text-sm">{isGitHubRedirecting ? "Redirecting..." : "GitHub"}</span>
                 </button>
-              }
-            />
+              </div>
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20"
-            >
-              {isSubmitting ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span>Create Account</span>
-                  <ArrowRight size={16} />
-                </>
-              )}
-            </button>
-          </form>
+              {/* Divider */}
+              <div className="relative w-full flex py-2 items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border/40"></div>
+                </div>
+                <span className="relative z-10 bg-background px-4 text-xs font-medium text-foreground-muted uppercase tracking-widest">
+                  Or
+                </span>
+              </div>
 
-          {/* Footer Link */}
-          <p className="text-sm text-foreground-muted text-center w-full">
-            Member of the team?{" "}
-            <Link
-              href="/login"
-              className="text-foreground font-medium hover:underline hover:text-primary transition-all"
-            >
-              Log in
-            </Link>
-          </p>
+              {/* Form */}
+              <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
+                {error && (
+                  <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
+                    {error}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <InputGroup
+                    label="First Name"
+                    placeholder="John"
+                    type="text"
+                    name="firstName"
+                    value={formData.firstName}
+                    onChange={handleInputChange}
+                    autoComplete="given-name"
+                    required
+                  />
+                  <InputGroup
+                    label="Last Name"
+                    placeholder="Doe"
+                    type="text"
+                    name="lastName"
+                    value={formData.lastName}
+                    onChange={handleInputChange}
+                    autoComplete="family-name"
+                    required
+                  />
+                </div>
+
+                <InputGroup
+                  label="Email"
+                  placeholder="name@company.com"
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  autoComplete="email"
+                  required
+                />
+
+                <InputGroup
+                  label="Password"
+                  placeholder="••••••••"
+                  type={showPassword ? "text" : "password"}
+                  name="password"
+                  value={formData.password}
+                  onChange={handleInputChange}
+                  autoComplete="new-password"
+                  minLength={12}
+                  required
+                  helperText="Use 12+ characters with uppercase, lowercase, a number, and a symbol."
+                  rightElement={
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
+                      className="text-foreground-muted hover:text-foreground p-1 transition-colors focus:outline-none"
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  }
+                />
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20"
+                >
+                  {isSubmitting ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <span>Create Account</span>
+                      <ArrowRight size={16} />
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {/* Footer Link */}
+              <p className="text-sm text-foreground-muted text-center w-full">
+                Member of the team?{" "}
+                <Link
+                  href="/login"
+                  className="text-foreground font-medium hover:underline hover:text-primary transition-all"
+                >
+                  Log in
+                </Link>
+              </p>
+            </>
+          )}
         </motion.div>
       </div>
     </main>

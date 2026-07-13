@@ -239,6 +239,8 @@ export interface UserProfile {
   total_projects: number;
   total_deployments: number;
   active_deployments: number;
+  mfa_method?: string;
+  email_verified?: boolean;
 }
 
 export interface UserSettings {
@@ -253,6 +255,7 @@ export interface UserSettings {
 
 export interface MFAStatus {
   enabled: boolean;
+  method?: string;
   recovery_codes_remaining: number;
 }
 
@@ -556,6 +559,34 @@ export const api = {
     request<{ status: string; message: string }>("/api/auth/mfa/disable", {
       method: "POST",
       body: JSON.stringify({ code }),
+    }),
+
+  verifyEmail: (token: string) =>
+    request<{ status: string; message: string }>("/api/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  resendVerification: (email: string) =>
+    request<{ status: string; message: string }>("/api/auth/resend-verification", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  updateMfaMethod: (method: string) =>
+    request<{ status: string; message: string }>("/api/auth/mfa/method", {
+      method: "POST",
+      body: JSON.stringify({ method }),
+    }),
+
+  setupEmailMfa: () =>
+    request<{ recovery_codes: string[] }>("/api/auth/mfa/setup/email", {
+      method: "POST",
+    }),
+
+  resendMfaOtp: () =>
+    request<{ status: string; message: string }>("/api/auth/mfa/resend-otp", {
+      method: "POST",
     }),
 
   // ── User Settings ──

@@ -55,3 +55,23 @@ def test_mfa_setup_requires_a_recent_primary_sign_in():
 
     user.last_primary_auth_at = datetime.utcnow() - timedelta(minutes=9)
     assert auth.is_recent_primary_authentication(user) is True
+
+
+def test_email_verification_token_generation_and_validation():
+    token = auth.create_verification_token()
+    token_hash = auth.hash_verification_token(token)
+
+    assert token != token_hash
+    assert len(token_hash) == 64
+    assert auth.verify_verification_token(token, token_hash) is True
+    assert auth.verify_verification_token("invalid_token", token_hash) is False
+
+
+def test_email_otp_generation_and_validation():
+    otp = auth.generate_email_otp()
+    assert len(otp) == 6
+    assert otp.isdigit()
+
+    otp_hash = auth.hash_otp(otp)
+    assert auth.verify_otp(otp, otp_hash) is True
+    assert auth.verify_otp("123456" if otp != "123456" else "654321", otp_hash) is False

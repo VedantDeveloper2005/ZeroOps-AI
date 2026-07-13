@@ -48,12 +48,33 @@ class UserResponse(BaseModel):
     github_connected: bool = False
     github_username: Optional[str] = None
     mfa_enabled: bool = False
+    mfa_method: str = "totp"
+    email_verified: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class MFAChallengeResponse(BaseModel):
     mfa_required: bool = True
+    mfa_method: str = "totp"
+
+
+class EmailVerificationPending(BaseModel):
+    email_verification_required: bool = True
+    email: str
+
+
+class EmailVerificationRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class MFAMethodRequest(BaseModel):
+    method: str = Field(..., pattern=r"^(totp|email)$")
+
 
 
 class MFACodeRequest(BaseModel):
@@ -81,6 +102,7 @@ class MFASetupConfirmResponse(BaseModel):
 
 class MFAStatusResponse(BaseModel):
     enabled: bool
+    method: str = "totp"
     recovery_codes_remaining: int
 
 

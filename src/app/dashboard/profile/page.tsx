@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import Image from "next/image";
-import { User, Mail, Shield, Calendar, Key, RefreshCw, Eye, EyeOff, Layout, Server, Smartphone, Copy, CheckCircle2 } from "lucide-react";
+import { User, Mail, Shield, Calendar, Key, RefreshCw, Eye, EyeOff, Layout, Server, Smartphone, Copy, CheckCircle2, XCircle } from "lucide-react";
 import { api, type MFASetup, type MFAStatus, type UserProfile } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
@@ -107,6 +107,37 @@ export default function ProfilePage() {
       addToast("Failed to regenerate access key", "error");
     } finally {
       setApiKeyRegenerating(false);
+    }
+  };
+
+  const startEmailMfaSetup = async () => {
+    setMfaBusy(true);
+    try {
+      const result = await api.setupEmailMfa();
+      setRecoveryCodes(result.recovery_codes);
+      setMfaSetup(null);
+      setMfaCode("");
+      setMfaStatus({ enabled: true, method: "email", recovery_codes_remaining: result.recovery_codes.length });
+      addToast("Email Multi-factor authentication is now enabled", "success");
+    } catch (err) {
+      console.error(err);
+      addToast("Unable to start MFA setup. Sign in again if your session is older than 10 minutes.", "error");
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  const toggleMfaMethod = async (method: "totp" | "email") => {
+    setMfaBusy(true);
+    try {
+      await api.updateMfaMethod(method);
+      setMfaStatus(prev => prev ? { ...prev, method } : null);
+      addToast(`MFA method updated to ${method === "totp" ? "Authenticator App" : "Email Code"}`, "success");
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to update MFA method", "error");
+    } finally {
+      setMfaBusy(false);
     }
   };
 
@@ -270,6 +301,15 @@ export default function ProfilePage() {
                 <div className="flex items-center gap-2 bg-background-secondary border border-border/80 rounded-lg px-3 py-2 text-xs text-foreground-muted">
                   <Mail size={14} />
                   <span>{profile?.email}</span>
+                  {profile?.email_verified ? (
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+                      <CheckCircle2 size={10} /> Verified
+                    </span>
+                  ) : (
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-400">
+                      <XCircle size={10} /> Unverified
+                    </span>
+                  )}
                 </div>
                 <p className="text-[10px] text-foreground-muted">Contact support if you need to update your email address.</p>
               </div>
@@ -332,18 +372,59 @@ export default function ProfilePage() {
                 </div>
               </form>
             ) : mfaStatus?.enabled ? (
-              <form onSubmit={disableMfa} className="space-y-3">
-                <div className="rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-foreground"><span className="font-bold">MFA is enabled.</span> {mfaStatus.recovery_codes_remaining} recovery code{mfaStatus.recovery_codes_remaining === 1 ? "" : "s"} remaining.</div>
-                <div className="space-y-1.5">
-                  <label htmlFor="mfa-disable-code" className="text-[10px] font-bold text-foreground-muted uppercase">Authenticator or recovery code</label>
-                  <input id="mfa-disable-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} type="text" inputMode="numeric" autoComplete="one-time-code" required className="w-full min-h-11 bg-background-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary/30 outline-none" placeholder="123456 or XXXX-XXXX" />
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-foreground-muted uppercase">Preferred Verification Method</label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="mfa_method" 
+                        value="totp" 
+                        checked={mfaStatus.method === "totp"}
+                        onChange={() => toggleMfaMethod("totp")}
+                        disabled={mfaBusy}
+                        className="accent-primary" 
+                      />
+                      Authenticator App
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="mfa_method" 
+                        value="email" 
+                        checked={mfaStatus.method === "email"}
+                        onChange={() => toggleMfaMethod("email")}
+                        disabled={mfaBusy}
+                        className="accent-primary" 
+                      />
+                      Email Code
+                    </label>
+                  </div>
                 </div>
-                <button type="submit" disabled={mfaBusy || !mfaCode.trim()} className="min-h-11 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-xs font-bold text-danger transition hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-60">{mfaBusy ? "Disabling..." : "Disable MFA"}</button>
-              </form>
+
+                <form onSubmit={disableMfa} className="space-y-3 pt-2 border-t border-border/40">
+                  <div className="rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-foreground">
+                    <span className="font-bold">MFA is enabled.</span> {mfaStatus.recovery_codes_remaining} recovery code{mfaStatus.recovery_codes_remaining === 1 ? "" : "s"} remaining.
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="mfa-disable-code" className="text-[10px] font-bold text-foreground-muted uppercase">
+                      {mfaStatus.method === "email" ? "Verification code or recovery code" : "Authenticator code or recovery code"}
+                    </label>
+                    <input id="mfa-disable-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} type="text" inputMode="numeric" autoComplete="one-time-code" required className="w-full min-h-11 bg-background-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary/30 outline-none" placeholder="123456 or XXXX-XXXX" />
+                  </div>
+                  <button type="submit" disabled={mfaBusy || !mfaCode.trim()} className="min-h-11 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-xs font-bold text-danger transition hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-60">{mfaBusy ? "Disabling..." : "Disable MFA"}</button>
+                </form>
+              </div>
             ) : (
-              <button type="button" onClick={startMfaSetup} disabled={mfaBusy || mfaStatus === null} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60">
-                <Shield size={14} /> {mfaBusy ? "Preparing setup..." : mfaStatus === null ? "Loading security status..." : "Set up MFA"}
-              </button>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button type="button" onClick={startMfaSetup} disabled={mfaBusy || mfaStatus === null} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60">
+                  <Shield size={14} /> {mfaBusy ? "Preparing..." : "Set up Authenticator App"}
+                </button>
+                <button type="button" onClick={startEmailMfaSetup} disabled={mfaBusy || mfaStatus === null} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-xs font-bold text-foreground transition hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-60">
+                  <Mail size={14} /> {mfaBusy ? "Preparing..." : "Set up Email Code MFA"}
+                </button>
+              </div>
             )}
           </motion.div>
 

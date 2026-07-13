@@ -139,6 +139,16 @@ class User(Base):
     mfa_last_used_counter = Column(Integer, nullable=True)
     mfa_challenge_id = Column(Text, nullable=True)
     mfa_challenge_expires_at = Column(DateTime, nullable=True)
+    mfa_method = Column(Text, nullable=False, default="totp")  # "totp" or "email"
+
+    # Email verification
+    email_verified = Column(Boolean, nullable=False, default=False)
+    email_verification_token = Column(Text, nullable=True)  # SHA-256 hashed
+    email_verification_expires_at = Column(DateTime, nullable=True)
+
+    # Email OTP for MFA
+    email_otp_hash = Column(Text, nullable=True)  # bcrypt hashed
+    email_otp_expires_at = Column(DateTime, nullable=True)
 
     # GitHub OAuth fields
     github_id = Column(Text, nullable=True, unique=True, index=True)
@@ -180,6 +190,8 @@ class User(Base):
             "github_avatar_url": self.github_avatar_url,
             "github_connected": self.github_connected or False,
             "mfa_enabled": self.mfa_enabled or False,
+            "mfa_method": self.mfa_method or "totp",
+            "email_verified": self.email_verified or False,
         }
 
 

@@ -8,7 +8,7 @@ import { isMfaChallenge, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function LoginPage() {
-  const { login, verifyMfa, loginWithGitHub, loginWithGoogle } = useAuth();
+  const { login, verifyMfa, resendMfaOtp, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
@@ -20,6 +20,9 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [requiresMfa, setRequiresMfa] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
+  const [mfaMethod, setMfaMethod] = useState("totp");
+  const [isResendingOtp, setIsResendingOtp] = useState(false);
+  const [resendOtpSuccess, setResendOtpSuccess] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -52,12 +55,27 @@ export default function LoginPage() {
       const result = await login(formData.email, formData.password);
       if (isMfaChallenge(result)) {
         setRequiresMfa(true);
+        setMfaMethod(result.mfa_method || "totp");
         setMfaCode("");
         setIsSubmitting(false);
       }
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Invalid email or password"));
       setIsSubmitting(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setIsResendingOtp(true);
+    setResendOtpSuccess(false);
+    setError(null);
+    try {
+      await resendMfaOtp();
+      setResendOtpSuccess(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to resend code"));
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -164,7 +182,9 @@ export default function LoginPage() {
             </h2>
             <p className="text-foreground-muted text-sm">
               {requiresMfa
-                ? "Enter a code from your authenticator app or one of your recovery codes."
+                ? mfaMethod === "email"
+                  ? "Enter the six-digit verification code sent to your email address."
+                  : "Enter a code from your authenticator app or one of your recovery codes."
                 : "Input your account details to resume the journey."}
             </p>
           </div>
@@ -220,11 +240,22 @@ export default function LoginPage() {
               <>
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-foreground-muted">
                   <div className="mb-2 flex items-center gap-2 font-semibold text-foreground"><ShieldCheck size={16} className="text-primary" /> Multi-factor authentication</div>
-                  Use the current six-digit code from your authenticator app. If you do not have it, enter an unused recovery code in the format <span className="font-mono text-foreground">XXXX-XXXX</span>.
+                  {mfaMethod === "email" ? (
+                    <span>We have sent a six-digit verification code to your registered email address.</span>
+                  ) : (
+                    <span>Use the current six-digit code from your authenticator app. If you do not have it, enter an unused recovery code in the format <span className="font-mono text-foreground">XXXX-XXXX</span>.</span>
+                  )}
                 </div>
+
+                {resendOtpSuccess && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs font-medium text-left">
+                    Verification code has been resent.
+                  </div>
+                )}
+
                 <InputGroup
-                  label="Authentication code"
-                  placeholder="123456 or XXXX-XXXX"
+                  label={mfaMethod === "email" ? "Verification code" : "Authentication code"}
+                  placeholder={mfaMethod === "email" ? "123456" : "123456 or XXXX-XXXX"}
                   type="text"
                   value={mfaCode}
                   onChange={(e) => setMfaCode(e.target.value)}
@@ -233,6 +264,20 @@ export default function LoginPage() {
                   autoFocus
                   required
                 />
+
+                {mfaMethod === "email" && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      disabled={isResendingOtp}
+                      onClick={handleResendOtp}
+                      className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline transition-colors disabled:opacity-60"
+                    >
+                      {isResendingOtp ? "Resending..." : "Resend verification code"}
+                    </button>
+                  </div>
+                )}
+
                 <button type="submit" disabled={isSubmitting || !mfaCode.trim()} className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
                   {isSubmitting ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><span>Verify and continue</span><ArrowRight size={16} /></>}
                 </button>

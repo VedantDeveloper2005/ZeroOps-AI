@@ -42,14 +42,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, agent
+    from backend.services import git, ai, pipeline, vault, agent, email_service
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, agent
+    from services import git, ai, pipeline, vault, agent, email_service
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -108,7 +108,9 @@ async def csrf_middleware(request: Request, call_next):
         path.startswith("/api/auth/signup") or
         path.startswith("/api/auth/github") or
         path.startswith("/api/auth/google") or
-        path.startswith("/api/auth/oauth")
+        path.startswith("/api/auth/oauth") or
+        path.startswith("/api/auth/verify-email") or
+        path.startswith("/api/auth/resend-verification")
     ):
         return await call_next(request)
         
@@ -200,6 +202,12 @@ async def rate_limit_middleware(request: Request, call_next):
     elif path.startswith("/api/auth/github") or path.startswith("/api/auth/google"):
         category = "oauth"
         limit = 20
+    elif path.startswith("/api/auth/verify-email"):
+        category = "verify_email"
+        limit = 10
+    elif path.startswith("/api/auth/resend-verification"):
+        category = "resend_verification"
+        limit = 5
     else:
         category = "default"
         limit = 100
@@ -400,6 +408,8 @@ def map_user_response(user: models.User) -> schemas.UserResponse:
         github_connected=user.github_connected or False,
         github_username=user.github_username,
         mfa_enabled=user.mfa_enabled or False,
+        mfa_method=user.mfa_method or "totp",
+        email_verified=user.email_verified or False,
     )
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -710,14 +720,24 @@ async def begin_mfa_challenge(
     user.mfa_challenge_id = challenge_id
     user.mfa_challenge_expires_at = datetime.utcnow() + timedelta(minutes=config.MFA_CHALLENGE_EXPIRE_MINUTES)
     user.refresh_token = None
+
+    if user.mfa_method == "email":
+        otp_code = auth.generate_email_otp(config.EMAIL_OTP_LENGTH)
+        user.email_otp_hash = auth.hash_otp(otp_code)
+        user.email_otp_expires_at = datetime.utcnow() + timedelta(minutes=config.EMAIL_OTP_EXPIRE_MINUTES)
+        
+        email_sent = email_service.send_otp_email(user.email, otp_code)
+        if not email_sent:
+            logger.warning(f"Could not send OTP email to {user.email}")
+
     db.add(user)
     await db.commit()
     auth.clear_session_cookies(response)
     auth.set_mfa_challenge_cookie(response, auth.create_mfa_challenge_token(str(user.id), challenge_id))
-    return schemas.MFAChallengeResponse()
+    return schemas.MFAChallengeResponse(mfa_method=user.mfa_method)
 
 
-@app.post("/api/auth/signup", response_model=schemas.UserResponse)
+@app.post("/api/auth/signup", response_model=Union[schemas.UserResponse, schemas.EmailVerificationPending])
 async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
     first_name = req.first_name or req.firstName
@@ -733,6 +753,8 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
     if existing_user:
         raise HTTPException(status_code=409, detail="A user with this email address already exists.")
 
+    use_verification = email_service._smtp_configured()
+
     new_user = models.User(
         id=uuid.uuid4(),
         first_name=first_name,
@@ -742,7 +764,14 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         provider="local",
         plan="starter",
         last_primary_auth_at=datetime.utcnow(),
+        email_verified=not use_verification,
     )
+
+    raw_token = None
+    if use_verification:
+        raw_token = auth.create_verification_token()
+        new_user.email_verification_token = auth.hash_verification_token(raw_token)
+        new_user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
 
     try:
         db.add(new_user)
@@ -762,6 +791,13 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         logger.exception("Unable to create a new user account.")
         raise HTTPException(status_code=500, detail="Failed to register user.") from error
 
+    if use_verification and raw_token:
+        verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
+        email_sent = email_service.send_verification_email(email, verification_url)
+        if not email_sent:
+            logger.warning(f"Could not send verification email to {email}")
+        return schemas.EmailVerificationPending(email=email)
+
     return await establish_authenticated_session(new_user, response, db)
 
 
@@ -778,8 +814,22 @@ async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = D
     if not user or not user.password_hash or not auth.verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
+    if not user.email_verified:
+        if not email_service._smtp_configured():
+            user.email_verified = True
+            db.add(user)
+            await db.commit()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Please verify your email address before signing in.",
+            )
+
     user.last_primary_auth_at = datetime.utcnow()
-    if user.mfa_enabled and user.mfa_secret_encrypted:
+    db.add(user)
+    await db.commit()
+
+    if user.mfa_enabled and (user.mfa_secret_encrypted or user.mfa_method == "email"):
         return await begin_mfa_challenge(user, response, db)
     return await establish_authenticated_session(user, response, db)
 
@@ -834,7 +884,7 @@ async def verify_mfa_challenge(
     if (
         not user
         or not user.mfa_enabled
-        or not user.mfa_secret_encrypted
+        or (user.mfa_method == "totp" and not user.mfa_secret_encrypted)
         or not user.mfa_challenge_id
         or not user.mfa_challenge_expires_at
         or user.mfa_challenge_expires_at < datetime.utcnow()
@@ -843,14 +893,36 @@ async def verify_mfa_challenge(
         auth.clear_mfa_challenge_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your verification session has expired. Sign in again.")
 
-    secret = auth.decrypt_mfa_secret(user.mfa_secret_encrypted)
-    counter = auth.verify_totp_code(secret, req.code) if secret else None
-    if counter is not None:
-        if user.mfa_last_used_counter is not None and counter <= user.mfa_last_used_counter:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
-        user.mfa_last_used_counter = counter
-    elif not auth.consume_recovery_code(user, req.code):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authenticator or recovery code.")
+    verified = False
+
+    if user.mfa_method == "email":
+        if (
+            user.email_otp_hash
+            and user.email_otp_expires_at
+            and user.email_otp_expires_at >= datetime.utcnow()
+            and auth.verify_otp(req.code, user.email_otp_hash)
+        ):
+            verified = True
+            user.email_otp_hash = None
+            user.email_otp_expires_at = None
+            db.add(user)
+    else:  # totp
+        secret = auth.decrypt_mfa_secret(user.mfa_secret_encrypted) if user.mfa_secret_encrypted else None
+        counter = auth.verify_totp_code(secret, req.code) if secret else None
+        if counter is not None:
+            if user.mfa_last_used_counter is not None and counter <= user.mfa_last_used_counter:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
+            user.mfa_last_used_counter = counter
+            verified = True
+            db.add(user)
+
+    if not verified:
+        if auth.consume_recovery_code(user, req.code):
+            verified = True
+            db.add(user)
+
+    if not verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification or recovery code.")
 
     return await establish_authenticated_session(user, response, db)
 
@@ -937,16 +1009,36 @@ async def disable_mfa(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not current_user.mfa_enabled or not current_user.mfa_secret_encrypted:
+    if not current_user.mfa_enabled or (current_user.mfa_method == "totp" and not current_user.mfa_secret_encrypted):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multi-factor authentication is not enabled.")
 
-    secret = auth.decrypt_mfa_secret(current_user.mfa_secret_encrypted)
-    counter = auth.verify_totp_code(secret, req.code) if secret else None
-    if counter is not None:
-        if current_user.mfa_last_used_counter is not None and counter <= current_user.mfa_last_used_counter:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
-    elif not auth.consume_recovery_code(current_user, req.code):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authenticator or recovery code.")
+    verified = False
+
+    if current_user.mfa_method == "email":
+        if (
+            current_user.email_otp_hash
+            and current_user.email_otp_expires_at
+            and current_user.email_otp_expires_at >= datetime.utcnow()
+            and auth.verify_otp(req.code, current_user.email_otp_hash)
+        ):
+            verified = True
+            current_user.email_otp_hash = None
+            current_user.email_otp_expires_at = None
+    else:  # totp
+        secret = auth.decrypt_mfa_secret(current_user.mfa_secret_encrypted) if current_user.mfa_secret_encrypted else None
+        counter = auth.verify_totp_code(secret, req.code) if secret else None
+        if counter is not None:
+            if current_user.mfa_last_used_counter is not None and counter <= current_user.mfa_last_used_counter:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This verification code was already used. Wait for a new code and try again.")
+            current_user.mfa_last_used_counter = counter
+            verified = True
+
+    if not verified:
+        if auth.consume_recovery_code(current_user, req.code):
+            verified = True
+
+    if not verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification or recovery code.")
 
     current_user.mfa_enabled = False
     current_user.mfa_secret_encrypted = None
@@ -957,6 +1049,146 @@ async def disable_mfa(
     db.add(current_user)
     await db.commit()
     return {"status": "success", "message": "Multi-factor authentication has been disabled."}
+
+
+@app.post("/api/auth/verify-email")
+async def verify_email(req: schemas.EmailVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """Verify user's email address using the token sent via email."""
+    token_hash = auth.hash_verification_token(req.token)
+    result = await db.execute(
+        select(models.User).filter(
+            models.User.email_verification_token == token_hash,
+            models.User.email_verification_expires_at > datetime.utcnow()
+        )
+    )
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="The verification link is invalid or has expired. Please request a new one."
+        )
+
+    user.email_verified = True
+    user.email_verification_token = None
+    user.email_verification_expires_at = None
+    db.add(user)
+    await db.commit()
+    return {"status": "success", "message": "Email verified successfully."}
+
+
+@app.post("/api/auth/resend-verification")
+async def resend_verification(req: schemas.ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """Resend verification email to unverified user."""
+    email = req.email.strip().lower()
+    result = await db.execute(select(models.User).filter(models.User.email == email))
+    user = result.scalars().first()
+    
+    if not user:
+        # Prevent email enumeration
+        return {"status": "success", "message": "If this email is registered, we have sent a verification link."}
+
+    if user.email_verified:
+        return {"status": "success", "message": "Email is already verified."}
+
+    if not email_service._smtp_configured():
+        # Auto-verify if SMTP is disabled
+        user.email_verified = True
+        db.add(user)
+        await db.commit()
+        return {"status": "success", "message": "Email auto-verified."}
+
+    raw_token = auth.create_verification_token()
+    user.email_verification_token = auth.hash_verification_token(raw_token)
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
+    db.add(user)
+    await db.commit()
+
+    verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
+    email_sent = email_service.send_verification_email(email, verification_url)
+    if not email_sent:
+         raise HTTPException(status_code=500, detail="Failed to send verification email.")
+
+    return {"status": "success", "message": "Verification link sent."}
+
+
+@app.post("/api/auth/mfa/method")
+async def update_mfa_method(
+    req: schemas.MFAMethodRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Switch the preferred MFA method (totp or email)."""
+    if req.method == "totp" and not current_user.mfa_secret_encrypted:
+        raise HTTPException(status_code=400, detail="Please set up your authenticator app first.")
+        
+    current_user.mfa_method = req.method
+    db.add(current_user)
+    await db.commit()
+    return {"status": "success", "message": f"MFA method updated to {req.method}."}
+
+
+@app.post("/api/auth/mfa/setup/email", response_model=schemas.MFASetupConfirmResponse)
+async def setup_email_mfa(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Enable email-based MFA directly."""
+    if current_user.mfa_enabled and current_user.mfa_method == "email":
+        raise HTTPException(status_code=409, detail="Email MFA is already enabled.")
+    if not auth.is_recent_primary_authentication(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sign out and sign in again before changing multi-factor authentication.")
+
+    # Generate recovery codes
+    recovery_codes, recovery_code_hashes = auth.generate_recovery_codes()
+    current_user.mfa_enabled = True
+    current_user.mfa_method = "email"
+    current_user.mfa_recovery_code_hashes = recovery_code_hashes
+    
+    # We clear TOTP secrets if switching entirely to email MFA
+    current_user.mfa_secret_encrypted = None
+    current_user.mfa_setup_secret_encrypted = None
+    current_user.mfa_setup_expires_at = None
+    current_user.mfa_last_used_counter = None
+
+    db.add(current_user)
+    await db.commit()
+    return schemas.MFASetupConfirmResponse(recovery_codes=recovery_codes)
+
+
+@app.post("/api/auth/mfa/resend-otp")
+async def resend_mfa_otp(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Resend email MFA OTP if user is in an active challenge."""
+    challenge = auth.decode_mfa_challenge(request)
+    try:
+        user_id = uuid.UUID(challenge["sub"])
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification session.") from error
+
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    user = result.scalars().first()
+    if (
+        not user
+        or not user.mfa_enabled
+        or user.mfa_method != "email"
+        or not user.mfa_challenge_id
+        or not hmac.compare_digest(user.mfa_challenge_id, challenge["challenge_id"])
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification session.")
+
+    otp_code = auth.generate_email_otp(config.EMAIL_OTP_LENGTH)
+    user.email_otp_hash = auth.hash_otp(otp_code)
+    user.email_otp_expires_at = datetime.utcnow() + timedelta(minutes=config.EMAIL_OTP_EXPIRE_MINUTES)
+    db.add(user)
+    await db.commit()
+
+    email_sent = email_service.send_otp_email(user.email, otp_code)
+    if not email_sent:
+        raise HTTPException(status_code=500, detail="Failed to send verification email.")
+
+    return {"status": "success", "message": "Verification code resent."}
 
 
 # ──────────────────────────────────────────────

@@ -92,6 +92,19 @@ MFA_ISSUER = os.getenv("MFA_ISSUER", "ZeroOps AI")
 MFA_CHALLENGE_EXPIRE_MINUTES = int(os.getenv("MFA_CHALLENGE_EXPIRE_MINUTES", "5"))
 MFA_REAUTH_WINDOW_MINUTES = int(os.getenv("MFA_REAUTH_WINDOW_MINUTES", "10"))
 
+# SMTP email configuration
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+
+# Email verification settings
+EMAIL_VERIFICATION_EXPIRE_HOURS = int(os.getenv("EMAIL_VERIFICATION_EXPIRE_HOURS", "24"))
+EMAIL_OTP_EXPIRE_MINUTES = int(os.getenv("EMAIL_OTP_EXPIRE_MINUTES", "10"))
+EMAIL_OTP_LENGTH = int(os.getenv("EMAIL_OTP_LENGTH", "6"))
+
 # Azure deployment configuration. User-specific Azure targets are stored in DB.
 AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
