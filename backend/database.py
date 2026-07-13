@@ -297,6 +297,14 @@ async def run_migrations():
                 CREATE UNIQUE INDEX ix_users_github_id_unique ON users(github_id) WHERE github_id IS NOT NULL;
             END IF;
         END $$""",
+
+        # Email OTP, email verification, mfa_method
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT NOT NULL DEFAULT 'totp'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expires_at TIMESTAMP",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_otp_hash TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_otp_expires_at TIMESTAMP",
     ]
 
     try:
