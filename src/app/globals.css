@@ -7,42 +7,42 @@
 
 @layer base {
   :root {
-    --background: hsl(216 45% 98%);
-    --background-secondary: hsl(218 42% 95%);
-    --foreground: hsl(222 44% 13%);
-    --foreground-muted: hsl(219 17% 40%);
-    --primary: hsl(217 91% 53%);
-    --primary-hover: hsl(221 83% 45%);
-    --primary-glow: hsl(217 91% 53% / 0.2);
-    --primary-subtle: hsl(217 91% 53% / 0.09);
-    --accent: hsl(256 74% 57%);
-    --accent-hover: hsl(256 72% 49%);
-    --accent-glow: hsl(256 74% 57% / 0.18);
-    --accent-subtle: hsl(256 74% 57% / 0.08);
-    --card: hsl(0 0% 100% / 0.9);
-    --card-hover: hsl(217 36% 97%);
-    --card-active: hsl(216 32% 94%);
-    --border: hsl(216 28% 88%);
-    --border-hover: hsl(217 42% 78%);
-    --success: hsl(159 74% 31%);
-    --success-glow: hsl(159 74% 31% / 0.15);
-    --warning: hsl(35 92% 38%);
-    --warning-glow: hsl(35 92% 38% / 0.14);
-    --danger: hsl(0 74% 51%);
-    --danger-glow: hsl(0 74% 51% / 0.14);
-    --info: hsl(199 89% 38%);
-    --info-glow: hsl(199 89% 38% / 0.14);
-    --brand-gray: hsl(218 36% 96%);
+    --background: hsl(210 33% 98%);
+    --background-secondary: hsl(210 28% 95%);
+    --foreground: hsl(222 30% 16%);
+    --foreground-muted: hsl(218 13% 42%);
+    --primary: hsl(216 67% 38%);
+    --primary-hover: hsl(216 70% 32%);
+    --primary-glow: hsl(216 67% 38% / 0.15);
+    --primary-subtle: hsl(216 67% 38% / 0.08);
+    --accent: hsl(172 52% 33%);
+    --accent-hover: hsl(172 58% 27%);
+    --accent-glow: hsl(172 52% 33% / 0.14);
+    --accent-subtle: hsl(172 52% 33% / 0.08);
+    --card: hsl(0 0% 100%);
+    --card-hover: hsl(210 32% 97%);
+    --card-active: hsl(210 28% 93%);
+    --border: hsl(214 22% 89%);
+    --border-hover: hsl(214 25% 80%);
+    --success: hsl(157 57% 30%);
+    --success-glow: hsl(157 57% 30% / 0.12);
+    --warning: hsl(35 86% 34%);
+    --warning-glow: hsl(35 86% 34% / 0.12);
+    --danger: hsl(0 63% 47%);
+    --danger-glow: hsl(0 63% 47% / 0.12);
+    --info: hsl(202 68% 34%);
+    --info-glow: hsl(202 68% 34% / 0.12);
+    --brand-gray: hsl(210 26% 96%);
     --radius-sm: 0.5rem;
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
     --radius-xl: 1.25rem;
     --radius-2xl: 1.5rem;
-    --shadow-glow-blue: 0 18px 40px hsl(217 91% 53% / 0.14), 0 2px 6px hsl(217 42% 20% / 0.06);
-    --shadow-glow-purple: 0 18px 40px hsl(256 74% 57% / 0.14), 0 2px 6px hsl(217 42% 20% / 0.06);
-    --shadow-glow-green: 0 15px 32px hsl(159 74% 31% / 0.13);
-    --shadow-glow-red: 0 15px 32px hsl(0 74% 51% / 0.13);
-    --shadow-glow-cyan: 0 15px 32px hsl(199 89% 38% / 0.13);
+    --shadow-glow-blue: 0 8px 20px hsl(216 67% 38% / 0.12);
+    --shadow-glow-purple: 0 8px 20px hsl(172 52% 33% / 0.1);
+    --shadow-glow-green: 0 8px 18px hsl(157 57% 30% / 0.1);
+    --shadow-glow-red: 0 8px 18px hsl(0 63% 47% / 0.1);
+    --shadow-glow-cyan: 0 8px 18px hsl(202 68% 34% / 0.1);
     --glass-base-rgb: 255, 255, 255;
     --glass-bg: hsl(0 0% 100% / 0.68);
     --glass-border: hsl(216 28% 88% / 0.78);
@@ -133,8 +133,8 @@ html.dark { color-scheme: dark; }
 body {
   min-width: 320px;
   background:
-    radial-gradient(circle at 8% -10%, hsl(217 91% 53% / 0.13), transparent 30rem),
-    radial-gradient(circle at 92% 4%, hsl(256 74% 57% / 0.1), transparent 28rem),
+    radial-gradient(circle at 12% -18%, hsl(216 67% 38% / 0.07), transparent 28rem),
+    radial-gradient(circle at 88% -8%, hsl(172 52% 33% / 0.05), transparent 24rem),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
@@ -163,16 +163,16 @@ button:not(:disabled), a { touch-action: manipulation; }
 .glass-strong { background: var(--glass-strong-bg); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid var(--glass-strong-border); }
 .glass-subtle { background: var(--glass-subtle-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--glass-subtle-border); }
 
-.ops-page-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px); background-size: 40px 40px; mask-image: linear-gradient(to bottom, black, transparent 78%); }
-.ops-card { border: 1px solid var(--border); background: var(--card); box-shadow: 0 1px 2px hsl(222 44% 13% / 0.04), 0 18px 42px hsl(222 44% 13% / 0.04); }
-.dark .ops-card { box-shadow: 0 1px 2px hsl(222 44% 3% / 0.36), 0 20px 48px hsl(222 44% 3% / 0.28); }
+.ops-page-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom, black, transparent 78%); }
+.ops-card { border: 1px solid var(--border); background: var(--card); box-shadow: 0 1px 2px hsl(222 30% 16% / 0.02), 0 8px 24px hsl(222 30% 16% / 0.035); }
+.dark .ops-card { box-shadow: 0 1px 2px hsl(222 44% 3% / 0.36), 0 12px 30px hsl(222 44% 3% / 0.2); }
 .ops-card-interactive { transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
-.ops-card-interactive:hover { border-color: var(--border-hover); box-shadow: 0 18px 44px hsl(217 91% 53% / 0.1); transform: translateY(-2px); }
-.ops-kicker { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 7%, transparent); color: var(--primary); padding: 0.35rem 0.65rem; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.1em; }
-.ops-primary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 0.5rem; border-radius: 0.875rem; background: linear-gradient(135deg, var(--primary), var(--accent)); color: white; font-size: 0.875rem; font-weight: 800; box-shadow: var(--shadow-glow-blue); transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease; }
-.ops-primary:hover { transform: translateY(-2px); box-shadow: 0 22px 44px color-mix(in srgb, var(--primary) 32%, transparent); filter: saturate(1.08); }
+.ops-card-interactive:hover { border-color: var(--border-hover); box-shadow: 0 10px 26px hsl(216 67% 38% / 0.08); transform: translateY(-1px); }
+.ops-kicker { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 6%, transparent); color: var(--primary); padding: 0.35rem 0.65rem; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.08em; }
+.ops-primary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 0.5rem; border-radius: 0.75rem; background: var(--primary); color: white; font-size: 0.875rem; font-weight: 750; box-shadow: var(--shadow-glow-blue); transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease; }
+.ops-primary:hover { transform: translateY(-1px); background: var(--primary-hover); box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 24%, transparent); }
 .ops-primary:active { transform: translateY(0) scale(0.98); }
-.ops-secondary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: 0.875rem; background: color-mix(in srgb, var(--card) 76%, transparent); color: var(--foreground); font-size: 0.875rem; font-weight: 750; transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }
+.ops-secondary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--card); color: var(--foreground); font-size: 0.875rem; font-weight: 700; transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }
 .ops-secondary:hover { border-color: var(--border-hover); background: var(--card-hover); transform: translateY(-1px); }
 
 .glow-blue { box-shadow: var(--shadow-glow-blue); }

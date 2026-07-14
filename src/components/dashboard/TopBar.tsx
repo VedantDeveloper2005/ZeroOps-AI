@@ -62,7 +62,7 @@ export function TopBar() {
   }, []);
 
   return (
-    <div className="h-16 border-b border-border flex items-center justify-between px-4 sm:px-6 bg-background/75 backdrop-blur-xl flex-shrink-0 relative">
+    <div className="h-16 border-b border-border flex items-center justify-between px-4 sm:px-6 bg-card/90 backdrop-blur-xl flex-shrink-0 relative">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm">
         <span className="text-foreground-muted">Dashboard</span>
@@ -89,7 +89,7 @@ export function TopBar() {
             onClick={() => setNotifOpen(!notifOpen)}
             aria-label={notifOpen ? "Close notifications" : "Open notifications"}
             aria-expanded={notifOpen}
-            className={`p-2 rounded-lg transition-colors relative ${notifOpen ? "bg-card text-foreground" : "hover:bg-card text-foreground-muted hover:text-foreground"}`}
+            className={`grid min-h-11 min-w-11 place-items-center rounded-lg transition-colors relative ${notifOpen ? "bg-background-secondary text-foreground" : "hover:bg-background-secondary text-foreground-muted hover:text-foreground"}`}
           >
             <Bell size={20} />
             {unreadCount > 0 && (

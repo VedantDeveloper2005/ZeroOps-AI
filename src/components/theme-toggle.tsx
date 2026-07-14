@@ -21,8 +21,10 @@ export function ThemeToggle({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <button
       onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      aria-label={theme === "dark" ? "Use light mode" : "Use dark mode"}
+      title={theme === "dark" ? "Use light mode" : "Use dark mode"}
       className={cn(
-        "flex items-center p-2 rounded-lg hover:bg-card transition-colors text-foreground-muted hover:text-foreground",
+        "min-h-11 flex items-center p-2 rounded-lg hover:bg-background-secondary transition-colors text-foreground-muted hover:text-foreground",
         collapsed ? "justify-center w-full" : "w-full gap-3 px-3 py-2.5"
       )}
     >
@@ -32,7 +34,7 @@ export function ThemeToggle({ collapsed = false }: { collapsed?: boolean }) {
       </div>
       {!collapsed && (
         <span className="text-sm font-medium">
-          {theme === "dark" ? "Light Mode" : "Dark Mode"}
+          {theme === "dark" ? "Use light mode" : "Use dark mode"}
         </span>
       )}
     </button>

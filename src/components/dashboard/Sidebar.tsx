@@ -109,13 +109,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <motion.aside
-      animate={{ width: collapsed ? 72 : 260 }}
-      transition={{ duration: 0.3, ease: "easeInOut" }}
-      className="h-full border-r border-border bg-background-secondary/90 flex flex-col overflow-hidden flex-shrink-0 shadow-[12px_0_38px_rgba(15,23,42,0.04)]"
+      animate={{ width: collapsed ? 72 : 244 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className="h-full border-r border-border bg-card flex flex-col overflow-hidden flex-shrink-0 shadow-[8px_0_24px_rgba(15,23,42,0.025)]"
     >
       {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-border gap-3">
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center flex-shrink-0">
+        <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5L12 2Z" stroke="white" strokeWidth="1.5" fill="none" />
             <path d="M12 8L16 10.5V15.5L12 18L8 15.5V10.5L12 8Z" stroke="white" strokeWidth="1.5" fill="rgba(255,255,255,0.2)" />
@@ -199,7 +199,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           onClick={logout}
           aria-label="Sign out"
           title="Sign Out"
-          className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-card transition-colors text-danger hover:text-danger-hover"
+          className="min-h-11 w-full flex items-center justify-center p-2 rounded-lg hover:bg-background-secondary transition-colors text-danger hover:text-danger-hover"
         >
           <LogOut size={18} className="flex-shrink-0" />
           {!collapsed && <span className="text-xs font-semibold ml-2">Sign Out</span>}
@@ -207,16 +207,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <button
           onClick={onToggle}
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-          className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-card transition-colors text-foreground-muted hover:text-foreground"
+          className="min-h-11 w-full flex items-center justify-center p-2 rounded-lg hover:bg-background-secondary transition-colors text-foreground-muted hover:text-foreground"
         >
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
       </div>
 
       {/* User profile */}
-      <Link href="/dashboard/profile" className="border-t border-border p-3 block hover:bg-card/40 transition-colors">
+      <Link href="/dashboard/profile" className="border-t border-border p-3 block hover:bg-background-secondary/60 transition-colors">
         <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
-          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center text-sm font-bold text-foreground flex-shrink-0 relative">
+          <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary flex-shrink-0 relative">
             {initials}
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-success border-2 border-background-secondary" />
           </div>

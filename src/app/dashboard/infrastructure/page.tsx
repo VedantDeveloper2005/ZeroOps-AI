@@ -177,12 +177,12 @@ function InfrastructureWorkspace() {
     return <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border border-dashed border-border bg-card/60 px-6 py-16 text-center"><FolderGit2 size={38} className="text-primary" /><h1 className="mt-5 text-xl font-bold text-foreground">Start with a repository</h1><p className="mt-2 text-sm leading-6 text-foreground-muted">Connect GitHub or upload a ZIP so ZeroOps can analyze your application and propose an architecture from real source evidence.</p><button onClick={() => router.push("/dashboard/repositories")} className="ops-primary mt-6 px-5"><ArrowRight size={16} /> Connect application</button></div>;
   }
 
-  return <div className="space-y-5">
-    <div className="mx-auto flex max-w-7xl flex-col gap-3 rounded-2xl border border-border bg-card/70 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-      <div><p className="text-[10px] font-extrabold uppercase tracking-[0.13em] text-primary">Architecture workspace</p><p className="mt-1 text-sm font-bold text-foreground">Choose the application you want ZeroOps to architect.</p></div>
-      <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="min-h-11 max-w-full rounded-xl border border-border bg-background-secondary px-3 text-sm font-semibold text-foreground outline-none focus:border-primary sm:w-80">
+  return <div className="space-y-7">
+    <div className="mx-auto flex max-w-7xl flex-col gap-3 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
+      <div><p className="text-xs font-semibold text-primary">Architecture workspace</p><p className="mt-1 text-sm text-foreground-muted">Choose the application you want to review.</p></div>
+      <label className="block sm:w-80"><span className="mb-1.5 block text-xs font-medium text-foreground-muted">Application</span><select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-primary">
         {projects.map((project) => <option key={project.id} value={project.id}>{project.full_name}</option>)}
-      </select>
+      </select></label>
     </div>
 
     {error && <div role="alert" className="mx-auto max-w-7xl rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-foreground">{error}</div>}
@@ -190,7 +190,7 @@ function InfrastructureWorkspace() {
     {loadingPlan ? <div className="flex min-h-[45vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"><Loader2 className="animate-spin text-primary" size={18} /> Loading architecture decisions…</div> : plan ? <>
       <InfrastructurePlanView plan={plan} onUpdate={updatePlan} onApprove={approvePlan} onRegenerate={generatePlan} busy={busy} />
       <DecisionIntelligencePanel graph={graph} simulation={simulation} accuracy={accuracy} loading={busy || intelligenceBusy} onRunSimulation={runSimulation} />
-      {plan.status === "approved" && <div className="mx-auto flex max-w-7xl flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-bold text-foreground"><Sparkles size={16} className="text-success" /> Architecture approved</p><p className="mt-1 text-xs leading-5 text-foreground-muted">ZeroOps will prepare the internal infrastructure workflow, deploy the application, and validate the resulting service.</p></div><button disabled={busy} onClick={() => void startDeployment()} className="ops-primary shrink-0 px-5 disabled:opacity-60"><Rocket size={16} /> Start deployment</button></div>}
+      {plan.status === "approved" && <div className="mx-auto flex max-w-7xl flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-foreground"><Sparkles size={16} className="text-success" /> Ready when you are</p><p className="mt-1 text-xs leading-5 text-foreground-muted">This approved plan will be checked again before the deployment workflow begins.</p></div><button disabled={busy} onClick={() => void startDeployment()} className="ops-primary shrink-0 px-5 disabled:opacity-60"><Rocket size={16} /> Start deployment</button></div>}
     </> : planMissing ? <div className="mx-auto max-w-2xl rounded-3xl border border-border bg-card p-8 text-center shadow-sm"><Sparkles size={30} className="mx-auto text-primary" /><h1 className="mt-4 text-xl font-bold text-foreground">Create an AI infrastructure plan</h1><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-foreground-muted">We&apos;ll use the application&apos;s recorded analysis to recommend an Azure architecture. Implementation details and credentials stay protected in the deployment engine.</p><button disabled={busy} onClick={() => void generatePlan()} className="ops-primary mt-6 px-5 disabled:opacity-60"><Sparkles size={16} /> Generate plan</button></div> : null}
   </div>;
 }
