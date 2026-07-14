@@ -43,8 +43,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# backend runtime artifacts
 backend/workspace/
 backend/**/__pycache__/
 .git.zip
+*.zip
+/tmp/
+/backend_logs_403/
  

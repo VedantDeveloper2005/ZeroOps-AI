@@ -9,16 +9,17 @@ import { useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 function VerifyEmailContent() {
-  const { verifyEmail, resendVerification } = useAuth();
+  const { verifyEmail, verifyPhone, resendVerification, resendPhoneVerification } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
-  
   const token = searchParams.get("token");
-  
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "phone" | "success" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [email, setEmail] = useState("");
+  const [phoneHint, setPhoneHint] = useState("");
+  const [phoneCode, setPhoneCode] = useState("");
   const [isResending, setIsResending] = useState(false);
+  const [isVerifyingPhone, setIsVerifyingPhone] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
 
   useEffect(() => {
@@ -30,8 +31,13 @@ function VerifyEmailContent() {
 
     const performVerification = async () => {
       try {
-        await verifyEmail(token);
-        setStatus("success");
+        const result = await verifyEmail(token);
+        if ("phone_verification_required" in result) {
+          setPhoneHint(result.phone_hint);
+          setStatus("phone");
+        } else {
+          setStatus("success");
+        }
       } catch (err) {
         setStatus("error");
         setErrorMsg(getErrorMessage(err, "The verification link is invalid or has expired. Please request a new link below."));
@@ -39,7 +45,7 @@ function VerifyEmailContent() {
     };
 
     performVerification();
-  }, [token]);
+  }, [token, verifyEmail]);
 
   const handleResend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +58,38 @@ function VerifyEmailContent() {
       setResendSuccess(true);
     } catch (err) {
       setErrorMsg(getErrorMessage(err, "Could not resend verification email. Please try again."));
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleVerifyPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsVerifyingPhone(true);
+    setErrorMsg("");
+    try {
+      const result = await verifyPhone(phoneCode);
+      if ("id" in result) {
+        router.replace("/dashboard/repositories");
+        return;
+      }
+      setStatus("success");
+    } catch (err) {
+      setErrorMsg(getErrorMessage(err, "The code is invalid or has expired. Please try again."));
+    } finally {
+      setIsVerifyingPhone(false);
+    }
+  };
+
+  const handleResendPhone = async () => {
+    setIsResending(true);
+    setErrorMsg("");
+    try {
+      const result = await resendPhoneVerification();
+      setPhoneHint(result.phone_hint);
+      setResendSuccess(true);
+    } catch (err) {
+      setErrorMsg(getErrorMessage(err, "Could not resend the phone verification code. Please try again."));
     } finally {
       setIsResending(false);
     }
@@ -77,6 +115,28 @@ function VerifyEmailContent() {
           </>
         )}
 
+        {status === "phone" && (
+          <>
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary mb-6">
+              <Mail className="h-8 w-8" />
+            </motion.div>
+            <h1 className="text-2xl font-bold tracking-tight text-white mb-2">Verify your phone</h1>
+            <p className="text-sm text-slate-400 max-w-sm mb-6">Your email is verified. Enter the six-digit code sent to <span className="font-semibold text-white">{phoneHint}</span>.</p>
+            {errorMsg && <div role="alert" aria-live="assertive" className="mb-4 w-full rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs font-medium text-red-200">{errorMsg}</div>}
+            {resendSuccess && <div className="mb-4 w-full rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-xs font-medium text-emerald-300">A new verification code has been sent.</div>}
+            <form onSubmit={handleVerifyPhone} className="w-full space-y-4">
+              <label className="block text-left text-xs font-semibold text-slate-300" htmlFor="phone-verification-code">Verification code</label>
+              <input id="phone-verification-code" type="text" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="123456" required autoFocus className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-center font-mono text-lg tracking-[0.3em] text-white placeholder:tracking-normal placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20" />
+              <button type="submit" disabled={isVerifyingPhone || phoneCode.trim().length !== 6} className="w-full flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60">
+                {isVerifyingPhone ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Verify phone <ArrowRight className="h-4 w-4" /></>}
+              </button>
+            </form>
+            <button type="button" disabled={isResending} onClick={handleResendPhone} className="mt-5 min-h-11 text-xs font-semibold text-primary hover:underline disabled:opacity-60">
+              {isResending ? "Sending..." : "Resend code"}
+            </button>
+          </>
+        )}
+
         {status === "success" && (
           <>
             <motion.div 
@@ -90,7 +150,7 @@ function VerifyEmailContent() {
               Email Verified!
             </h1>
             <p className="text-sm text-slate-400 max-w-sm mb-8">
-              Thank you for verifying your email address. Your ZeroOps AI account is now active.
+              Your contact details are verified and your ZeroOps AI account is ready to use.
             </p>
             <Link
               href="/login"

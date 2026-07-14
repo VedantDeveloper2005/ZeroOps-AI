@@ -20,7 +20,7 @@ export function FloatingAssistant() {
     {
       id: "welcome",
       sender: "ai",
-      text: "Hi! I’m your ZeroOps AI co-pilot. I automatically understand your project context and can help with deployments, performance, and reliability.",
+      text: "Hi! I’m your ZeroOps AI Cloud Architect. Ask me to explain a decision, change a region, compare hosting options, or add a service to your architecture plan.",
       timestamp: new Date(),
     },
   ]);
@@ -60,6 +60,9 @@ export function FloatingAssistant() {
 
     try {
       const res = await api.sendChatRequest(textToSend, projectId);
+      if (res.plan_updated) {
+        addToast("Your infrastructure plan was updated. Review it before deployment.", "success");
+      }
       
       const aiMessage: Message = {
         id: nextMessageId(),
@@ -95,11 +98,11 @@ export function FloatingAssistant() {
   };
 
   const suggestions = [
-    { text: "Why is my deployment failing?", icon: HelpCircle },
-    { text: "Optimize my application.", icon: Sparkles },
-    { text: "Reduce cloud costs.", icon: DollarSign },
-    { text: "Analyze latest deployment.", icon: Activity },
-    { text: "Check application health.", icon: Activity },
+    { text: "Why App Service?", icon: HelpCircle },
+    { text: "Deploy in West Europe.", icon: Sparkles },
+    { text: "Use Azure Container Apps.", icon: Activity },
+    { text: "Add Redis.", icon: Activity },
+    { text: "Can I reduce cost?", icon: DollarSign },
     { text: "Review security risks.", icon: ShieldCheck },
   ];
 
@@ -163,11 +166,11 @@ export function FloatingAssistant() {
                 </div>
                 <div>
                   <h3 className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                    ZeroOps AI Assistant
+                    ZeroOps AI Cloud Architect
                   </h3>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                    <span className="text-[9px] text-foreground-muted font-semibold uppercase tracking-wider">DevOps Team Online</span>
+                    <span className="text-[9px] text-foreground-muted font-semibold uppercase tracking-wider">Architecture advisor</span>
                   </div>
                 </div>
               </div>
@@ -241,7 +244,7 @@ export function FloatingAssistant() {
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Ask about architecture, costs..."
+                placeholder="Ask why a service was chosen, or change the plan..."
                 disabled={loading}
                 className="flex-1 bg-card border border-border rounded-xl px-3.5 py-2.5 text-xs text-foreground placeholder-foreground-muted focus:border-primary focus:outline-none disabled:opacity-50"
               />

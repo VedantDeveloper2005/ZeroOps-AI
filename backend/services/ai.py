@@ -1045,6 +1045,33 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
     url = latest_deployment.get("live_url") if isinstance(latest_deployment, dict) else None
     deployment_status = latest_deployment.get("status") if isinstance(latest_deployment, dict) else "unknown"
     health_score = metadata.get("health_score")
+    architecture = metadata.get("architecture_plan") or {}
+    architecture_components = architecture.get("components") if isinstance(architecture, dict) else []
+    if not isinstance(architecture_components, list):
+        architecture_components = []
+
+    def architecture_component(component_id: str):
+        return next(
+            (component for component in architecture_components if component.get("id") == component_id),
+            None,
+        )
+
+    application_component = architecture_component("application")
+    database_component = architecture_component("database")
+
+    if "why" in msg and "app service" in msg and application_component:
+        return (
+            f"**{application_component.get('service')}** is the current application recommendation because "
+            f"{application_component.get('reason')}\n\n"
+            "It is the deployment target this workspace can validate today. You can change the hosting choice in the architecture plan; unsupported targets remain visible as a draft rather than being silently deployed."
+        )
+
+    if "why" in msg and ("postgres" in msg or "database" in msg) and database_component:
+        return (
+            f"The plan includes **{database_component.get('service')}** because "
+            f"{database_component.get('reason')}\n\n"
+            "The connection, network controls, and retention requirements still need your review before it can be provisioned."
+        )
 
     # 1. Why did deployment fail?
     if "fail" in msg or "error" in msg or "why did" in msg or "broken" in msg:

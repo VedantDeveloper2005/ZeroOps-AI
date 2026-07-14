@@ -40,14 +40,21 @@ def _record_send(email: str) -> None:
                 del _send_timestamps[key]
 
 
-def _smtp_configured() -> bool:
+def is_configured() -> bool:
+    """Return whether transactional email can be delivered in this environment."""
     return bool(config.SMTP_HOST and config.SMTP_USERNAME and config.SMTP_PASSWORD)
+
+
+# Compatibility alias for the earlier private helper. New auth code uses the
+# public name so delivery requirements are explicit and testable.
+def _smtp_configured() -> bool:
+    return is_configured()
 
 
 def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
     """Send an email via SMTP. Returns True on success, False on failure."""
-    if not _smtp_configured():
-        logger.warning("SMTP is not configured. Email to %s was not sent.", to_email)
+    if not is_configured():
+        logger.warning("SMTP is not configured; transactional email was not sent.")
         return False
 
     if _is_rate_limited(to_email):
@@ -76,10 +83,10 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
         server.quit()
 
         _record_send(to_email)
-        logger.info("Email sent to %s: %s", to_email, subject)
+        logger.info("Transactional email sent: %s", subject)
         return True
     except Exception:
-        logger.exception("Failed to send email to %s", to_email)
+        logger.exception("Failed to send transactional email.")
         return False
 
 

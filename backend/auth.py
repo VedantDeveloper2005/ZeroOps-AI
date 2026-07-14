@@ -37,6 +37,7 @@ logger = logging.getLogger("zeroops.auth")
 ACCESS_COOKIE = "session_token"
 REFRESH_COOKIE = "refresh_token"
 MFA_CHALLENGE_COOKIE = "mfa_challenge"
+PHONE_VERIFICATION_CHALLENGE_COOKIE = "phone_verification_challenge"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -92,6 +93,19 @@ def create_mfa_challenge_token(user_id: str, challenge_id: str) -> str:
     )
 
 
+def create_phone_verification_challenge_token(
+    user_id: str,
+    challenge_id: str,
+    context: str,
+) -> str:
+    """Create a short-lived, HttpOnly phone-verification challenge."""
+    return _encode_token(
+        {"sub": user_id, "challenge_id": challenge_id, "context": context},
+        "phone_verification",
+        timedelta(minutes=config.PHONE_OTP_EXPIRE_MINUTES),
+    )
+
+
 def hash_refresh_token(token: str) -> str:
     """Hash high-entropy refresh tokens before persisting them."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -137,6 +151,25 @@ def set_mfa_challenge_cookie(response: Response, challenge_token: str) -> None:
 def clear_mfa_challenge_cookie(response: Response) -> None:
     options = _cookie_options(0)
     response.delete_cookie(MFA_CHALLENGE_COOKIE, path=options["path"], secure=options["secure"], samesite=options["samesite"], httponly=True)
+
+
+def set_phone_verification_challenge_cookie(response: Response, challenge_token: str) -> None:
+    response.set_cookie(
+        PHONE_VERIFICATION_CHALLENGE_COOKIE,
+        challenge_token,
+        **_cookie_options(config.PHONE_OTP_EXPIRE_MINUTES * 60),
+    )
+
+
+def clear_phone_verification_challenge_cookie(response: Response) -> None:
+    options = _cookie_options(0)
+    response.delete_cookie(
+        PHONE_VERIFICATION_CHALLENGE_COOKIE,
+        path=options["path"],
+        secure=options["secure"],
+        samesite=options["samesite"],
+        httponly=True,
+    )
 
 
 def get_session_tokens(user_id: str) -> tuple[str, str]:
@@ -268,6 +301,13 @@ def generate_email_otp(length: int = 6) -> str:
     return "".join(str(secrets.randbelow(10)) for _ in range(length))
 
 
+def mask_phone_number(phone_number: str) -> str:
+    """Return a minimal, non-sensitive hint suitable for the verification UI."""
+    if len(phone_number) <= 4:
+        return "••••"
+    return f"••••{phone_number[-4:]}"
+
+
 def hash_otp(otp: str) -> str:
     """Hash an OTP code with bcrypt for secure storage."""
     return get_password_hash(otp)
@@ -289,6 +329,24 @@ def decode_mfa_challenge(request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your verification session has expired. Sign in again.") from error
     if payload.get("type") != "mfa_challenge" or not payload.get("sub") or not payload.get("challenge_id"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your verification session is invalid. Sign in again.")
+    return payload
+
+
+def decode_phone_verification_challenge(request: Request) -> dict:
+    token = request.cookies.get(PHONE_VERIFICATION_CHALLENGE_COOKIE)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session has expired. Start again.")
+    try:
+        payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+    except JWTError as error:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session has expired. Start again.") from error
+    if (
+        payload.get("type") != "phone_verification"
+        or not payload.get("sub")
+        or not payload.get("challenge_id")
+        or payload.get("context") not in {"signup", "login"}
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session is invalid. Start again.")
     return payload
 
 

@@ -146,6 +146,22 @@ class User(Base):
     email_verification_token = Column(Text, nullable=True)  # SHA-256 hashed
     email_verification_expires_at = Column(DateTime, nullable=True)
 
+    # Phone verification is stored separately from MFA. Phone numbers are
+    # normalized to E.164 before persistence and OTPs are bcrypt-hashed.
+    phone_number = Column(Text, nullable=True, unique=True, index=True)
+    phone_verified = Column(Boolean, nullable=False, default=False)
+    phone_otp_hash = Column(Text, nullable=True)
+    phone_otp_expires_at = Column(DateTime, nullable=True)
+    phone_otp_attempts = Column(Integer, nullable=False, default=0)
+    phone_otp_last_sent_at = Column(DateTime, nullable=True)
+    phone_verification_challenge_id = Column(Text, nullable=True)
+    phone_verification_context = Column(Text, nullable=True)
+
+    # Database-backed lockout complements the per-IP rate limiter and prevents
+    # credential stuffing from simply rotating source addresses.
+    failed_login_count = Column(Integer, nullable=False, default=0)
+    login_locked_until = Column(DateTime, nullable=True)
+
     # Email OTP for MFA
     email_otp_hash = Column(Text, nullable=True)  # bcrypt hashed
     email_otp_expires_at = Column(DateTime, nullable=True)
@@ -192,6 +208,7 @@ class User(Base):
             "mfa_enabled": self.mfa_enabled or False,
             "mfa_method": self.mfa_method or "totp",
             "email_verified": self.email_verified or False,
+            "phone_verified": self.phone_verified or False,
         }
 
 
@@ -229,9 +246,138 @@ class Project(Base):
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="project", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="project", cascade="all, delete-orphan")
     databases = relationship("DatabaseInstance", back_populates="project", cascade="all, delete-orphan")
+    infrastructure_plan = relationship("InfrastructurePlan", back_populates="project", uselist=False, cascade="all, delete-orphan")
+    knowledge_graph_snapshots = relationship("KnowledgeGraphSnapshot", back_populates="project", cascade="all, delete-orphan")
+    digital_twin_simulations = relationship("DigitalTwinSimulation", back_populates="project", cascade="all, delete-orphan")
+    decision_evaluations = relationship("DecisionEvaluation", back_populates="project", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_projects_user_id", "user_id"),
+    )
+
+
+# ──────────────────────────────────────────────
+# INFRASTRUCTURE PLANS (customer-facing architecture, never IaC source)
+# ──────────────────────────────────────────────
+
+class InfrastructurePlan(Base):
+    """The reviewed architecture decision record for one project.
+
+    ``plan_data`` deliberately contains product-facing resource decisions only.
+    Terraform source and Azure credentials are generated and handled by the
+    internal deployment worker; neither belongs in this model or its API.
+    """
+
+    __tablename__ = "infrastructure_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True)
+    provider = Column(Text, nullable=False, default="azure")
+    region = Column(Text, nullable=False)
+    status = Column(Text, nullable=False, default="draft")
+    revision = Column(Integer, nullable=False, default=1)
+    plan_data = Column(JSON, nullable=False, default=dict)
+    approval_note = Column(Text, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    project = relationship("Project", back_populates="infrastructure_plan")
+
+    __table_args__ = (
+        Index("ix_infrastructure_plans_user_id", "user_id"),
+        Index("ix_infrastructure_plans_project_id", "project_id"),
+    )
+
+
+# ----------------------------------------------------------------
+# DECISION INTELLIGENCE (evidence graph, preflight simulations, outcomes)
+# ----------------------------------------------------------------
+
+class KnowledgeGraphSnapshot(Base):
+    """An auditable, redacted relationship graph for a project revision.
+
+    Node properties intentionally contain source facts and architecture choices,
+    never repository contents, cloud credentials, or environment values.
+    """
+
+    __tablename__ = "knowledge_graph_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    plan_revision = Column(Integer, nullable=True)
+    graph_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+    project = relationship("Project", back_populates="knowledge_graph_snapshots")
+
+    __table_args__ = (
+        Index("ix_knowledge_graph_snapshots_user_id", "user_id"),
+        Index("ix_knowledge_graph_snapshots_project_id", "project_id"),
+        Index("ix_knowledge_graph_snapshots_project_revision", "project_id", "plan_revision"),
+    )
+
+
+class DigitalTwinSimulation(Base):
+    """A non-mutating preflight result for an architecture plan revision."""
+
+    __tablename__ = "digital_twin_simulations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    infrastructure_plan_id = Column(UUID(as_uuid=True), ForeignKey("infrastructure_plans.id", ondelete="SET NULL"), nullable=True)
+    plan_revision = Column(Integer, nullable=True)
+    status = Column(Text, nullable=False)
+    risk_score = Column(Integer, nullable=False)
+    risk_level = Column(Text, nullable=False)
+    snapshot = Column(JSON, nullable=False, default=dict)
+    checks = Column(JSON, nullable=False, default=list)
+    summary = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+    project = relationship("Project", back_populates="digital_twin_simulations")
+    infrastructure_plan = relationship("InfrastructurePlan")
+
+    __table_args__ = (
+        Index("ix_digital_twin_simulations_user_id", "user_id"),
+        Index("ix_digital_twin_simulations_project_id", "project_id"),
+        Index("ix_digital_twin_simulations_project_revision", "project_id", "plan_revision"),
+    )
+
+
+class DecisionEvaluation(Base):
+    """Records a real deployment outcome so accuracy is measured, not asserted."""
+
+    __tablename__ = "decision_evaluations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    infrastructure_plan_id = Column(UUID(as_uuid=True), ForeignKey("infrastructure_plans.id", ondelete="SET NULL"), nullable=True)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True, unique=True)
+    plan_revision = Column(Integer, nullable=True)
+    decision_type = Column(Text, nullable=False, default="architecture_deployment")
+    recommendation = Column(JSON, nullable=False, default=dict)
+    status = Column(Text, nullable=False, default="pending")
+    outcome_metadata = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    project = relationship("Project", back_populates="decision_evaluations")
+    infrastructure_plan = relationship("InfrastructurePlan")
+    deployment = relationship("Deployment")
+
+    __table_args__ = (
+        Index("ix_decision_evaluations_user_id", "user_id"),
+        Index("ix_decision_evaluations_project_id", "project_id"),
+        Index("ix_decision_evaluations_status", "status"),
     )
 
 

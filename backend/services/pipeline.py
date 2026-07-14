@@ -639,6 +639,19 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             if project:
                 project.status = "active"
                 project.last_deployed_at = datetime.utcnow()
+
+            evaluation_result = await db.execute(
+                select(models.DecisionEvaluation).filter(
+                    models.DecisionEvaluation.deployment_id == deployment.id
+                )
+            )
+            evaluation = evaluation_result.scalars().first()
+            if evaluation:
+                evaluation.status = "successful"
+                evaluation.outcome_metadata = {
+                    "outcome": "Deployment completed and the public endpoint passed runtime health validation.",
+                    "completed_at": datetime.utcnow().isoformat(),
+                }
                 
             # Create a success notification
             db.add(models.Notification(
@@ -698,6 +711,21 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 project = project_result.scalars().first()
                 if project:
                     project.status = "failed"
+
+                evaluation_result = await db.execute(
+                    select(models.DecisionEvaluation).filter(
+                        models.DecisionEvaluation.deployment_id == deployment.id
+                    )
+                )
+                evaluation = evaluation_result.scalars().first()
+                if evaluation:
+                    evaluation.status = "failed"
+                    # Do not copy raw exceptions into the accuracy ledger:
+                    # provider responses or command output can contain secrets.
+                    evaluation.outcome_metadata = {
+                        "outcome": "Deployment pipeline failed before runtime health validation.",
+                        "completed_at": datetime.utcnow().isoformat(),
+                    }
                     
                 # Create a failure notification
                 db.add(models.Notification(

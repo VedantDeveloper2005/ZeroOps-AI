@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from typing import Optional, List, Any
 from datetime import datetime
@@ -15,6 +17,8 @@ class UserCreate(BaseModel):
     last_name: Optional[str] = None
     firstName: Optional[str] = None
     lastName: Optional[str] = None
+    phone_number: Optional[str] = Field(default=None, max_length=32)
+    phoneNumber: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("password")
     @classmethod
@@ -28,6 +32,16 @@ class UserCreate(BaseModel):
         if not any(not character.isalnum() for character in password):
             raise ValueError("Password must include a symbol.")
         return password
+
+    @field_validator("phone_number", "phoneNumber")
+    @classmethod
+    def validate_phone_number(cls, phone_number: Optional[str]) -> Optional[str]:
+        if phone_number in (None, ""):
+            return None
+        normalized = re.sub(r"[\s().-]", "", phone_number)
+        if not re.fullmatch(r"\+[1-9]\d{7,14}", normalized):
+            raise ValueError("Enter a valid phone number in international format, for example +14155552671.")
+        return normalized
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -50,6 +64,7 @@ class UserResponse(BaseModel):
     mfa_enabled: bool = False
     mfa_method: str = "totp"
     email_verified: bool = False
+    phone_verified: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +77,20 @@ class MFAChallengeResponse(BaseModel):
 class EmailVerificationPending(BaseModel):
     email_verification_required: bool = True
     email: str
+
+
+class PhoneVerificationPending(BaseModel):
+    phone_verification_required: bool = True
+    phone_hint: str
+
+
+class EmailVerificationComplete(BaseModel):
+    email_verified: bool = True
+
+
+class PhoneVerificationComplete(BaseModel):
+    phone_verified: bool = True
+    authenticated: bool = False
 
 
 class EmailVerificationRequest(BaseModel):
@@ -360,6 +389,67 @@ class AIAnalysisResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     project_id: Optional[uuid.UUID] = None
+
+
+# ──────────────────────────────────────────────
+# INFRASTRUCTURE PLAN SCHEMAS
+# ──────────────────────────────────────────────
+
+class InfrastructurePlanUpdate(BaseModel):
+    region: Optional[str] = None
+    component_id: Optional[str] = None
+    service: Optional[str] = None
+    tier: Optional[str] = None
+
+
+class InfrastructurePlanApproval(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class InfrastructurePlanResponse(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    provider: str
+    region: str
+    status: str
+    revision: int
+    plan: dict
+    approval_note: Optional[str] = None
+    approved_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class KnowledgeGraphResponse(BaseModel):
+    project_id: uuid.UUID
+    plan_revision: Optional[int] = None
+    graph: dict
+    generated_at: Optional[str] = None
+
+
+class DigitalTwinSimulationResponse(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    plan_revision: Optional[int] = None
+    model: str
+    status: str
+    risk_score: int
+    risk_level: str
+    summary: str
+    snapshot: dict
+    checks: List[dict]
+    proposed_changes: List[str] = []
+    created_at: Optional[str] = None
+
+
+class DecisionAccuracyResponse(BaseModel):
+    available: bool
+    outcome_accuracy_percent: Optional[float] = None
+    evaluated_deployments: int
+    successful_deployments: int
+    failed_deployments: int
+    pending_deployments: int
+    methodology: str
 
 
 

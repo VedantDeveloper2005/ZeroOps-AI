@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta
 
+import pytest
 from jose import jwt
+from pydantic import ValidationError
 
 try:
-    from backend import auth, config, models
+    from backend import auth, config, models, schemas
 except ImportError:
     import auth
     import config
     import models
+    import schemas
 
 
 def test_totp_accepts_current_code_and_rejects_invalid_code(monkeypatch):
@@ -75,3 +78,33 @@ def test_email_otp_generation_and_validation():
     otp_hash = auth.hash_otp(otp)
     assert auth.verify_otp(otp, otp_hash) is True
     assert auth.verify_otp("123456" if otp != "123456" else "654321", otp_hash) is False
+
+
+def test_phone_verification_challenge_is_short_lived_and_context_bound():
+    token = auth.create_phone_verification_challenge_token(
+        "2b7365a1-b190-4cc3-9ecd-dfe7b3d8f5c6",
+        "phone-single-use-challenge",
+        "signup",
+    )
+    payload = jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+
+    assert payload["type"] == "phone_verification"
+    assert payload["context"] == "signup"
+    assert payload["challenge_id"] == "phone-single-use-challenge"
+    assert payload["exp"] - payload["iat"] == config.PHONE_OTP_EXPIRE_MINUTES * 60
+
+
+def test_phone_number_validation_normalizes_e164_and_rejects_ambiguous_values():
+    user = schemas.UserCreate(
+        email="phone-test@example.com",
+        password="LongPassword1!",
+        phoneNumber="+1 (415) 555-2671",
+    )
+    assert user.phoneNumber == "+14155552671"
+
+    with pytest.raises(ValidationError):
+        schemas.UserCreate(
+            email="phone-test@example.com",
+            password="LongPassword1!",
+            phone_number="415-555-2671",
+        )

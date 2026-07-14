@@ -51,7 +51,7 @@ const navSections: NavSection[] = [
       { name: "Monitoring", icon: BarChart3, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring"] },
       { name: "Incidents", icon: Activity, href: "/dashboard/incidents", activePaths: ["/dashboard/incidents"] },
       { name: "Logs", icon: FileText, href: "/dashboard/logs", activePaths: ["/dashboard/logs"] },
-      { name: "Infrastructure", icon: Network, href: "/dashboard/infrastructure", activePaths: ["/dashboard/infrastructure"] },
+      { name: "Architecture plan", icon: Network, href: "/dashboard/infrastructure", activePaths: ["/dashboard/infrastructure"] },
       { name: "Autoscaling", icon: Gauge, href: "/dashboard/autoscaling", activePaths: ["/dashboard/autoscaling"] },
     ],
   },

@@ -447,6 +447,114 @@ export interface RuntimeResourceMetrics {
   errorRate?: number | null;
 }
 
+export interface InfrastructurePlanComponent {
+  id: string;
+  category: string;
+  service: string;
+  tier: string | null;
+  reason: string;
+  recommended: boolean;
+  deployable: boolean;
+  available_services: string[];
+}
+
+export interface InfrastructurePlan {
+  id: string;
+  project_id: string;
+  provider: string;
+  region: string;
+  status: "draft" | "approved" | "provisioning" | "deployed";
+  revision: number;
+  plan: {
+    cloud: string;
+    region_label: string;
+    application_evidence: {
+      framework?: string | null;
+      runtime?: string | null;
+      package_manager?: string | null;
+      docker_support?: boolean;
+      database_dependencies?: string[];
+      environment_variable_names?: string[];
+    };
+    components: InfrastructurePlanComponent[];
+    cost: { status: string; monthly_estimate: number | null; message: string };
+    deployment_time: { status: string; estimate: string | null; message: string };
+    assessment: {
+      security: { status: string; value: number | null };
+      performance: { status: string; value: number | null };
+      reliability: { status: string; value: number | null };
+      source_findings: string[];
+      unresolved_questions: string[];
+      readiness_message: string;
+    };
+    deployment: { approval_required: boolean; engine: string; summary: string };
+  };
+  approval_note: string | null;
+  approved_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface InfrastructurePlanUpdate {
+  region?: string;
+  component_id?: string;
+  service?: string;
+  tier?: string;
+}
+
+export interface KnowledgeGraphNode {
+  id: string;
+  type: string;
+  label: string;
+  properties: Record<string, unknown>;
+}
+
+export interface KnowledgeGraph {
+  project_id: string;
+  plan_revision: number | null;
+  graph: {
+    version: number;
+    model: string;
+    plan_revision: number | null;
+    nodes: KnowledgeGraphNode[];
+    edges: { source: string; target: string; relation: string }[];
+  };
+  generated_at: string | null;
+}
+
+export interface DigitalTwinSimulation {
+  id: string;
+  project_id: string;
+  plan_revision: number | null;
+  model: string;
+  status: "ready" | "requires_review" | "blocked";
+  risk_score: number;
+  risk_level: "low" | "moderate" | "high" | "critical";
+  summary: string;
+  snapshot: {
+    project?: string;
+    plan_revision?: number | null;
+    region?: string | null;
+    application_service?: string | null;
+    component_count?: number;
+    target_ready?: boolean;
+    target_labels?: string[];
+  };
+  checks: { id: string; label: string; status: "passed" | "warning" | "blocked"; detail: string; risk_weight: number }[];
+  proposed_changes: string[];
+  created_at: string | null;
+}
+
+export interface DecisionAccuracy {
+  available: boolean;
+  outcome_accuracy_percent: number | null;
+  evaluated_deployments: number;
+  successful_deployments: number;
+  failed_deployments: number;
+  pending_deployments: number;
+  methodology: string;
+}
+
 // ──────────────────────────────────────────────
 // API CLIENT
 // ──────────────────────────────────────────────
@@ -472,6 +580,36 @@ export const api = {
   },
 
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+
+  getInfrastructurePlan: (projectId: string) =>
+    request<InfrastructurePlan>(`/api/projects/${projectId}/infrastructure-plan`),
+
+  generateInfrastructurePlan: (projectId: string) =>
+    request<InfrastructurePlan>(`/api/projects/${projectId}/infrastructure-plan/generate`, { method: "POST" }),
+
+  updateInfrastructurePlan: (projectId: string, data: InfrastructurePlanUpdate) =>
+    request<InfrastructurePlan>(`/api/projects/${projectId}/infrastructure-plan`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  approveInfrastructurePlan: (projectId: string, note?: string) =>
+    request<InfrastructurePlan>(`/api/projects/${projectId}/infrastructure-plan/approve`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+
+  getKnowledgeGraph: (projectId: string) =>
+    request<KnowledgeGraph>(`/api/projects/${projectId}/knowledge-graph`),
+
+  simulateDigitalTwin: (projectId: string) =>
+    request<DigitalTwinSimulation>(`/api/projects/${projectId}/digital-twin/simulate`, { method: "POST" }),
+
+  getLatestDigitalTwin: (projectId: string) =>
+    request<DigitalTwinSimulation>(`/api/projects/${projectId}/digital-twin/latest`),
+
+  getDecisionAccuracy: (projectId: string) =>
+    request<DecisionAccuracy>(`/api/projects/${projectId}/decision-accuracy`),
 
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
@@ -533,7 +671,7 @@ export const api = {
     request<AIAnalysis[]>(`/api/projects/${projectId}/analyses`),
 
   sendChatRequest: (message: string, projectId?: string) =>
-    request<{ reply: string }>("/api/ai/chat", {
+    request<{ reply: string; plan_updated?: boolean; infrastructure_plan?: InfrastructurePlan | null }>("/api/ai/chat", {
       method: "POST",
       body: JSON.stringify({ message, project_id: projectId }),
     }),

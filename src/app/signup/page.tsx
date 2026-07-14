@@ -16,6 +16,7 @@ export default function SignupPage() {
     firstName: "",
     lastName: "",
     email: "",
+    phoneNumber: "",
     password: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -36,6 +37,7 @@ export default function SignupPage() {
         formData.firstName,
         formData.lastName,
         formData.email,
+        formData.phoneNumber,
         formData.password
       );
       if (isEmailVerificationPending(res)) {
@@ -142,7 +144,7 @@ export default function SignupPage() {
                   Check your email
                 </h2>
                 <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">
-                  We have sent a verification link to <span className="font-semibold text-white">{formData.email}</span>. Please click the link to verify your account.
+                  We have sent a verification link to <span className="font-semibold text-white">{formData.email}</span>. After confirming it, we will send a one-time code to your phone to finish securing the account.
                 </p>
               </div>
               <div className="w-full pt-4">
@@ -244,6 +246,20 @@ export default function SignupPage() {
                   value={formData.email}
                   onChange={handleInputChange}
                   autoComplete="email"
+                  required
+                />
+
+                <InputGroup
+                  label="Mobile number"
+                  placeholder="+14155552671"
+                  type="tel"
+                  name="phoneNumber"
+                  value={formData.phoneNumber}
+                  onChange={handleInputChange}
+                  autoComplete="tel"
+                  inputMode="tel"
+                  pattern="\+[1-9][0-9]{7,14}"
+                  helperText="Use international format. We will send a one-time verification code after email confirmation."
                   required
                 />
 

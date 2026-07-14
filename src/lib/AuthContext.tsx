@@ -21,6 +21,7 @@ export interface User {
   mfa_enabled?: boolean;
   mfa_method?: string;
   email_verified?: boolean;
+  phone_verified?: boolean;
 }
 
 export interface MfaChallenge {
@@ -33,8 +34,24 @@ export interface EmailVerificationPending {
   email: string;
 }
 
-export type LoginResult = User | MfaChallenge;
-export type SignupResult = User | EmailVerificationPending;
+export interface PhoneVerificationPending {
+  phone_verification_required: true;
+  phone_hint: string;
+}
+
+export interface EmailVerificationComplete {
+  email_verified: true;
+}
+
+export interface PhoneVerificationComplete {
+  phone_verified: true;
+  authenticated: false;
+}
+
+export type LoginResult = User | MfaChallenge | PhoneVerificationPending;
+export type SignupResult = EmailVerificationPending;
+export type VerifyEmailResult = PhoneVerificationPending | EmailVerificationComplete;
+export type VerifyPhoneResult = User | PhoneVerificationComplete;
 
 export function isMfaChallenge(result: LoginResult): result is MfaChallenge {
   return "mfa_required" in result && result.mfa_required === true;
@@ -44,14 +61,24 @@ export function isEmailVerificationPending(result: SignupResult): result is Emai
   return "email_verification_required" in result && result.email_verification_required === true;
 }
 
+export function isPhoneVerificationPending(result: LoginResult | VerifyEmailResult): result is PhoneVerificationPending {
+  return "phone_verification_required" in result && result.phone_verification_required === true;
+}
+
+function isAuthenticatedUser(result: LoginResult | VerifyPhoneResult): result is User {
+  return "id" in result && typeof result.id === "string";
+}
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
   verifyMfa: (code: string) => Promise<User>;
-  signup: (firstName: string, lastName: string, email: string, password: string) => Promise<SignupResult>;
-  verifyEmail: (token: string) => Promise<void>;
+  signup: (firstName: string, lastName: string, email: string, phoneNumber: string, password: string) => Promise<SignupResult>;
+  verifyEmail: (token: string) => Promise<VerifyEmailResult>;
+  verifyPhone: (code: string) => Promise<VerifyPhoneResult>;
   resendVerification: (email: string) => Promise<void>;
+  resendPhoneVerification: () => Promise<PhoneVerificationPending>;
   resendMfaOtp: () => Promise<void>;
   loginWithGitHub: () => void;
   loginWithGoogle: () => void;
@@ -205,7 +232,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await res.json() as LoginResult;
-    if (isMfaChallenge(data)) {
+    if (isMfaChallenge(data) || isPhoneVerificationPending(data)) {
       setUser(null);
       return data;
     }
@@ -240,6 +267,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     firstName: string,
     lastName: string,
     email: string,
+    phoneNumber: string,
     password: string
   ): Promise<SignupResult> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
@@ -252,6 +280,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         firstName,
         lastName,
         email,
+        phoneNumber,
         password,
       }),
     });
@@ -267,13 +296,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return data;
     }
 
-    setUser(data);
-    notifyAuthenticationSucceeded();
-    addToast("Successfully registered account", "success");
-    return data;
+    throw new Error("Unexpected signup response");
   };
 
-  const verifyEmail = async (token: string): Promise<void> => {
+  const verifyEmail = async (token: string): Promise<VerifyEmailResult> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/verify-email`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -285,7 +311,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(errorData.detail || "Verification failed");
     }
     
-    addToast("Email verified successfully! You can now log in.", "success");
+    const data = await res.json() as VerifyEmailResult;
+    if (isPhoneVerificationPending(data)) {
+      addToast("Email verified. Enter the code sent to your phone.", "success");
+    } else {
+      addToast("Email verified successfully! You can now log in.", "success");
+    }
+    return data;
+  };
+
+  const verifyPhone = async (code: string): Promise<VerifyPhoneResult> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/verify-phone`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Phone verification failed" }));
+      throw new Error(errorData.detail || "Phone verification failed");
+    }
+
+    const data = await res.json() as VerifyPhoneResult;
+    if (isAuthenticatedUser(data)) {
+      setUser(data);
+      notifyAuthenticationSucceeded();
+      addToast("Phone number verified. You are signed in.", "success");
+    } else {
+      addToast("Phone number verified. You can now sign in.", "success");
+    }
+    return data;
   };
 
   const resendVerification = async (email: string): Promise<void> => {
@@ -301,6 +356,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     addToast("Verification email has been resent.", "success");
+  };
+
+  const resendPhoneVerification = async (): Promise<PhoneVerificationPending> => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/resend-phone-verification`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ detail: "Failed to resend phone verification code" }));
+      throw new Error(errorData.detail || "Failed to resend phone verification code");
+    }
+    const data = await res.json() as PhoneVerificationPending;
+    addToast("A new phone verification code has been sent.", "success");
+    return data;
   };
 
   const resendMfaOtp = async (): Promise<void> => {
@@ -360,7 +429,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         verifyMfa,
         signup,
         verifyEmail,
+        verifyPhone,
         resendVerification,
+        resendPhoneVerification,
         resendMfaOtp,
         loginWithGitHub,
         loginWithGoogle,

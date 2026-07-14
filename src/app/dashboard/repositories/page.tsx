@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, FileArchive, FolderGi
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, getErrorMessage, type GitHubRepoItem } from "@/lib/api";
+import { api, getErrorMessage, type GitHubRepoItem, type InfrastructurePlan } from "@/lib/api";
 
 type AppReview = {
   framework: string | null;
@@ -36,7 +36,7 @@ export default function RepositoriesPage() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const { user, loginWithGitHub } = useAuth();
-  const { addToast, refreshProjects, refreshStats } = useNotifications();
+  const { addToast, refreshProjects, refreshStats, projects } = useNotifications();
   const [repos, setRepos] = useState<GitHubRepoItem[]>([]);
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepoItem | null>(null);
@@ -45,12 +45,12 @@ export default function RepositoriesPage() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadedProjectId, setUploadedProjectId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [infrastructurePlan, setInfrastructurePlan] = useState<InfrastructurePlan | null>(null);
   const [sourceName, setSourceName] = useState<string | null>(null);
   const [review, setReview] = useState<AppReview | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const githubConnected = user?.github_connected === true;
@@ -98,7 +98,8 @@ export default function RepositoriesPage() {
 
   const chooseRepository = (repo: GitHubRepoItem) => {
     setSelectedRepo(repo);
-    setUploadedProjectId(null);
+    setProjectId(null);
+    setInfrastructurePlan(null);
     setUploadFile(null);
     setSourceName(repo.full_name);
     resetReview();
@@ -109,9 +110,23 @@ export default function RepositoriesPage() {
     setIsReviewing(true);
     setError(null);
     try {
+      const existingProject = projects.find((project) => project.full_name === selectedRepo.full_name && project.branch === branch);
+      const project = existingProject || await api.createProject({
+        name: selectedRepo.name,
+        full_name: selectedRepo.full_name,
+        repo_url: selectedRepo.html_url,
+        framework: "Unknown",
+        language: selectedRepo.language || "Unknown",
+        branch,
+        region: "eastus",
+      });
       const result = await api.analyzeRepo(selectedRepo.full_name, branch);
       setReview(toReview(result));
-      addToast("Your application is ready to review.", "success");
+      const plan = await api.generateInfrastructurePlan(project.id);
+      setProjectId(project.id);
+      setInfrastructurePlan(plan);
+      await Promise.all([refreshProjects(), refreshStats()]);
+      addToast("Your architecture plan is ready to review.", "success");
     } catch (err) {
       setError(getErrorMessage(err, "We couldn't review this repository. Please try again."));
     } finally {
@@ -125,13 +140,15 @@ export default function RepositoriesPage() {
     setError(null);
     try {
       const result = await api.uploadCode(uploadFile);
-      setUploadedProjectId(result.project.id);
+      setProjectId(result.project.id);
       setSourceName(uploadFile.name);
       setSelectedRepo(null);
       setBranch(result.project.branch || "uploaded");
       setReview(toReview(result.analysis));
+      const plan = await api.generateInfrastructurePlan(result.project.id);
+      setInfrastructurePlan(plan);
       await Promise.all([refreshProjects(), refreshStats()]);
-      addToast("Your application is ready to review.", "success");
+      addToast("Your architecture plan is ready to review.", "success");
     } catch (err) {
       setError(getErrorMessage(err, "We couldn't process that ZIP file. Check it and try again."));
     } finally {
@@ -139,36 +156,12 @@ export default function RepositoriesPage() {
     }
   };
 
-  const launch = async () => {
-    if (!review || !sourceName) return;
-    setIsLaunching(true);
-    setError(null);
-    try {
-      const targets = await api.getDeploymentTargets();
-      if (!targets.any_ready) {
-        setError("Connect a hosting account before you launch. The advanced setup keeps these details out of your day-to-day workspace.");
-        return;
-      }
-      const project = uploadedProjectId
-        ? await api.getProject(uploadedProjectId)
-        : await api.createProject({
-          name: selectedRepo?.name || sourceName.replace(/\.zip$/i, ""),
-          full_name: selectedRepo?.full_name || sourceName,
-          repo_url: selectedRepo?.html_url,
-          framework: review.framework || "Unknown",
-          language: selectedRepo?.language || "Unknown",
-          branch,
-          region: "eastus",
-        });
-      const result = await api.startDeployment({ project_id: project.id, branch, environment: "production" });
-      await Promise.all([refreshProjects(), refreshStats()]);
-      addToast("Launch started.", "success");
-      router.push(`/dashboard/deployments?id=${result.deployment_id}&repo=${encodeURIComponent(sourceName)}`);
-    } catch (err) {
-      setError(getErrorMessage(err, "We couldn't start the launch. Please try again."));
-    } finally {
-      setIsLaunching(false);
+  const openInfrastructurePlan = () => {
+    if (!projectId || !infrastructurePlan) {
+      setError("The architecture plan is still being prepared. Please try again.");
+      return;
     }
+    router.push(`/dashboard/infrastructure?project=${projectId}`);
   };
 
   return (
@@ -189,11 +182,12 @@ export default function RepositoriesPage() {
         </section>}
       </>}
 
-      {review && <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7"><div className="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-start sm:justify-between"><div><span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-[10px] font-bold text-success"><CheckCircle2 size={12} /> READY TO REVIEW</span><h2 className="mt-3 text-xl font-bold text-foreground">{sourceName}</h2><p className="mt-1 text-sm text-foreground-muted">Here&apos;s what we found. The technical setup stays in the background.</p></div><button onClick={() => { setReview(null); setError(null); }} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-foreground-muted transition hover:bg-card-hover"><ArrowLeft size={14} /> Change source</button></div>
+      {review && <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7"><div className="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-start sm:justify-between"><div><span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-[10px] font-bold text-success"><CheckCircle2 size={12} /> ARCHITECTURE READY</span><h2 className="mt-3 text-xl font-bold text-foreground">{sourceName}</h2><p className="mt-1 text-sm text-foreground-muted">We&apos;ve translated the repository evidence into an Azure architecture. Implementation details stay in the background.</p></div><button onClick={() => { setReview(null); setInfrastructurePlan(null); setError(null); }} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-foreground-muted transition hover:bg-card-hover"><ArrowLeft size={14} /> Change source</button></div>
         <div className="mt-6 grid gap-4 md:grid-cols-3"><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Application</p><p className="mt-2 text-sm font-bold text-foreground">{review.applicationType || "Application detected"}</p></div><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Framework</p><p className="mt-2 text-sm font-bold text-foreground">{review.framework || "Detected during setup"}</p></div><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Preparation</p><p className="mt-2 text-sm font-bold text-foreground">{review.estimatedBuildTime || "Ready to launch"}</p></div></div>
         {review.explanation && <div className="mt-4 rounded-xl border border-primary/15 bg-primary/[0.04] p-4"><p className="text-xs font-bold text-primary">What we&apos;ll handle</p><p className="mt-1.5 text-sm leading-6 text-foreground-muted">{review.explanation}</p></div>}
         <div className="mt-4 rounded-xl border border-border bg-background-secondary/60 p-4"><p className="text-xs font-bold text-foreground">Configuration</p>{review.environmentVariables.length > 0 ? <><p className="mt-1 text-xs text-foreground-muted">Add these values after launch if your application requires them.</p><div className="mt-3 flex flex-wrap gap-2">{review.environmentVariables.map((variable) => <span key={variable} className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11px] text-foreground-muted">{variable}</span>)}</div></> : <p className="mt-1 text-xs text-foreground-muted">No configuration values were detected.</p>}</div>
-        <div className="mt-6 flex flex-col gap-4 rounded-xl border border-success/20 bg-success/[0.04] p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldCheck size={20} className="mt-0.5 shrink-0 text-success" /><div><p className="text-sm font-bold text-foreground">You approve the launch.</p><p className="mt-1 text-xs leading-5 text-foreground-muted">We&apos;ll only show you progress and decisions that need your input. You can review activity at any time.</p></div></div><button onClick={launch} disabled={isLaunching} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:opacity-60">{isLaunching ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />} Launch application</button></div>
+        {infrastructurePlan && <div className="mt-4 rounded-xl border border-primary/20 bg-primary/[0.04] p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-primary">AI infrastructure plan</p><div className="mt-3 flex flex-wrap gap-2">{infrastructurePlan.plan.components.slice(0, 6).map((component) => <span key={component.id} className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-foreground">{component.service}</span>)}</div><p className="mt-3 text-xs leading-5 text-foreground-muted">Review resource choices, cost-validation status, and approval controls before deployment.</p></div>}
+        <div className="mt-6 flex flex-col gap-4 rounded-xl border border-success/20 bg-success/[0.04] p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldCheck size={20} className="mt-0.5 shrink-0 text-success" /><div><p className="text-sm font-bold text-foreground">You approve the architecture before launch.</p><p className="mt-1 text-xs leading-5 text-foreground-muted">Review cloud decisions now. ZeroOps will only start the deployment workflow after you approve the plan.</p></div></div><button onClick={openInfrastructurePlan} disabled={!infrastructurePlan} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:opacity-60"><ArrowRight size={16} /> Review architecture plan</button></div>
       </motion.section>}
     </div>
   );

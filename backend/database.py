@@ -207,6 +207,9 @@ async def run_migrations():
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_path TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS failure_reason TEXT",
         "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS infrastructure_metadata JSON",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS approval_note TEXT",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
         
         # Deployment Metrics project_id column
         "ALTER TABLE deployment_metrics ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE",
@@ -253,6 +256,8 @@ async def run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_environments_project_id ON environments(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_deployment_metrics_project_id ON deployment_metrics(project_id)",
         "CREATE INDEX IF NOT EXISTS ix_ai_analyses_project_id ON ai_analyses(project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_infrastructure_plans_user_id ON infrastructure_plans(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_infrastructure_plans_project_id ON infrastructure_plans(project_id)",
         
         # New tables' indexes
         "CREATE INDEX IF NOT EXISTS ix_deployment_recommendations_user_id ON deployment_recommendations(user_id)",
@@ -305,6 +310,17 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expires_at TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_otp_hash TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_otp_expires_at TIMESTAMP",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_otp_hash TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_otp_expires_at TIMESTAMP",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_otp_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_otp_last_sent_at TIMESTAMP",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verification_challenge_id TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verification_context TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMP",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone_number_unique ON users(phone_number) WHERE phone_number IS NOT NULL",
     ]
 
     try:

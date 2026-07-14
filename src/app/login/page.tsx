@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Circle, Eye, EyeOff, ArrowRight, ShieldCheck } from "lucide-react";
 import Link from "next/link";
-import { isMfaChallenge, useAuth } from "@/lib/AuthContext";
+import { isMfaChallenge, isPhoneVerificationPending, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function LoginPage() {
-  const { login, verifyMfa, resendMfaOtp, loginWithGitHub, loginWithGoogle } = useAuth();
+  const { login, verifyMfa, verifyPhone, resendMfaOtp, resendPhoneVerification, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
@@ -19,8 +19,10 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [requiresMfa, setRequiresMfa] = useState(false);
+  const [requiresPhoneVerification, setRequiresPhoneVerification] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaMethod, setMfaMethod] = useState("totp");
+  const [phoneHint, setPhoneHint] = useState("");
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [resendOtpSuccess, setResendOtpSuccess] = useState(false);
 
@@ -58,6 +60,11 @@ export default function LoginPage() {
         setMfaMethod(result.mfa_method || "totp");
         setMfaCode("");
         setIsSubmitting(false);
+      } else if (isPhoneVerificationPending(result)) {
+        setRequiresPhoneVerification(true);
+        setPhoneHint(result.phone_hint);
+        setMfaCode("");
+        setIsSubmitting(false);
       }
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Invalid email or password"));
@@ -88,6 +95,37 @@ export default function LoginPage() {
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Unable to verify your authentication code"));
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePhoneSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const result = await verifyPhone(mfaCode);
+      if ("id" in result) return;
+      setRequiresPhoneVerification(false);
+      setError("Phone verified. Please sign in again.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Unable to verify your phone code"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResendPhone = async () => {
+    setIsResendingOtp(true);
+    setResendOtpSuccess(false);
+    setError(null);
+    try {
+      const result = await resendPhoneVerification();
+      setPhoneHint(result.phone_hint);
+      setResendOtpSuccess(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to resend code"));
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -178,10 +216,12 @@ export default function LoginPage() {
           {/* Header */}
           <div className="space-y-2 text-left w-full">
             <h2 className="text-3xl font-medium tracking-tight text-foreground">
-              {requiresMfa ? "Verify it’s you" : "Sign In to ZeroOps"}
+              {requiresMfa || requiresPhoneVerification ? "Verify your identity" : "Sign In to ZeroOps"}
             </h2>
             <p className="text-foreground-muted text-sm">
-              {requiresMfa
+              {requiresPhoneVerification
+                ? `Enter the six-digit verification code sent to ${phoneHint || "your phone"}.`
+                : requiresMfa
                 ? mfaMethod === "email"
                   ? "Enter the six-digit verification code sent to your email address."
                   : "Enter a code from your authenticator app or one of your recovery codes."
@@ -190,7 +230,7 @@ export default function LoginPage() {
           </div>
 
           {/* Social login buttons */}
-          {!requiresMfa && <div className="grid grid-cols-2 gap-4 w-full">
+          {!requiresMfa && !requiresPhoneVerification && <div className="grid grid-cols-2 gap-4 w-full">
             <SocialButton
               icon={ChromeIcon}
               label={isGoogleRedirecting ? "Redirecting..." : "Google"}
@@ -220,7 +260,7 @@ export default function LoginPage() {
           </div>}
 
           {/* Divider */}
-          {!requiresMfa && <div className="relative w-full flex py-2 items-center justify-center">
+          {!requiresMfa && !requiresPhoneVerification && <div className="relative w-full flex py-2 items-center justify-center">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-border/40"></div>
             </div>
@@ -230,13 +270,34 @@ export default function LoginPage() {
           </div>}
 
           {/* Form */}
-          <form onSubmit={requiresMfa ? handleMfaSubmit : handleSubmit} className="space-y-4 w-full text-left">
+          <form onSubmit={requiresPhoneVerification ? handlePhoneSubmit : requiresMfa ? handleMfaSubmit : handleSubmit} className="space-y-4 w-full text-left">
             {error && (
               <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
                 {error}
               </div>
             )}
-            {requiresMfa ? (
+            {requiresPhoneVerification ? (
+              <>
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-foreground-muted">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-foreground"><ShieldCheck size={16} className="text-primary" /> Phone verification</div>
+                  <span>Enter the one-time code sent to <span className="font-semibold text-foreground">{phoneHint || "your phone"}</span>. The code expires quickly and can only be used once.</span>
+                </div>
+
+                {resendOtpSuccess && <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs font-medium text-left">Verification code has been resent.</div>}
+
+                <InputGroup label="Verification code" placeholder="123456" type="text" value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" inputMode="numeric" autoFocus required />
+
+                <div className="text-right">
+                  <button type="button" disabled={isResendingOtp} onClick={handleResendPhone} className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline transition-colors disabled:opacity-60">
+                    {isResendingOtp ? "Resending..." : "Resend verification code"}
+                  </button>
+                </div>
+
+                <button type="submit" disabled={isSubmitting || mfaCode.trim().length !== 6} className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
+                  {isSubmitting ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><span>Verify and continue</span><ArrowRight size={16} /></>}
+                </button>
+              </>
+            ) : requiresMfa ? (
               <>
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-foreground-muted">
                   <div className="mb-2 flex items-center gap-2 font-semibold text-foreground"><ShieldCheck size={16} className="text-primary" /> Multi-factor authentication</div>
@@ -337,7 +398,7 @@ export default function LoginPage() {
           </form>
 
           {/* Footer Link */}
-          {requiresMfa ? (
+          {requiresMfa || requiresPhoneVerification ? (
             <button type="button" onClick={() => window.location.assign("/login")} className="w-full text-center text-sm text-foreground-muted hover:text-primary transition-all">
               Use a different sign-in method
             </button>

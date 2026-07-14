@@ -158,9 +158,8 @@ async def get_github_user_email(token: str) -> Optional[str]:
         for email_obj in emails:
             if email_obj.get("verified"):
                 return email_obj["email"]
-        # Last resort: first email
-        if emails:
-            return emails[0].get("email")
+        # Do not fall back to an unverified address. The callback treats this
+        # value as proof of account email ownership.
         return None
 
 
@@ -482,4 +481,3 @@ async def fetch_github_repo_context(token: str, repo_full_name: str, branch: Opt
             "scanned_vars": scanned_vars,
             "default_branch": branch
         }
-

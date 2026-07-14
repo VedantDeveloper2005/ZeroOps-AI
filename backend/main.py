@@ -42,14 +42,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, agent, email_service
+    from backend.services import git, ai, pipeline, vault, agent, email_service, sms_service, planner, terraform_generator, decision_intelligence
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, agent, email_service
+    from services import git, ai, pipeline, vault, agent, email_service, sms_service, planner, terraform_generator, decision_intelligence
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -110,7 +110,9 @@ async def csrf_middleware(request: Request, call_next):
         path.startswith("/api/auth/google") or
         path.startswith("/api/auth/oauth") or
         path.startswith("/api/auth/verify-email") or
-        path.startswith("/api/auth/resend-verification")
+        path.startswith("/api/auth/resend-verification") or
+        path.startswith("/api/auth/verify-phone") or
+        path.startswith("/api/auth/resend-phone-verification")
     ):
         return await call_next(request)
         
@@ -207,6 +209,12 @@ async def rate_limit_middleware(request: Request, call_next):
         limit = 10
     elif path.startswith("/api/auth/resend-verification"):
         category = "resend_verification"
+        limit = 5
+    elif path.startswith("/api/auth/verify-phone"):
+        category = "verify_phone"
+        limit = 10
+    elif path.startswith("/api/auth/resend-phone-verification"):
+        category = "resend_phone_verification"
         limit = 5
     else:
         category = "default"
@@ -410,6 +418,7 @@ def map_user_response(user: models.User) -> schemas.UserResponse:
         mfa_enabled=user.mfa_enabled or False,
         mfa_method=user.mfa_method or "totp",
         email_verified=user.email_verified or False,
+        phone_verified=user.phone_verified or False,
     )
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -470,6 +479,18 @@ async def recover_interrupted_deployments() -> None:
             project = project_result.scalars().first()
             if project and project.status == "deploying":
                 project.status = "failed"
+            evaluation_result = await db.execute(
+                select(models.DecisionEvaluation).filter(
+                    models.DecisionEvaluation.deployment_id == deployment.id
+                )
+            )
+            evaluation = evaluation_result.scalars().first()
+            if evaluation and evaluation.status == "pending":
+                evaluation.status = "failed"
+                evaluation.outcome_metadata = {
+                    "outcome": "Deployment worker restarted before runtime health validation.",
+                    "completed_at": now.isoformat(),
+                }
         await db.commit()
         logger.warning("Marked %s interrupted deployment(s) as failed after restart.", len(deployments))
 
@@ -725,10 +746,9 @@ async def begin_mfa_challenge(
         otp_code = auth.generate_email_otp(config.EMAIL_OTP_LENGTH)
         user.email_otp_hash = auth.hash_otp(otp_code)
         user.email_otp_expires_at = datetime.utcnow() + timedelta(minutes=config.EMAIL_OTP_EXPIRE_MINUTES)
-        
-        email_sent = email_service.send_otp_email(user.email, otp_code)
-        if not email_sent:
-            logger.warning(f"Could not send OTP email to {user.email}")
+        if not email_service.send_otp_email(user.email, otp_code):
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="We could not deliver the verification code. Please try again shortly.")
 
     db.add(user)
     await db.commit()
@@ -737,11 +757,81 @@ async def begin_mfa_challenge(
     return schemas.MFAChallengeResponse(mfa_method=user.mfa_method)
 
 
-@app.post("/api/auth/signup", response_model=Union[schemas.UserResponse, schemas.EmailVerificationPending])
+def requires_phone_verification(user: models.User) -> bool:
+    """Require phone proof for newly enrolled local accounts without locking out legacy users."""
+    return bool(config.PHONE_VERIFICATION_REQUIRED and user.provider == "local" and user.phone_number)
+
+
+def require_local_enrollment_delivery() -> None:
+    if not email_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Account verification email delivery is not configured. Please try again later.",
+        )
+    if config.PHONE_VERIFICATION_REQUIRED and not sms_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Phone verification delivery is not configured. Please try again later.",
+        )
+
+
+async def prepare_and_send_verification_email(user: models.User) -> None:
+    """Stage a fresh, single-use verification link without persisting its raw token."""
+    raw_token = auth.create_verification_token()
+    user.email_verification_token = auth.hash_verification_token(raw_token)
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
+    verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
+    if not email_service.send_verification_email(user.email, verification_url):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="We could not deliver the verification email. Please try again shortly.",
+        )
+
+
+async def begin_phone_verification(
+    user: models.User,
+    response: Response,
+    db: AsyncSession,
+    context: str,
+) -> schemas.PhoneVerificationPending:
+    """Send one phone OTP and bind it to a short-lived, HttpOnly challenge cookie."""
+    if not user.phone_number:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Add and verify a phone number before signing in.")
+    if not sms_service.is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Phone verification delivery is unavailable. Please try again later.")
+
+    challenge_id = secrets.token_urlsafe(32)
+    otp_code = auth.generate_email_otp(config.PHONE_OTP_LENGTH)
+    user.phone_verification_challenge_id = challenge_id
+    user.phone_verification_context = context
+    user.phone_otp_hash = auth.hash_otp(otp_code)
+    user.phone_otp_expires_at = datetime.utcnow() + timedelta(minutes=config.PHONE_OTP_EXPIRE_MINUTES)
+    user.phone_otp_attempts = 0
+    user.phone_otp_last_sent_at = datetime.utcnow()
+    db.add(user)
+
+    if not sms_service.send_phone_verification_otp(user.phone_number, otp_code):
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="We could not deliver the phone verification code. Please try again shortly.")
+
+    await db.commit()
+    auth.set_phone_verification_challenge_cookie(
+        response,
+        auth.create_phone_verification_challenge_token(str(user.id), challenge_id, context),
+    )
+    return schemas.PhoneVerificationPending(phone_hint=auth.mask_phone_number(user.phone_number))
+
+
+@app.post("/api/auth/signup", response_model=schemas.EmailVerificationPending)
 async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
     first_name = req.first_name or req.firstName
     last_name = req.last_name or req.lastName
+    phone_number = req.phone_number or req.phoneNumber
+
+    require_local_enrollment_delivery()
+    if config.PHONE_VERIFICATION_REQUIRED and not phone_number:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A phone number is required to protect this account.")
 
     try:
         result = await db.execute(select(models.User).filter(models.User.email == email))
@@ -751,9 +841,21 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         raise HTTPException(status_code=503, detail="Database is currently unavailable.") from error
 
     if existing_user:
-        raise HTTPException(status_code=409, detail="A user with this email address already exists.")
-
-    use_verification = email_service._smtp_configured()
+        # Do not reveal whether the address is registered. For an unfinished
+        # local enrollment, safely replace the old one-time link and resend it.
+        if existing_user.provider == "local" and not existing_user.email_verified:
+            try:
+                await prepare_and_send_verification_email(existing_user)
+                db.add(existing_user)
+                await db.commit()
+            except HTTPException:
+                await db.rollback()
+                raise
+            except Exception as error:
+                await db.rollback()
+                logger.exception("Unable to resend an enrollment verification email.")
+                raise HTTPException(status_code=503, detail="Unable to continue account verification. Please try again later.") from error
+        return schemas.EmailVerificationPending(email=email)
 
     new_user = models.User(
         id=uuid.uuid4(),
@@ -763,15 +865,10 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         password_hash=auth.get_password_hash(req.password),
         provider="local",
         plan="starter",
-        last_primary_auth_at=datetime.utcnow(),
-        email_verified=not use_verification,
+        phone_number=phone_number,
+        email_verified=False,
+        phone_verified=False,
     )
-
-    raw_token = None
-    if use_verification:
-        raw_token = auth.create_verification_token()
-        new_user.email_verification_token = auth.hash_verification_token(raw_token)
-        new_user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
 
     try:
         db.add(new_user)
@@ -784,24 +881,20 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
             type="success",
             category="system",
         ))
+        await prepare_and_send_verification_email(new_user)
         await db.commit()
-        await db.refresh(new_user)
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as error:
         await db.rollback()
         logger.exception("Unable to create a new user account.")
         raise HTTPException(status_code=500, detail="Failed to register user.") from error
 
-    if use_verification and raw_token:
-        verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
-        email_sent = email_service.send_verification_email(email, verification_url)
-        if not email_sent:
-            logger.warning(f"Could not send verification email to {email}")
-        return schemas.EmailVerificationPending(email=email)
-
-    return await establish_authenticated_session(new_user, response, db)
+    return schemas.EmailVerificationPending(email=email)
 
 
-@app.post("/api/auth/login", response_model=Union[schemas.UserResponse, schemas.MFAChallengeResponse])
+@app.post("/api/auth/login", response_model=Union[schemas.UserResponse, schemas.MFAChallengeResponse, schemas.PhoneVerificationPending])
 async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
     try:
@@ -811,20 +904,30 @@ async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = D
         logger.exception("Unable to look up a login account.")
         raise HTTPException(status_code=503, detail="Database is currently unavailable.") from error
 
+    if user and user.login_locked_until and user.login_locked_until > datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many sign-in attempts. Please try again later.")
+
     if not user or not user.password_hash or not auth.verify_password(req.password, user.password_hash):
+        if user:
+            user.failed_login_count = (user.failed_login_count or 0) + 1
+            if user.failed_login_count >= config.LOGIN_MAX_FAILURES:
+                user.login_locked_until = datetime.utcnow() + timedelta(minutes=config.LOGIN_LOCKOUT_MINUTES)
+                user.failed_login_count = 0
+            db.add(user)
+            await db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
     if not user.email_verified:
-        if not email_service._smtp_configured():
-            user.email_verified = True
-            db.add(user)
-            await db.commit()
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Please verify your email address before signing in.",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before signing in.",
+        )
 
+    if requires_phone_verification(user) and not user.phone_verified:
+        return await begin_phone_verification(user, response, db, "login")
+
+    user.failed_login_count = 0
+    user.login_locked_until = None
     user.last_primary_auth_at = datetime.utcnow()
     db.add(user)
     await db.commit()
@@ -930,7 +1033,8 @@ async def verify_mfa_challenge(
 @app.get("/api/auth/mfa/status", response_model=schemas.MFAStatusResponse)
 async def get_mfa_status(current_user: models.User = Depends(auth.get_current_user)):
     return schemas.MFAStatusResponse(
-        enabled=bool(current_user.mfa_enabled and current_user.mfa_secret_encrypted),
+        enabled=bool(current_user.mfa_enabled and (current_user.mfa_secret_encrypted or current_user.mfa_method == "email")),
+        method=current_user.mfa_method or "totp",
         recovery_codes_remaining=len(current_user.mfa_recovery_code_hashes or []),
     )
 
@@ -1051,8 +1155,12 @@ async def disable_mfa(
     return {"status": "success", "message": "Multi-factor authentication has been disabled."}
 
 
-@app.post("/api/auth/verify-email")
-async def verify_email(req: schemas.EmailVerificationRequest, db: AsyncSession = Depends(get_db)):
+@app.post("/api/auth/verify-email", response_model=Union[schemas.PhoneVerificationPending, schemas.EmailVerificationComplete])
+async def verify_email(
+    req: schemas.EmailVerificationRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """Verify user's email address using the token sent via email."""
     token_hash = auth.hash_verification_token(req.token)
     result = await db.execute(
@@ -1072,8 +1180,14 @@ async def verify_email(req: schemas.EmailVerificationRequest, db: AsyncSession =
     user.email_verification_token = None
     user.email_verification_expires_at = None
     db.add(user)
+
+    if requires_phone_verification(user):
+        # begin_phone_verification commits both verification steps only after
+        # the SMS provider accepts delivery.
+        return await begin_phone_verification(user, response, db, "signup")
+
     await db.commit()
-    return {"status": "success", "message": "Email verified successfully."}
+    return schemas.EmailVerificationComplete()
 
 
 @app.post("/api/auth/resend-verification")
@@ -1083,32 +1197,137 @@ async def resend_verification(req: schemas.ResendVerificationRequest, db: AsyncS
     result = await db.execute(select(models.User).filter(models.User.email == email))
     user = result.scalars().first()
     
-    if not user:
-        # Prevent email enumeration
-        return {"status": "success", "message": "If this email is registered, we have sent a verification link."}
+    # Always return the same acknowledgement so this endpoint cannot be used
+    # to discover whether an account exists or has already been verified.
+    acknowledgement = {"status": "success", "message": "If this email can be verified, we have sent a verification link."}
+    if not user or user.email_verified:
+        return acknowledgement
+    if not email_service.is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Verification email delivery is unavailable. Please try again later.")
 
-    if user.email_verified:
-        return {"status": "success", "message": "Email is already verified."}
-
-    if not email_service._smtp_configured():
-        # Auto-verify if SMTP is disabled
-        user.email_verified = True
+    try:
+        await prepare_and_send_verification_email(user)
         db.add(user)
         await db.commit()
-        return {"status": "success", "message": "Email auto-verified."}
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as error:
+        await db.rollback()
+        logger.exception("Unable to resend verification email.")
+        raise HTTPException(status_code=503, detail="Unable to send verification email. Please try again later.") from error
+    return acknowledgement
 
-    raw_token = auth.create_verification_token()
-    user.email_verification_token = auth.hash_verification_token(raw_token)
-    user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
+
+@app.post("/api/auth/verify-phone", response_model=Union[schemas.UserResponse, schemas.PhoneVerificationComplete])
+async def verify_phone(
+    req: schemas.MFACodeRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    challenge = auth.decode_phone_verification_challenge(request)
+    try:
+        user_id = uuid.UUID(challenge["sub"])
+    except ValueError as error:
+        auth.clear_phone_verification_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session is invalid. Start again.") from error
+
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    user = result.scalars().first()
+    if (
+        not user
+        or not user.phone_number
+        or not user.phone_otp_hash
+        or not user.phone_otp_expires_at
+        or user.phone_otp_expires_at < datetime.utcnow()
+        or not user.phone_verification_challenge_id
+        or user.phone_verification_context != challenge["context"]
+        or not hmac.compare_digest(user.phone_verification_challenge_id, challenge["challenge_id"])
+    ):
+        auth.clear_phone_verification_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session has expired. Start again.")
+
+    if user.phone_otp_attempts >= config.PHONE_OTP_MAX_ATTEMPTS:
+        user.phone_otp_hash = None
+        user.phone_otp_expires_at = None
+        user.phone_verification_challenge_id = None
+        user.phone_verification_context = None
+        db.add(user)
+        await db.commit()
+        auth.clear_phone_verification_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many invalid codes. Start phone verification again.")
+
+    if not auth.verify_otp(req.code, user.phone_otp_hash):
+        user.phone_otp_attempts = (user.phone_otp_attempts or 0) + 1
+        db.add(user)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That verification code is invalid. Please try again.")
+
+    context = user.phone_verification_context
+    user.phone_verified = True
+    user.phone_otp_hash = None
+    user.phone_otp_expires_at = None
+    user.phone_otp_attempts = 0
+    user.phone_otp_last_sent_at = None
+    user.phone_verification_challenge_id = None
+    user.phone_verification_context = None
+    user.failed_login_count = 0
+    user.login_locked_until = None
+    if context == "login":
+        user.last_primary_auth_at = datetime.utcnow()
     db.add(user)
+
+    if context == "login":
+        authenticated_user = await establish_authenticated_session(user, response, db)
+        auth.clear_phone_verification_challenge_cookie(response)
+        return authenticated_user
+
     await db.commit()
+    auth.clear_phone_verification_challenge_cookie(response)
+    return schemas.PhoneVerificationComplete(authenticated=False)
 
-    verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
-    email_sent = email_service.send_verification_email(email, verification_url)
-    if not email_sent:
-         raise HTTPException(status_code=500, detail="Failed to send verification email.")
 
-    return {"status": "success", "message": "Verification link sent."}
+@app.post("/api/auth/resend-phone-verification", response_model=schemas.PhoneVerificationPending)
+async def resend_phone_verification(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    challenge = auth.decode_phone_verification_challenge(request)
+    try:
+        user_id = uuid.UUID(challenge["sub"])
+    except ValueError as error:
+        auth.clear_phone_verification_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session is invalid. Start again.") from error
+
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    user = result.scalars().first()
+    if (
+        not user
+        or not user.phone_number
+        or not user.phone_verification_challenge_id
+        or user.phone_verification_context != challenge["context"]
+        or not hmac.compare_digest(user.phone_verification_challenge_id, challenge["challenge_id"])
+    ):
+        auth.clear_phone_verification_challenge_cookie(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your phone verification session has expired. Start again.")
+
+    now = datetime.utcnow()
+    if user.phone_otp_last_sent_at and (now - user.phone_otp_last_sent_at).total_seconds() < config.PHONE_OTP_RESEND_COOLDOWN_SECONDS:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Please wait before requesting another code.")
+
+    otp_code = auth.generate_email_otp(config.PHONE_OTP_LENGTH)
+    user.phone_otp_hash = auth.hash_otp(otp_code)
+    user.phone_otp_expires_at = now + timedelta(minutes=config.PHONE_OTP_EXPIRE_MINUTES)
+    user.phone_otp_attempts = 0
+    user.phone_otp_last_sent_at = now
+    db.add(user)
+    if not sms_service.send_phone_verification_otp(user.phone_number, otp_code):
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="We could not deliver the phone verification code. Please try again shortly.")
+    await db.commit()
+    return schemas.PhoneVerificationPending(phone_hint=auth.mask_phone_number(user.phone_number))
 
 
 @app.post("/api/auth/mfa/method")
@@ -1182,11 +1401,10 @@ async def resend_mfa_otp(
     user.email_otp_hash = auth.hash_otp(otp_code)
     user.email_otp_expires_at = datetime.utcnow() + timedelta(minutes=config.EMAIL_OTP_EXPIRE_MINUTES)
     db.add(user)
+    if not email_service.send_otp_email(user.email, otp_code):
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="We could not deliver the verification code. Please try again shortly.")
     await db.commit()
-
-    email_sent = email_service.send_otp_email(user.email, otp_code)
-    if not email_sent:
-        raise HTTPException(status_code=500, detail="Failed to send verification email.")
 
     return {"status": "success", "message": "Verification code resent."}
 
@@ -2575,13 +2793,51 @@ async def start_deploy(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project.id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    approved_plan = plan_result.scalars().first()
+    if not approved_plan or approved_plan.status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Review and approve the AI infrastructure plan before starting a deployment.",
+        )
+
     azure_connection = await get_active_azure_connection(db, current_user.id)
     target_status = deployment_targets.status_payload(azure_connection)
-    if not target_status["any_ready"]:
+    preflight = await _run_digital_twin(
+        db,
+        project=project,
+        user_id=current_user.id,
+        plan=approved_plan,
+    )
+    await db.flush()
+    if preflight.status == "blocked":
+        db.add(models.ActivityEvent(
+            user_id=current_user.id,
+            project_id=project.id,
+            action="Deployment blocked by digital twin preflight",
+            details=f"Execution did not start because the deterministic preflight returned risk {preflight.risk_score}/100.",
+        ))
+        await db.commit()
         raise HTTPException(
-            status_code=400,
-            detail="Connect your Azure application environment before starting a deployment."
+            status_code=409,
+            detail="Deployment was blocked by the digital-twin preflight. Resolve its blocking architecture, source-evidence, or Azure-target checks before retrying.",
         )
+
+    plan_for_engine = {**(approved_plan.plan_data or {}), "revision": approved_plan.revision}
+    try:
+        internal_iac = terraform_generator.generate_internal_artifact(
+            plan=plan_for_engine,
+            project_id=str(project.id),
+            project_name=project.name,
+        )
+    except Exception:
+        logger.exception("Internal infrastructure artifact generation failed for project %s", project.id)
+        raise HTTPException(status_code=503, detail="The internal infrastructure engine could not prepare this deployment.")
 
     analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
     try:
@@ -2614,9 +2870,46 @@ async def start_deploy(
             "target": deployment_targets.metadata_for_target(selected_target),
             "available_targets": target_status["targets"],
             "source_type": project.source_type,
+            "architecture_plan": {
+                "id": str(approved_plan.id),
+                "revision": approved_plan.revision,
+                "provider": approved_plan.provider,
+                "region": approved_plan.region,
+            },
+            "preflight": {
+                "id": str(preflight.id),
+                "status": preflight.status,
+                "risk_score": preflight.risk_score,
+                "risk_level": preflight.risk_level,
+                "model": decision_intelligence.RISK_MODEL_VERSION,
+            },
+            "internal_iac": internal_iac,
         }
     )
     db.add(deployment)
+    await db.flush()
+
+    db.add(models.DecisionEvaluation(
+        user_id=current_user.id,
+        project_id=project.id,
+        infrastructure_plan_id=approved_plan.id,
+        deployment_id=deployment.id,
+        plan_revision=approved_plan.revision,
+        recommendation={
+            "provider": approved_plan.provider,
+            "region": approved_plan.region,
+            "components": [
+                {
+                    "id": component.get("id"),
+                    "service": component.get("service"),
+                    "tier": component.get("tier"),
+                }
+                for component in (approved_plan.plan_data or {}).get("components", [])
+            ],
+            "preflight_risk_score": preflight.risk_score,
+        },
+        status="pending",
+    ))
 
     # Update project status
     project.status = "deploying"
@@ -3170,6 +3463,491 @@ async def analyze_repo(
     return analysis
 
 
+def _serialize_infrastructure_plan(plan: models.InfrastructurePlan) -> schemas.InfrastructurePlanResponse:
+    """Return the architecture decision record without internal IaC details."""
+    return schemas.InfrastructurePlanResponse(
+        id=plan.id,
+        project_id=plan.project_id,
+        provider=plan.provider,
+        region=plan.region,
+        status=plan.status,
+        revision=plan.revision,
+        plan=plan.plan_data or {},
+        approval_note=plan.approval_note,
+        approved_at=format_dt(plan.approved_at),
+        created_at=format_dt(plan.created_at),
+        updated_at=format_dt(plan.updated_at),
+    )
+
+
+async def _owned_project_or_404(
+    project_id: uuid.UUID,
+    current_user: models.User,
+    db: AsyncSession,
+) -> models.Project:
+    result = await db.execute(
+        select(models.Project).filter(
+            models.Project.id == project_id,
+            models.Project.user_id == current_user.id,
+        )
+    )
+    project = result.scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return project
+
+
+def _analysis_to_plan_facts(analysis: models.AIAnalysis | None) -> dict[str, Any]:
+    if not analysis:
+        return {}
+    return {
+        "framework": analysis.framework,
+        "runtime": analysis.runtime,
+        "package_manager": analysis.package_manager,
+        "docker_support": analysis.docker_support,
+        "database_dependencies": analysis.database_dependencies or [],
+        "environment_variables": analysis.environment_variables or [],
+        "vulnerabilities": analysis.vulnerabilities or [],
+        "unresolved_questions": [],
+    }
+
+
+async def _latest_project_analysis(db: AsyncSession, project_id: uuid.UUID) -> models.AIAnalysis | None:
+    result = await db.execute(
+        select(models.AIAnalysis)
+        .filter(models.AIAnalysis.project_id == project_id)
+        .order_by(desc(models.AIAnalysis.created_at))
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+def _serialize_digital_twin(simulation: models.DigitalTwinSimulation) -> schemas.DigitalTwinSimulationResponse:
+    checks = simulation.checks or []
+    return schemas.DigitalTwinSimulationResponse(
+        id=simulation.id,
+        project_id=simulation.project_id,
+        plan_revision=simulation.plan_revision,
+        model=decision_intelligence.RISK_MODEL_VERSION,
+        status=simulation.status,
+        risk_score=simulation.risk_score,
+        risk_level=simulation.risk_level,
+        summary=simulation.summary,
+        snapshot=simulation.snapshot or {},
+        checks=checks,
+        proposed_changes=[
+            str(check.get("detail"))
+            for check in checks
+            if isinstance(check, dict) and check.get("status") in {"blocked", "warning"} and check.get("detail")
+        ],
+        created_at=format_dt(simulation.created_at),
+    )
+
+
+async def _store_knowledge_graph(
+    db: AsyncSession,
+    *,
+    project: models.Project,
+    user_id: uuid.UUID,
+    analysis: models.AIAnalysis | None,
+    plan: models.InfrastructurePlan,
+) -> models.KnowledgeGraphSnapshot:
+    """Persist an auditable graph after an architecture decision changes."""
+    graph = decision_intelligence.build_knowledge_graph(
+        project=project,
+        analysis=_analysis_to_plan_facts(analysis),
+        plan=plan.plan_data or {},
+        plan_revision=plan.revision,
+    )
+    snapshot = models.KnowledgeGraphSnapshot(
+        user_id=user_id,
+        project_id=project.id,
+        plan_revision=plan.revision,
+        graph_data=graph,
+    )
+    db.add(snapshot)
+    return snapshot
+
+
+async def _run_digital_twin(
+    db: AsyncSession,
+    *,
+    project: models.Project,
+    user_id: uuid.UUID,
+    plan: models.InfrastructurePlan,
+) -> models.DigitalTwinSimulation:
+    """Run and persist a non-mutating deployment preflight."""
+    analysis = await _latest_project_analysis(db, project.id)
+    azure_connection = await get_active_azure_connection(db, user_id)
+    result = decision_intelligence.simulate_digital_twin(
+        project=project,
+        plan=plan.plan_data or {},
+        plan_revision=plan.revision,
+        analysis=_analysis_to_plan_facts(analysis),
+        target_status=deployment_targets.status_payload(azure_connection),
+        plan_approved=plan.status == "approved",
+    )
+    simulation = models.DigitalTwinSimulation(
+        user_id=user_id,
+        project_id=project.id,
+        infrastructure_plan_id=plan.id,
+        plan_revision=plan.revision,
+        status=result["status"],
+        risk_score=result["risk_score"],
+        risk_level=result["risk_level"],
+        snapshot=result["snapshot"],
+        checks=result["checks"],
+        summary=result["summary"],
+    )
+    db.add(simulation)
+    return simulation
+
+
+@app.post(
+    "/api/projects/{project_id}/infrastructure-plan/generate",
+    response_model=schemas.InfrastructurePlanResponse,
+)
+async def generate_infrastructure_plan(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or refresh a project architecture plan from recorded source facts."""
+    project = await _owned_project_or_404(project_id, current_user, db)
+    analysis = await _latest_project_analysis(db, project.id)
+    if not analysis:
+        raise HTTPException(status_code=409, detail="Analyze this application before creating an infrastructure plan.")
+
+    azure_connection = await get_active_azure_connection(db, current_user.id)
+    region = str(
+        getattr(azure_connection, "region", None)
+        or project.region
+        or config.AZURE_DEFAULT_REGION
+    )
+    plan_data = planner.build_infrastructure_plan(
+        _analysis_to_plan_facts(analysis),
+        region=region,
+        azure_connection=azure_connection,
+    )
+
+    existing_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project.id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    record = existing_result.scalars().first()
+    if record:
+        record.provider = "azure"
+        record.region = region
+        record.status = "draft"
+        record.revision += 1
+        record.plan_data = plan_data
+        record.approval_note = None
+        record.approved_at = None
+    else:
+        record = models.InfrastructurePlan(
+            user_id=current_user.id,
+            project_id=project.id,
+            provider="azure",
+            region=region,
+            plan_data=plan_data,
+        )
+        db.add(record)
+
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project.id,
+        action="Infrastructure plan generated",
+        details="Architecture decisions were generated from the latest repository analysis.",
+    ))
+    await _store_knowledge_graph(
+        db,
+        project=project,
+        user_id=current_user.id,
+        analysis=analysis,
+        plan=record,
+    )
+    await db.commit()
+    await db.refresh(record)
+    return _serialize_infrastructure_plan(record)
+
+
+@app.get(
+    "/api/projects/{project_id}/infrastructure-plan",
+    response_model=schemas.InfrastructurePlanResponse,
+)
+async def get_infrastructure_plan(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project_id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="No infrastructure plan has been generated for this project yet.")
+    return _serialize_infrastructure_plan(plan)
+
+
+@app.patch(
+    "/api/projects/{project_id}/infrastructure-plan",
+    response_model=schemas.InfrastructurePlanResponse,
+)
+async def update_infrastructure_plan(
+    project_id: uuid.UUID,
+    req: schemas.InfrastructurePlanUpdate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not any([req.region, req.component_id, req.service, req.tier]):
+        raise HTTPException(status_code=400, detail="Choose a region or resource setting to update.")
+    project = await _owned_project_or_404(project_id, current_user, db)
+    result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project_id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate an infrastructure plan before modifying it.")
+
+    try:
+        plan.plan_data = planner.apply_plan_update(
+            plan.plan_data or {},
+            region=req.region,
+            component_id=req.component_id,
+            service=req.service,
+            tier=req.tier,
+        )
+        if req.region:
+            plan.region = planner.normalize_region(req.region)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    plan.status = "draft"
+    plan.revision += 1
+    plan.approval_note = None
+    plan.approved_at = None
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project_id,
+        action="Infrastructure plan updated",
+        details="Architecture settings changed; approval is required again before deployment.",
+    ))
+    await _store_knowledge_graph(
+        db,
+        project=project,
+        user_id=current_user.id,
+        analysis=await _latest_project_analysis(db, project.id),
+        plan=plan,
+    )
+    await db.commit()
+    await db.refresh(plan)
+    return _serialize_infrastructure_plan(plan)
+
+
+@app.post(
+    "/api/projects/{project_id}/infrastructure-plan/approve",
+    response_model=schemas.InfrastructurePlanResponse,
+)
+async def approve_infrastructure_plan(
+    project_id: uuid.UUID,
+    req: schemas.InfrastructurePlanApproval,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project_id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate an infrastructure plan before approval.")
+
+    application = next(
+        (component for component in (plan.plan_data or {}).get("components", []) if component.get("id") == "application"),
+        None,
+    )
+    if not application or application.get("service") != "Azure App Service":
+        raise HTTPException(
+            status_code=409,
+            detail="This workspace can currently deploy approved Azure App Service plans only. Select App Service or configure another deployment engine before approval.",
+        )
+
+    plan.status = "approved"
+    plan.approval_note = req.note.strip() if req.note else None
+    plan.approved_at = datetime.utcnow()
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project_id,
+        action="Infrastructure plan approved",
+        details="The approved architecture is ready for the internal deployment workflow.",
+    ))
+    await _store_knowledge_graph(
+        db,
+        project=project,
+        user_id=current_user.id,
+        analysis=await _latest_project_analysis(db, project.id),
+        plan=plan,
+    )
+    # Approval records the current preflight for review but never treats it as
+    # an execution command. The deployment endpoint evaluates it again.
+    await _run_digital_twin(db, project=project, user_id=current_user.id, plan=plan)
+    await db.commit()
+    await db.refresh(plan)
+    return _serialize_infrastructure_plan(plan)
+
+
+@app.get(
+    "/api/projects/{project_id}/knowledge-graph",
+    response_model=schemas.KnowledgeGraphResponse,
+)
+async def get_knowledge_graph(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the latest redacted evidence graph for the selected plan revision."""
+    project = await _owned_project_or_404(project_id, current_user, db)
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project.id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = plan_result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate an infrastructure plan before viewing its evidence graph.")
+
+    snapshot_result = await db.execute(
+        select(models.KnowledgeGraphSnapshot)
+        .filter(
+            models.KnowledgeGraphSnapshot.project_id == project.id,
+            models.KnowledgeGraphSnapshot.user_id == current_user.id,
+            models.KnowledgeGraphSnapshot.plan_revision == plan.revision,
+        )
+        .order_by(desc(models.KnowledgeGraphSnapshot.created_at))
+        .limit(1)
+    )
+    snapshot = snapshot_result.scalars().first()
+    if not snapshot:
+        snapshot = await _store_knowledge_graph(
+            db,
+            project=project,
+            user_id=current_user.id,
+            analysis=await _latest_project_analysis(db, project.id),
+            plan=plan,
+        )
+        await db.commit()
+        await db.refresh(snapshot)
+
+    return schemas.KnowledgeGraphResponse(
+        project_id=project.id,
+        plan_revision=snapshot.plan_revision,
+        graph=snapshot.graph_data or {},
+        generated_at=format_dt(snapshot.created_at),
+    )
+
+
+@app.post(
+    "/api/projects/{project_id}/digital-twin/simulate",
+    response_model=schemas.DigitalTwinSimulationResponse,
+)
+async def simulate_project_digital_twin(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run a non-mutating preflight. It does not create or change Azure resources."""
+    project = await _owned_project_or_404(project_id, current_user, db)
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project.id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = plan_result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=409, detail="Generate an infrastructure plan before running a preflight.")
+
+    simulation = await _run_digital_twin(db, project=project, user_id=current_user.id, plan=plan)
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project.id,
+        action="Digital twin preflight completed",
+        details=f"Preflight status: {simulation.status}; deterministic risk score: {simulation.risk_score}/100.",
+    ))
+    await db.commit()
+    await db.refresh(simulation)
+    return _serialize_digital_twin(simulation)
+
+
+@app.get(
+    "/api/projects/{project_id}/digital-twin/latest",
+    response_model=schemas.DigitalTwinSimulationResponse,
+)
+async def get_latest_digital_twin(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project.id,
+            models.InfrastructurePlan.user_id == current_user.id,
+        )
+    )
+    plan = plan_result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="No infrastructure plan exists for this project yet.")
+    result = await db.execute(
+        select(models.DigitalTwinSimulation)
+        .filter(
+            models.DigitalTwinSimulation.project_id == project_id,
+            models.DigitalTwinSimulation.user_id == current_user.id,
+            models.DigitalTwinSimulation.plan_revision == plan.revision,
+        )
+        .order_by(desc(models.DigitalTwinSimulation.created_at))
+        .limit(1)
+    )
+    simulation = result.scalars().first()
+    if not simulation:
+        raise HTTPException(status_code=404, detail="No digital-twin preflight has been recorded for this project yet.")
+    return _serialize_digital_twin(simulation)
+
+
+@app.get(
+    "/api/projects/{project_id}/decision-accuracy",
+    response_model=schemas.DecisionAccuracyResponse,
+)
+async def get_decision_accuracy(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _owned_project_or_404(project_id, current_user, db)
+    result = await db.execute(
+        select(models.DecisionEvaluation)
+        .filter(
+            models.DecisionEvaluation.project_id == project_id,
+            models.DecisionEvaluation.user_id == current_user.id,
+        )
+        .order_by(desc(models.DecisionEvaluation.created_at))
+    )
+    return schemas.DecisionAccuracyResponse(**decision_intelligence.decision_accuracy_summary(result.scalars().all()))
+
+
 @app.post("/api/ai/chat")
 async def ai_chat(
     req: schemas.ChatRequest,
@@ -3368,8 +4146,50 @@ async def ai_chat(
             health_score = int(health_total / health_weight)
             project_metadata["health_score"] = health_score
 
+    plan_payload = None
+    plan_updated = False
+    plan_update_summary = None
+    if req.project_id:
+        plan_result = await db.execute(
+            select(models.InfrastructurePlan).filter(
+                models.InfrastructurePlan.project_id == req.project_id,
+                models.InfrastructurePlan.user_id == current_user.id,
+            )
+        )
+        architecture_plan = plan_result.scalars().first()
+        if architecture_plan:
+            current_plan = architecture_plan.plan_data or {}
+            project_metadata["architecture_plan"] = {
+                "cloud": current_plan.get("cloud"),
+                "region": current_plan.get("region_label"),
+                "components": current_plan.get("components", []),
+            }
+            updated_plan, plan_update_summary = planner.apply_chat_instruction(current_plan, req.message)
+            if plan_update_summary:
+                architecture_plan.plan_data = updated_plan
+                architecture_plan.status = "draft"
+                architecture_plan.revision += 1
+                architecture_plan.approval_note = None
+                architecture_plan.approved_at = None
+                db.add(models.ActivityEvent(
+                    user_id=current_user.id,
+                    project_id=req.project_id,
+                    action="Infrastructure plan updated by AI chat",
+                    details=plan_update_summary,
+                ))
+                await db.commit()
+                await db.refresh(architecture_plan)
+                plan_updated = True
+            plan_payload = _serialize_infrastructure_plan(architecture_plan).model_dump(mode="json")
+
     reply = ai.generate_chat_response(req.message, project_metadata)
-    return {"reply": reply}
+    if plan_update_summary:
+        reply = f"{reply}\n\nArchitecture plan updated: {plan_update_summary} Review and approve the revised plan before deployment."
+    return {
+        "reply": reply,
+        "plan_updated": plan_updated,
+        "infrastructure_plan": plan_payload,
+    }
 
 
 
@@ -3834,6 +4654,7 @@ async def github_oauth_callback(
             user.github_connected = True
             user.provider = "github"
             user.provider_id = github_id
+            user.email_verified = True
             if not user.avatar_url:
                 user.avatar_url = github_avatar
             await db.commit()
@@ -3861,6 +4682,7 @@ async def github_oauth_callback(
                 github_avatar_url=github_avatar,
                 github_access_token_encrypted=encrypted_token,
                 github_connected=True,
+                email_verified=True,
             )
             db.add(user)
             await db.flush()
@@ -3887,7 +4709,7 @@ async def github_oauth_callback(
     db.add(user)
     await db.commit()
 
-    if user.mfa_enabled and user.mfa_secret_encrypted:
+    if user.mfa_enabled and (user.mfa_secret_encrypted or user.mfa_method == "email"):
         redirect_response = get_redirect_and_clean_state(f"{frontend_url}/login?mfa=required&provider=github")
         await begin_mfa_challenge(user, redirect_response, db)
         return redirect_response
@@ -3994,6 +4816,7 @@ async def google_oauth_callback(
             user.google_id = google_id
             user.provider = "google"
             user.provider_id = google_id
+            user.email_verified = True
             if not user.avatar_url:
                 user.avatar_url = google_user.get("picture")
             if not user.first_name:
@@ -4012,6 +4835,7 @@ async def google_oauth_callback(
                 google_id=google_id,
                 avatar_url=google_user.get("picture"),
                 plan="starter",
+                email_verified=True,
             )
             db.add(user)
             await db.flush()
@@ -4032,7 +4856,7 @@ async def google_oauth_callback(
         logger.exception("Google OAuth database error")
         return redirect_to_frontend("oauth_error=server_error")
 
-    if user.mfa_enabled and user.mfa_secret_encrypted:
+    if user.mfa_enabled and (user.mfa_secret_encrypted or user.mfa_method == "email"):
         redirect_response = redirect_to_frontend("mfa=required")
         await begin_mfa_challenge(user, redirect_response, db)
         return redirect_response

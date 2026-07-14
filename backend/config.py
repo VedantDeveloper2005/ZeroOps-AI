@@ -105,6 +105,21 @@ EMAIL_VERIFICATION_EXPIRE_HOURS = int(os.getenv("EMAIL_VERIFICATION_EXPIRE_HOURS
 EMAIL_OTP_EXPIRE_MINUTES = int(os.getenv("EMAIL_OTP_EXPIRE_MINUTES", "10"))
 EMAIL_OTP_LENGTH = int(os.getenv("EMAIL_OTP_LENGTH", "6"))
 
+# Phone verification is a possession check during local-account enrollment.
+# SMS is intentionally not the default MFA factor; TOTP remains the stronger
+# second factor for sign-in. Twilio is used through its HTTPS API so no SDK or
+# credentials ever reach the browser.
+PHONE_VERIFICATION_REQUIRED = os.getenv("PHONE_VERIFICATION_REQUIRED", "true").lower() == "true"
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+PHONE_OTP_EXPIRE_MINUTES = int(os.getenv("PHONE_OTP_EXPIRE_MINUTES", "5"))
+PHONE_OTP_LENGTH = int(os.getenv("PHONE_OTP_LENGTH", "6"))
+PHONE_OTP_MAX_ATTEMPTS = int(os.getenv("PHONE_OTP_MAX_ATTEMPTS", "5"))
+PHONE_OTP_RESEND_COOLDOWN_SECONDS = int(os.getenv("PHONE_OTP_RESEND_COOLDOWN_SECONDS", "60"))
+LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "10"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
 # Azure deployment configuration. User-specific Azure targets are stored in DB.
 AZURE_DEFAULT_REGION = os.getenv("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = os.getenv("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
@@ -183,6 +198,17 @@ if IS_PRODUCTION and not ALLOWED_HOSTS:
 
 if IS_PRODUCTION and not DB_SSL_VERIFY:
     raise RuntimeError("DB_SSL_VERIFY must remain enabled when APP_ENV=production.")
+
+if IS_PRODUCTION and not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD):
+    raise RuntimeError("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD must be configured when APP_ENV=production.")
+
+if IS_PRODUCTION and PHONE_VERIFICATION_REQUIRED and not (
+    TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER
+):
+    raise RuntimeError(
+        "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER must be configured "
+        "when phone verification is required in production."
+    )
 
 if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
