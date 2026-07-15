@@ -2858,7 +2858,7 @@ async def start_deploy(
     deployment = models.Deployment(
         user_id=current_user.id,
         project_id=project.id,
-        status="building",
+        status="queued",
         environment=req.environment,
         branch=req.branch,
         version=version,
@@ -2884,6 +2884,16 @@ async def start_deploy(
                 "model": decision_intelligence.RISK_MODEL_VERSION,
             },
             "internal_iac": internal_iac,
+            "stages": [
+                {"id": 1, "label": "Repository Analysis", "status": "pending", "duration": ""},
+                {"id": 2, "label": "Infrastructure Planning", "status": "pending", "duration": ""},
+                {"id": 3, "label": "Terraform Generation", "status": "pending", "duration": ""},
+                {"id": 4, "label": "Infrastructure Provisioning", "status": "pending", "duration": ""},
+                {"id": 5, "label": "Application Deployment", "status": "pending", "duration": ""},
+                {"id": 6, "label": "Health Checks", "status": "pending", "duration": ""},
+                {"id": 7, "label": "Monitoring", "status": "pending", "duration": ""},
+                {"id": 8, "label": "Deployment Complete", "status": "pending", "duration": ""}
+            ]
         }
     )
     db.add(deployment)
@@ -2923,9 +2933,6 @@ async def start_deploy(
         category="deployment"
     ))
 
-    await db.commit()
-    await db.refresh(deployment)
-
     clone_token = None
     if current_user.github_access_token_encrypted:
         try:
@@ -2933,10 +2940,20 @@ async def start_deploy(
         except Exception:
             clone_token = None
 
-    # Run pipeline in background via enqueuer dispatcher abstraction
-    pipeline.enqueue_deployment(
-        str(deployment.id), project.full_name, req.branch, background_tasks, clone_token
+    # Create deployment job record in Postgres queue
+    job = models.DeploymentJob(
+        id=uuid.uuid4(),
+        user_id=current_user.id,
+        project_id=project.id,
+        deployment_id=deployment.id,
+        status="queued",
+        cloud="azure",
+        region=approved_plan.region,
+        github_token=clone_token,
     )
+    db.add(job)
+    await db.commit()
+    await db.refresh(deployment)
 
     return {
         "status": "success",
@@ -5720,6 +5737,72 @@ async def health_deployments(db: AsyncSession = Depends(get_db)):
 
 @app.get("/healthz")
 async def healthz():
+    return {"status": "ok"}
+
+@app.post("/api/deployments/{deploy_id}/events")
+async def receive_worker_event(
+    deploy_id: str,
+    event: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    import uuid
+    from sqlalchemy.orm.attributes import flag_modified
+    
+    # Broadcast to active WebSockets
+    await pipeline.broadcast_message(deploy_id, event)
+    
+    # Process event type
+    evt_type = event.get("type")
+    if evt_type == "log":
+        msg = event.get("text", "")
+        lvl = event.get("lineType", "info").upper()
+        line_num = event.get("line_number", 1)
+        db_log = models.DeploymentLog(
+            deployment_id=uuid.UUID(deploy_id),
+            line_number=line_num,
+            level=lvl,
+            message=msg,
+            timestamp=datetime.utcnow()
+        )
+        db.add(db_log)
+        await db.commit()
+    elif evt_type == "stage":
+        res = await db.execute(
+            select(models.Deployment).filter(models.Deployment.id == uuid.UUID(deploy_id))
+        )
+        dep = res.scalars().first()
+        if dep:
+            meta = dep.infrastructure_metadata or {}
+            stages = meta.setdefault("stages", [])
+            stage_found = False
+            for stage in stages:
+                if stage.get("id") == event.get("id"):
+                    stage["status"] = event.get("status")
+                    stage["duration"] = event.get("duration", "")
+                    stage_found = True
+                    break
+            if not stage_found:
+                stages.append({
+                    "id": event.get("id"),
+                    "label": event.get("label", ""),
+                    "status": event.get("status"),
+                    "duration": event.get("duration", "")
+                })
+            flag_modified(dep, "infrastructure_metadata")
+            await db.commit()
+    elif evt_type == "status":
+        res = await db.execute(
+            select(models.Deployment).filter(models.Deployment.id == uuid.UUID(deploy_id))
+        )
+        dep = res.scalars().first()
+        if dep:
+            status_val = event.get("status")
+            dep.status = status_val
+            if status_val in ("running", "failed", "stopped", "rolled_back"):
+                dep.completed_at = datetime.utcnow()
+                if status_val == "failed":
+                    dep.failure_reason = event.get("failure_reason", "Worker build failure")
+            await db.commit()
     return {"status": "ok"}
 
 

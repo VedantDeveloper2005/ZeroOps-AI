@@ -321,6 +321,25 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS login_locked_until TIMESTAMP",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone_number_unique ON users(phone_number) WHERE phone_number IS NOT NULL",
+        """CREATE TABLE IF NOT EXISTS deployment_jobs (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL,
+            project_id UUID NOT NULL,
+            deployment_id UUID,
+            status TEXT NOT NULL DEFAULT 'queued',
+            cloud TEXT NOT NULL DEFAULT 'azure',
+            region TEXT NOT NULL,
+            terraform_status TEXT NOT NULL DEFAULT 'pending',
+            deployment_status TEXT NOT NULL DEFAULT 'pending',
+            estimated_cost TEXT,
+            terraform_path TEXT,
+            github_token TEXT,
+            logs TEXT,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_jobs_status ON deployment_jobs(status)",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_jobs_project_id ON deployment_jobs(project_id)",
     ]
 
     try:

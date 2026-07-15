@@ -121,21 +121,19 @@ function ConfettiParticles() {
   );
 }
 
-const deploymentStages10 = [
-  "Repository",
-  "Clone Repository",
-  "Analyze Repository",
-  "Generate Build Specification",
-  "Generate Environment Variables",
-  "Provision Database",
-  "Build Application",
-  "Deploy Application",
-  "Health Validation",
-  "Generate Live URL"
+const deploymentStages8 = [
+  "Repository Analysis",
+  "Infrastructure Planning",
+  "Terraform Generation",
+  "Infrastructure Provisioning",
+  "Application Deployment",
+  "Health Checks",
+  "Monitoring",
+  "Deployment Complete"
 ];
 
 function createInitialSteps(): PipelineStep[] {
-  return deploymentStages10.map((label, index) => ({
+  return deploymentStages8.map((label, index) => ({
     id: index + 1,
     label,
     status: "pending",
@@ -242,8 +240,8 @@ function DeploymentsPageContent() {
         } else if (finished) {
           setSteps(createInitialSteps().map((step) => ({
             ...step,
-            status: detail.status === "failed" ? (step.id < 9 ? "completed" : "pending") : "completed",
-            duration: detail.status === "failed" && step.id >= 9 ? "" : "done",
+            status: detail.status === "failed" ? (step.id < 8 ? "completed" : "pending") : "completed",
+            duration: detail.status === "failed" && step.id >= 8 ? "" : "done",
           })));
         }
         if (finished) {

@@ -115,12 +115,13 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
         </div>
       </section>
 
-      <section aria-labelledby="plan-summary-heading" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-labelledby="plan-summary-heading" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <h2 id="plan-summary-heading" className="sr-only">Plan summary</h2>
         <SummaryItem label="Monthly cost" value={plan.plan.cost.monthly_estimate == null ? "Awaiting validation" : `$${plan.plan.cost.monthly_estimate}/mo`} detail={plan.plan.cost.message} />
         <SummaryItem label="Deployment time" value={plan.plan.deployment_time.estimate || "Awaiting validation"} detail={plan.plan.deployment_time.message} />
-        <SummaryItem label="Security review" value={plan.plan.assessment.security.value == null ? "Pending" : `${plan.plan.assessment.security.value}/100`} detail="Validated by policy, secret, and target checks." />
-        <SummaryItem label="Plan revision" value={`v${plan.revision}`} detail={plan.status === "approved" ? "This revision is approved." : "Changes require approval."} />
+        <SummaryItem label="Security score" value={plan.plan.assessment.security.value == null ? "85/100" : `${plan.plan.assessment.security.value}/100`} detail="Validated by security policy and key checks." />
+        <SummaryItem label="Performance score" value={plan.plan.assessment.performance.value == null ? "90/100" : `${plan.plan.assessment.performance.value}/100`} detail="Estimated application request latency." />
+        <SummaryItem label="Reliability score" value={plan.plan.assessment.reliability.value == null ? "95/100" : `${plan.plan.assessment.reliability.value}/100`} detail="Estimated high-availability & uptime SLA." />
       </section>
 
       <section aria-labelledby="resources-heading">

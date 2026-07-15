@@ -967,3 +967,38 @@ class DatabaseInstance(Base):
     __table_args__ = (
         Index("ix_database_instances_project_id", "project_id"),
     )
+
+
+# ──────────────────────────────────────────────
+# DEPLOYMENT QUEUE JOBS
+# ──────────────────────────────────────────────
+
+class DeploymentJob(Base):
+    __tablename__ = "deployment_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    status = Column(Text, nullable=False, default="queued")  # queued, running, completed, failed
+    cloud = Column(Text, nullable=False, default="azure")
+    region = Column(Text, nullable=False)
+    terraform_status = Column(Text, nullable=False, default="pending")  # pending, running, completed, failed
+    deployment_status = Column(Text, nullable=False, default="pending")  # pending, running, completed, failed
+    estimated_cost = Column(Text, nullable=True)
+    terraform_path = Column(Text, nullable=True)
+    github_token = Column(Text, nullable=True)
+    logs = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+
+    __table_args__ = (
+        Index("ix_deployment_jobs_status", "status"),
+        Index("ix_deployment_jobs_project_id", "project_id"),
+    )
+
