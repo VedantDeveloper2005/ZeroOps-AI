@@ -94,6 +94,7 @@ class PhoneVerificationComplete(BaseModel):
 
 
 class EmailVerificationRequest(BaseModel):
+    email: EmailStr
     token: str
 
 

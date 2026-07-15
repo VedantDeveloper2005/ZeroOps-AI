@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Circle, Eye, EyeOff, ArrowRight, Mail } from "lucide-react";
+import { Circle, Eye, EyeOff, ArrowRight, Mail, Loader2, Smartphone, ShieldCheck, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
-import { isEmailVerificationPending, useAuth } from "@/lib/AuthContext";
+import { isEmailVerificationPending, isPhoneVerificationPending, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function SignupPage() {
-  const { signup, loginWithGitHub, loginWithGoogle } = useAuth();
+  const { signup, verifyEmail, verifyPhone, resendVerification, resendPhoneVerification, loginWithGitHub, loginWithGoogle } = useAuth();
+  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
@@ -21,7 +23,14 @@ export default function SignupPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [verificationRequired, setVerificationRequired] = useState(false);
+  
+  // Verification states
+  const [verifyStep, setVerifyStep] = useState<"none" | "email" | "phone">("none");
+  const [otpCode, setOtpCode] = useState("");
+  const [phoneHint, setPhoneHint] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -41,12 +50,78 @@ export default function SignupPage() {
         formData.password
       );
       if (isEmailVerificationPending(res)) {
-        setVerificationRequired(true);
-        setIsSubmitting(false);
+        setVerifyStep("email");
+        setOtpCode("");
       }
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Failed to create account"));
+    } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleVerifyEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsVerifying(true);
+    setError(null);
+    setResendSuccess(false);
+    try {
+      const result = await verifyEmail(formData.email, otpCode);
+      if (isPhoneVerificationPending(result)) {
+        setPhoneHint(result.phone_hint);
+        setVerifyStep("phone");
+        setOtpCode("");
+      } else {
+        router.replace("/login?verified=true");
+      }
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Invalid or expired verification code"));
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleVerifyPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsVerifying(true);
+    setError(null);
+    setResendSuccess(false);
+    try {
+      await verifyPhone(otpCode);
+      router.replace("/login?verified=true");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Invalid or expired phone verification code"));
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleResendEmailOtp = async () => {
+    setIsResending(true);
+    setError(null);
+    setResendSuccess(false);
+    try {
+      await resendVerification(formData.email);
+      setResendSuccess(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to resend email code"));
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleResendPhoneOtp = async () => {
+    setIsResending(true);
+    setError(null);
+    setResendSuccess(false);
+    try {
+      const res = await resendPhoneVerification();
+      setPhoneHint(res.phone_hint);
+      setResendSuccess(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to resend phone code"));
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -134,26 +209,90 @@ export default function SignupPage() {
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="w-full max-w-xl space-y-8 lg:space-y-6 sm:space-y-10"
         >
-          {verificationRequired ? (
-            <div className="flex flex-col items-center justify-center text-center space-y-6 py-10 w-full">
+          {verifyStep !== "none" ? (
+            <div className="flex flex-col items-center justify-center text-center space-y-6 py-6 w-full">
               <div className="h-16 w-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-                <Mail className="h-8 w-8 animate-bounce" />
+                {verifyStep === "email" ? (
+                  <Mail className="h-8 w-8 animate-bounce" />
+                ) : (
+                  <Smartphone className="h-8 w-8 animate-bounce" />
+                )}
               </div>
+              
               <div className="space-y-2">
                 <h2 className="text-3xl font-medium tracking-tight text-white">
-                  Check your email
+                  {verifyStep === "email" ? "Verify your email" : "Verify your phone"}
                 </h2>
                 <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">
-                  We have sent a verification link to <span className="font-semibold text-white">{formData.email}</span>. After confirming it, we will send a one-time code to your phone to finish securing the account.
+                  {verifyStep === "email" ? (
+                    <>We sent a verification code to <span className="font-semibold text-white">{formData.email}</span>. Please enter the code below.</>
+                  ) : (
+                    <>We sent a verification code to <span className="font-semibold text-white">{phoneHint}</span>. Please enter the code below.</>
+                  )}
                 </p>
               </div>
-              <div className="w-full pt-4">
-                <Link
-                  href="/login"
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 border border-slate-700/60 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+
+              {error && (
+                <div role="alert" aria-live="assertive" className="w-full p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium text-left">
+                  {error}
+                </div>
+              )}
+
+              {resendSuccess && (
+                <div className="w-full p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs font-medium text-left">
+                  A new verification code has been sent.
+                </div>
+              )}
+
+              <form onSubmit={verifyStep === "email" ? handleVerifyEmail : handleVerifyPhone} className="w-full space-y-4 text-left">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-2" htmlFor="verification-otp-code">Verification code</label>
+                  <input
+                    id="verification-otp-code"
+                    type="text"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    placeholder="123456"
+                    required
+                    autoFocus
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-center font-mono text-lg tracking-[0.3em] text-white placeholder:tracking-normal placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  disabled={isVerifying || otpCode.length !== 6}
+                  className="w-full flex min-h-12 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Back to Login <ArrowRight className="h-4 w-4" />
-                </Link>
+                  {isVerifying ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>Verify and Continue <ArrowRight className="h-4 w-4" /></>
+                  )}
+                </button>
+              </form>
+
+              <div className="flex flex-col gap-3 w-full pt-2">
+                <button
+                  type="button"
+                  disabled={isResending}
+                  onClick={verifyStep === "email" ? handleResendEmailOtp : handleResendPhoneOtp}
+                  className="text-xs font-semibold text-primary hover:underline disabled:opacity-60"
+                >
+                  {isResending ? "Sending..." : "Resend code"}
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => { setVerifyStep("none"); setError(null); setResendSuccess(false); }}
+                  className="text-xs font-semibold text-slate-400 hover:text-white transition"
+                >
+                  Cancel and Edit Details
+                </button>
               </div>
             </div>
           ) : (

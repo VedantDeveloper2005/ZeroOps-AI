@@ -894,7 +894,7 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
     return schemas.EmailVerificationPending(email=email)
 
 
-@app.post("/api/auth/login", response_model=Union[schemas.UserResponse, schemas.MFAChallengeResponse, schemas.PhoneVerificationPending])
+@app.post("/api/auth/login", response_model=Union[schemas.UserResponse, schemas.MFAChallengeResponse, schemas.PhoneVerificationPending, schemas.EmailVerificationPending])
 async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
     email = req.email.strip().lower()
     try:
@@ -918,10 +918,10 @@ async def login(req: schemas.UserLogin, response: Response, db: AsyncSession = D
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
     if not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please verify your email address before signing in.",
-        )
+        await prepare_and_send_verification_email(user)
+        db.add(user)
+        await db.commit()
+        return schemas.EmailVerificationPending(email=email)
 
     if requires_phone_verification(user) and not user.phone_verified:
         return await begin_phone_verification(user, response, db, "login")
@@ -1161,21 +1161,21 @@ async def verify_email(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify user's email address using the token sent via email."""
-    token_hash = auth.hash_verification_token(req.token)
-    result = await db.execute(
-        select(models.User).filter(
-            models.User.email_verification_token == token_hash,
-            models.User.email_verification_expires_at > datetime.utcnow()
-        )
-    )
+    """Verify user's email address using the code sent via email."""
+    email = req.email.strip().lower()
+    result = await db.execute(select(models.User).filter(models.User.email == email))
     user = result.scalars().first()
-    if not user:
+    if (
+        not user
+        or not user.email_verification_token
+        or not user.email_verification_expires_at
+        or user.email_verification_expires_at < datetime.utcnow()
+        or not auth.verify_verification_token(req.token, user.email_verification_token)
+    ):
         raise HTTPException(
             status_code=400,
-            detail="The verification link is invalid or has expired. Please request a new one."
+            detail="The verification code is invalid or has expired. Please request a new one."
         )
-
     user.email_verified = True
     user.email_verification_token = None
     user.email_verification_expires_at = None

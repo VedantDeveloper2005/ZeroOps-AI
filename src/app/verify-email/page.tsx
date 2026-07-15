@@ -12,40 +12,43 @@ function VerifyEmailContent() {
   const { verifyEmail, verifyPhone, resendVerification, resendPhoneVerification } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const token = searchParams.get("token");
-  const [status, setStatus] = useState<"loading" | "phone" | "success" | "error">("loading");
+  const token = searchParams.get("token") || "";
+  const [status, setStatus] = useState<"loading" | "input" | "phone" | "success" | "error">("input");
   const [errorMsg, setErrorMsg] = useState("");
   const [email, setEmail] = useState("");
+  const [emailCode, setEmailCode] = useState(token);
   const [phoneHint, setPhoneHint] = useState("");
   const [phoneCode, setPhoneCode] = useState("");
   const [isResending, setIsResending] = useState(false);
+  const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
   const [isVerifyingPhone, setIsVerifyingPhone] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
 
   useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      setErrorMsg("No verification token was provided in the link.");
-      return;
+    if (token) {
+      setEmailCode(token);
     }
+  }, [token]);
 
-    const performVerification = async () => {
-      try {
-        const result = await verifyEmail(token);
-        if ("phone_verification_required" in result) {
-          setPhoneHint(result.phone_hint);
-          setStatus("phone");
-        } else {
-          setStatus("success");
-        }
-      } catch (err) {
-        setStatus("error");
-        setErrorMsg(getErrorMessage(err, "The verification link is invalid or has expired. Please request a new link below."));
+  const handleVerifyEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsVerifyingEmail(true);
+    setErrorMsg("");
+    setResendSuccess(false);
+    try {
+      const result = await verifyEmail(email, emailCode);
+      if ("phone_verification_required" in result) {
+        setPhoneHint(result.phone_hint);
+        setStatus("phone");
+      } else {
+        setStatus("success");
       }
-    };
-
-    performVerification();
-  }, [token, verifyEmail]);
+    } catch (err) {
+      setErrorMsg(getErrorMessage(err, "The verification code is invalid or has expired. Please try again."));
+    } finally {
+      setIsVerifyingEmail(false);
+    }
+  };
 
   const handleResend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,7 +60,7 @@ function VerifyEmailContent() {
       await resendVerification(email);
       setResendSuccess(true);
     } catch (err) {
-      setErrorMsg(getErrorMessage(err, "Could not resend verification email. Please try again."));
+      setErrorMsg(getErrorMessage(err, "Could not resend verification code. Please try again."));
     } finally {
       setIsResending(false);
     }
@@ -112,6 +115,38 @@ function VerifyEmailContent() {
             <p className="text-sm text-slate-400 max-w-sm">
               We are verifying your account credentials. This will only take a moment...
             </p>
+          </>
+        )}
+
+        {status === "input" && (
+          <>
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary mb-6">
+              <Mail className="h-8 w-8" />
+            </motion.div>
+            <h1 className="text-2xl font-bold tracking-tight text-white mb-2">Verify email address</h1>
+            <p className="text-sm text-slate-400 max-w-sm mb-6">Please enter your email and the 6-digit verification code sent to your inbox.</p>
+            {errorMsg && <div role="alert" aria-live="assertive" className="mb-4 w-full rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs font-medium text-red-200">{errorMsg}</div>}
+            {resendSuccess && <div className="mb-4 w-full rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-xs font-medium text-emerald-300">A new verification code has been sent.</div>}
+            <form onSubmit={handleVerifyEmailSubmit} className="w-full space-y-4 text-left">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2" htmlFor="verify-email-address">Email address</label>
+                <input id="verify-email-address" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" required className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-white placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2" htmlFor="verify-email-code">Verification code</label>
+                <input id="verify-email-code" type="text" value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="123456" required className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-center font-mono text-lg tracking-[0.3em] text-white placeholder:tracking-normal placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20" />
+              </div>
+              <button type="submit" disabled={isVerifyingEmail || emailCode.trim().length !== 6} className="w-full flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60">
+                {isVerifyingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Verify email <ArrowRight className="h-4 w-4" /></>}
+              </button>
+            </form>
+            <button type="button" disabled={isResending} onClick={handleResend} className="mt-5 min-h-11 text-xs font-semibold text-primary hover:underline disabled:opacity-60">
+              {isResending ? "Sending..." : "Resend code"}
+            </button>
+            
+            <Link href="/login" className="mt-4 text-xs font-semibold text-slate-400 hover:text-white transition">
+              Back to Login
+            </Link>
           </>
         )}
 

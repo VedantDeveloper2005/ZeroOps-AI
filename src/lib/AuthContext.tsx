@@ -48,34 +48,34 @@ export interface PhoneVerificationComplete {
   authenticated: false;
 }
 
-export type LoginResult = User | MfaChallenge | PhoneVerificationPending;
+export type LoginResult = User | MfaChallenge | PhoneVerificationPending | EmailVerificationPending;
 export type SignupResult = EmailVerificationPending;
 export type VerifyEmailResult = PhoneVerificationPending | EmailVerificationComplete;
 export type VerifyPhoneResult = User | PhoneVerificationComplete;
-
+ 
 export function isMfaChallenge(result: LoginResult): result is MfaChallenge {
   return "mfa_required" in result && result.mfa_required === true;
 }
-
-export function isEmailVerificationPending(result: SignupResult): result is EmailVerificationPending {
+ 
+export function isEmailVerificationPending(result: SignupResult | LoginResult): result is EmailVerificationPending {
   return "email_verification_required" in result && result.email_verification_required === true;
 }
-
+ 
 export function isPhoneVerificationPending(result: LoginResult | VerifyEmailResult): result is PhoneVerificationPending {
   return "phone_verification_required" in result && result.phone_verification_required === true;
 }
-
+ 
 function isAuthenticatedUser(result: LoginResult | VerifyPhoneResult): result is User {
   return "id" in result && typeof result.id === "string";
 }
-
+ 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
   verifyMfa: (code: string) => Promise<User>;
   signup: (firstName: string, lastName: string, email: string, phoneNumber: string, password: string) => Promise<SignupResult>;
-  verifyEmail: (token: string) => Promise<VerifyEmailResult>;
+  verifyEmail: (email: string, token: string) => Promise<VerifyEmailResult>;
   verifyPhone: (code: string) => Promise<VerifyPhoneResult>;
   resendVerification: (email: string) => Promise<void>;
   resendPhoneVerification: () => Promise<PhoneVerificationPending>;
@@ -232,7 +232,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await res.json() as LoginResult;
-    if (isMfaChallenge(data) || isPhoneVerificationPending(data)) {
+    if (isMfaChallenge(data) || isPhoneVerificationPending(data) || isEmailVerificationPending(data)) {
       setUser(null);
       return data;
     }
@@ -299,11 +299,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     throw new Error("Unexpected signup response");
   };
 
-  const verifyEmail = async (token: string): Promise<VerifyEmailResult> => {
+  const verifyEmail = async (email: string, token: string): Promise<VerifyEmailResult> => {
     const res = await fetch(`${API_BASE_URL}/api/auth/verify-email`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ email, token }),
     });
 
     if (!res.ok) {

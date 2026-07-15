@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Circle, Eye, EyeOff, ArrowRight, ShieldCheck } from "lucide-react";
 import Link from "next/link";
-import { isMfaChallenge, isPhoneVerificationPending, useAuth } from "@/lib/AuthContext";
+import { isMfaChallenge, isPhoneVerificationPending, isEmailVerificationPending, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";
 
 export default function LoginPage() {
-  const { login, verifyMfa, verifyPhone, resendMfaOtp, resendPhoneVerification, loginWithGitHub, loginWithGoogle } = useAuth();
+  const { login, verifyMfa, verifyEmail, verifyPhone, resendVerification, resendMfaOtp, resendPhoneVerification, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
   const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
@@ -20,6 +20,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [requiresMfa, setRequiresMfa] = useState(false);
   const [requiresPhoneVerification, setRequiresPhoneVerification] = useState(false);
+  const [requiresEmailVerification, setRequiresEmailVerification] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaMethod, setMfaMethod] = useState("totp");
   const [phoneHint, setPhoneHint] = useState("");
@@ -60,6 +61,10 @@ export default function LoginPage() {
         setMfaMethod(result.mfa_method || "totp");
         setMfaCode("");
         setIsSubmitting(false);
+      } else if (isEmailVerificationPending(result)) {
+        setRequiresEmailVerification(true);
+        setMfaCode("");
+        setIsSubmitting(false);
       } else if (isPhoneVerificationPending(result)) {
         setRequiresPhoneVerification(true);
         setPhoneHint(result.phone_hint);
@@ -69,6 +74,42 @@ export default function LoginPage() {
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Invalid email or password"));
       setIsSubmitting(false);
+    }
+  };
+
+  const handleEmailVerifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
+    setResendOtpSuccess(false);
+    try {
+      const result = await verifyEmail(formData.email, mfaCode);
+      if (isPhoneVerificationPending(result)) {
+        setPhoneHint(result.phone_hint);
+        setRequiresEmailVerification(false);
+        setRequiresPhoneVerification(true);
+        setMfaCode("");
+        setIsSubmitting(false);
+      } else {
+        await login(formData.email, formData.password);
+      }
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Invalid or expired verification code"));
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResendEmailVerifyOtp = async () => {
+    setIsResendingOtp(true);
+    setResendOtpSuccess(false);
+    setError(null);
+    try {
+      await resendVerification(formData.email);
+      setResendOtpSuccess(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to resend code"));
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -270,7 +311,7 @@ export default function LoginPage() {
           </div>}
 
           {/* Form */}
-          <form onSubmit={requiresPhoneVerification ? handlePhoneSubmit : requiresMfa ? handleMfaSubmit : handleSubmit} className="space-y-4 w-full text-left">
+          <form onSubmit={requiresPhoneVerification ? handlePhoneSubmit : requiresEmailVerification ? handleEmailVerifySubmit : requiresMfa ? handleMfaSubmit : handleSubmit} className="space-y-4 w-full text-left">
             {error && (
               <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
                 {error}
@@ -296,6 +337,33 @@ export default function LoginPage() {
                 <button type="submit" disabled={isSubmitting || mfaCode.trim().length !== 6} className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
                   {isSubmitting ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><span>Verify and continue</span><ArrowRight size={16} /></>}
                 </button>
+              </>
+            ) : requiresEmailVerification ? (
+              <>
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-xs leading-5 text-foreground-muted">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-foreground"><ShieldCheck size={16} className="text-primary" /> Email verification required</div>
+                  <span>Please enter the verification code sent to <span className="font-semibold text-foreground">{formData.email}</span>.</span>
+                </div>
+
+                {resendOtpSuccess && <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs font-medium text-left">Verification code has been resent.</div>}
+
+                <InputGroup label="Verification code" placeholder="123456" type="text" value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" inputMode="numeric" autoFocus required />
+
+                <div className="text-right">
+                  <button type="button" disabled={isResendingOtp} onClick={handleResendEmailVerifyOtp} className="text-xs font-semibold text-primary hover:text-primary-hover hover:underline transition-colors disabled:opacity-60">
+                    {isResendingOtp ? "Resending..." : "Resend verification code"}
+                  </button>
+                </div>
+
+                <button type="submit" disabled={isSubmitting || mfaCode.trim().length !== 6} className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
+                  {isSubmitting ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><span>Verify and continue</span><ArrowRight size={16} /></>}
+                </button>
+
+                <div className="text-center mt-4">
+                  <button type="button" onClick={() => { setRequiresEmailVerification(false); setMfaCode(""); setError(null); }} className="text-xs font-semibold text-slate-400 hover:text-white transition">
+                    Back to Sign In
+                  </button>
+                </div>
               </>
             ) : requiresMfa ? (
               <>

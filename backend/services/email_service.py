@@ -170,6 +170,37 @@ def send_verification_email(to_email: str, verification_url: str) -> bool:
     )
 
 
+def send_verification_otp_email(to_email: str, otp_code: str) -> bool:
+    """Send a one-time email verification code for signup/onboarding."""
+    formatted = f"{otp_code[:3]} {otp_code[3:]}" if len(otp_code) == 6 else otp_code
+
+    html_content = f"""
+    <p style="color:{_TEXT_COLOR};font-size:14px;line-height:1.6;margin:0 0 20px;">
+      Welcome to ZeroOps AI! Please enter this verification code to confirm your email and complete your registration. It expires in {config.EMAIL_OTP_EXPIRE_MINUTES} minutes.
+    </p>
+    <div style="text-align:center;margin:24px 0;">
+      <div style="display:inline-block;background:{_BACKGROUND};border:2px solid {_BRAND_COLOR};
+                  border-radius:12px;padding:16px 40px;letter-spacing:8px;
+                  font-size:32px;font-weight:700;color:white;font-family:monospace;">
+        {formatted}
+      </div>
+    </div>
+    """
+
+    text_body = (
+        f"Welcome to ZeroOps AI!\n\n"
+        f"Your email verification code is: {otp_code}\n\n"
+        f"This code expires in {config.EMAIL_OTP_EXPIRE_MINUTES} minutes."
+    )
+
+    return _send_email(
+        to_email,
+        f"Verify your email: {otp_code} — ZeroOps AI",
+        _email_wrapper("Verify your email address", html_content),
+        text_body,
+    )
+
+
 def send_otp_email(to_email: str, otp_code: str) -> bool:
     """Send a one-time login verification code."""
     # Format code with spaces for readability: "123 456"

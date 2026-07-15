@@ -699,10 +699,10 @@ export const api = {
       body: JSON.stringify({ code }),
     }),
 
-  verifyEmail: (token: string) =>
+  verifyEmail: (email: string, token: string) =>
     request<{ status: string; message: string }>("/api/auth/verify-email", {
       method: "POST",
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ email, token }),
     }),
 
   resendVerification: (email: string) =>
