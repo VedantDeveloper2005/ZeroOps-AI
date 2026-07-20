@@ -7,56 +7,10 @@
 
 @layer base {
   :root {
-    --background: hsl(210 33% 98%);
-    --background-secondary: hsl(210 28% 95%);
-    --foreground: hsl(222 30% 16%);
-    --foreground-muted: hsl(218 13% 42%);
-    --primary: hsl(216 67% 38%);
-    --primary-hover: hsl(216 70% 32%);
-    --primary-glow: hsl(216 67% 38% / 0.15);
-    --primary-subtle: hsl(216 67% 38% / 0.08);
-    --accent: hsl(172 52% 33%);
-    --accent-hover: hsl(172 58% 27%);
-    --accent-glow: hsl(172 52% 33% / 0.14);
-    --accent-subtle: hsl(172 52% 33% / 0.08);
-    --card: hsl(0 0% 100%);
-    --card-hover: hsl(210 32% 97%);
-    --card-active: hsl(210 28% 93%);
-    --border: hsl(214 22% 89%);
-    --border-hover: hsl(214 25% 80%);
-    --success: hsl(157 57% 30%);
-    --success-glow: hsl(157 57% 30% / 0.12);
-    --warning: hsl(35 86% 34%);
-    --warning-glow: hsl(35 86% 34% / 0.12);
-    --danger: hsl(0 63% 47%);
-    --danger-glow: hsl(0 63% 47% / 0.12);
-    --info: hsl(202 68% 34%);
-    --info-glow: hsl(202 68% 34% / 0.12);
-    --brand-gray: hsl(210 26% 96%);
-    --radius-sm: 0.5rem;
-    --radius-md: 0.75rem;
-    --radius-lg: 1rem;
-    --radius-xl: 1.25rem;
-    --radius-2xl: 1.5rem;
-    --shadow-glow-blue: 0 8px 20px hsl(216 67% 38% / 0.12);
-    --shadow-glow-purple: 0 8px 20px hsl(172 52% 33% / 0.1);
-    --shadow-glow-green: 0 8px 18px hsl(157 57% 30% / 0.1);
-    --shadow-glow-red: 0 8px 18px hsl(0 63% 47% / 0.1);
-    --shadow-glow-cyan: 0 8px 18px hsl(202 68% 34% / 0.1);
-    --glass-base-rgb: 255, 255, 255;
-    --glass-bg: hsl(0 0% 100% / 0.68);
-    --glass-border: hsl(216 28% 88% / 0.78);
-    --glass-strong-bg: hsl(0 0% 100% / 0.9);
-    --glass-strong-border: hsl(216 28% 88% / 0.95);
-    --glass-subtle-bg: hsl(0 0% 100% / 0.45);
-    --glass-subtle-border: hsl(216 28% 88% / 0.55);
-  }
-
-  .dark {
-    --background: hsl(222 47% 7%);
-    --background-secondary: hsl(221 42% 10%);
-    --foreground: hsl(214 36% 96%);
-    --foreground-muted: hsl(216 17% 66%);
+    --background: hsl(0 0% 0%);
+    --background-secondary: hsl(0 0% 4%);
+    --foreground: hsl(0 0% 96%);
+    --foreground-muted: hsl(0 0% 70%);
     --primary: hsl(213 94% 68%);
     --primary-hover: hsl(213 94% 74%);
     --primary-glow: hsl(213 94% 68% / 0.3);
@@ -65,11 +19,11 @@
     --accent-hover: hsl(261 87% 81%);
     --accent-glow: hsl(261 87% 75% / 0.28);
     --accent-subtle: hsl(261 87% 75% / 0.12);
-    --card: hsl(221 39% 12% / 0.88);
-    --card-hover: hsl(221 37% 16%);
-    --card-active: hsl(221 36% 19%);
-    --border: hsl(218 25% 21%);
-    --border-hover: hsl(216 25% 31%);
+    --card: hsl(0 0% 7% / 0.94);
+    --card-hover: hsl(0 0% 10%);
+    --card-active: hsl(0 0% 13%);
+    --border: hsl(0 0% 20%);
+    --border-hover: hsl(0 0% 32%);
     --success: hsl(157 70% 53%);
     --success-glow: hsl(157 70% 53% / 0.22);
     --warning: hsl(38 92% 61%);
@@ -78,19 +32,24 @@
     --danger-glow: hsl(0 84% 68% / 0.22);
     --info: hsl(199 89% 63%);
     --info-glow: hsl(199 89% 63% / 0.22);
-    --brand-gray: hsl(221 37% 14%);
-    --shadow-glow-blue: 0 18px 48px hsl(213 94% 68% / 0.16), 0 2px 8px hsl(222 47% 3% / 0.6);
-    --shadow-glow-purple: 0 18px 48px hsl(261 87% 75% / 0.16), 0 2px 8px hsl(222 47% 3% / 0.6);
+    --brand-gray: hsl(0 0% 10%);
+    --radius-sm: 0.5rem;
+    --radius-md: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-xl: 1.25rem;
+    --radius-2xl: 1.5rem;
+    --shadow-glow-blue: 0 18px 48px hsl(213 94% 68% / 0.16), 0 2px 8px hsl(0 0% 0% / 0.72);
+    --shadow-glow-purple: 0 18px 48px hsl(261 87% 75% / 0.16), 0 2px 8px hsl(0 0% 0% / 0.72);
     --shadow-glow-green: 0 15px 38px hsl(157 70% 53% / 0.16);
     --shadow-glow-red: 0 15px 38px hsl(0 84% 68% / 0.16);
     --shadow-glow-cyan: 0 15px 38px hsl(199 89% 63% / 0.16);
-    --glass-base-rgb: 8, 17, 33;
-    --glass-bg: hsl(221 39% 12% / 0.66);
-    --glass-border: hsl(216 25% 25% / 0.78);
-    --glass-strong-bg: hsl(221 39% 12% / 0.92);
-    --glass-strong-border: hsl(216 25% 25% / 0.94);
-    --glass-subtle-bg: hsl(221 39% 12% / 0.4);
-    --glass-subtle-border: hsl(216 25% 25% / 0.58);
+    --glass-base-rgb: 0, 0, 0;
+    --glass-bg: hsl(0 0% 7% / 0.72);
+    --glass-border: hsl(0 0% 24% / 0.8);
+    --glass-strong-bg: hsl(0 0% 7% / 0.94);
+    --glass-strong-border: hsl(0 0% 24% / 0.96);
+    --glass-subtle-bg: hsl(0 0% 7% / 0.48);
+    --glass-subtle-border: hsl(0 0% 24% / 0.6);
   }
 }
 
@@ -127,14 +86,13 @@
 
 * { box-sizing: border-box; }
 
-html { color-scheme: light; scroll-behavior: smooth; }
-html.dark { color-scheme: dark; }
+html { color-scheme: dark; scroll-behavior: smooth; }
 
 body {
   min-width: 320px;
   background:
-    radial-gradient(circle at 12% -18%, hsl(216 67% 38% / 0.07), transparent 28rem),
-    radial-gradient(circle at 88% -8%, hsl(172 52% 33% / 0.05), transparent 24rem),
+    radial-gradient(circle at 12% -18%, hsl(213 94% 68% / 0.08), transparent 28rem),
+    radial-gradient(circle at 88% -8%, hsl(261 87% 75% / 0.05), transparent 24rem),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
@@ -164,8 +122,7 @@ button:not(:disabled), a { touch-action: manipulation; }
 .glass-subtle { background: var(--glass-subtle-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--glass-subtle-border); }
 
 .ops-page-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom, black, transparent 78%); }
-.ops-card { border: 1px solid var(--border); background: var(--card); box-shadow: 0 1px 2px hsl(222 30% 16% / 0.02), 0 8px 24px hsl(222 30% 16% / 0.035); }
-.dark .ops-card { box-shadow: 0 1px 2px hsl(222 44% 3% / 0.36), 0 12px 30px hsl(222 44% 3% / 0.2); }
+.ops-card { border: 1px solid var(--border); background: var(--card); box-shadow: 0 1px 2px hsl(0 0% 0% / 0.52), 0 12px 30px hsl(0 0% 0% / 0.32); }
 .ops-card-interactive { transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
 .ops-card-interactive:hover { border-color: var(--border-hover); box-shadow: 0 10px 26px hsl(216 67% 38% / 0.08); transform: translateY(-1px); }
 .ops-kicker { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 6%, transparent); color: var(--primary); padding: 0.35rem 0.65rem; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.08em; }

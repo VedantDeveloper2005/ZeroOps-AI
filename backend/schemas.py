@@ -1,7 +1,7 @@
 import re
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from typing import Optional, List, Any
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from typing import Optional, List, Any, Literal
 from datetime import datetime
 import uuid
 
@@ -67,6 +67,31 @@ class UserResponse(BaseModel):
     phone_verified: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class WorkerDeploymentEvent(BaseModel):
+    """Validated deployment progress event accepted only from the worker."""
+
+    type: Literal["log", "stage", "status"]
+    text: str = Field(default="", max_length=8192)
+    lineType: Literal["debug", "info", "warn", "warning", "error", "success", "command"] = "info"
+    line_number: int = Field(default=1, ge=1)
+    id: Optional[int] = Field(default=None, ge=1)
+    status: Optional[Literal["pending", "active", "completed", "queued", "building", "deploying", "running", "failed", "stopped", "rolled_back"]] = None
+    duration: str = Field(default="", max_length=64)
+    label: str = Field(default="", max_length=256)
+    failure_reason: Optional[str] = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_event_shape(self) -> "WorkerDeploymentEvent":
+        if self.type == "stage":
+            if self.id is None or self.status not in {"pending", "active", "completed"}:
+                raise ValueError("Stage events require an id and a valid stage status.")
+        if self.type == "status" and self.status not in {
+            "queued", "building", "deploying", "running", "failed", "stopped", "rolled_back"
+        }:
+            raise ValueError("Status events require a valid deployment status.")
+        return self
 
 
 class MFAChallengeResponse(BaseModel):
@@ -415,10 +440,22 @@ class InfrastructurePlanResponse(BaseModel):
     status: str
     revision: int
     plan: dict
+    cost_estimate: Optional[dict] = None
+    security_score: Optional[int] = None
+    performance_score: Optional[int] = None
+    reliability_score: Optional[int] = None
+    estimated_deploy_time: Optional[str] = None
+    ai_explanations: Optional[dict] = None
     approval_note: Optional[str] = None
     approved_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class ArchitectChatResponse(BaseModel):
+    reply: str
+    plan_updated: bool = False
+    plan: Optional[InfrastructurePlanResponse] = None
 
 
 class KnowledgeGraphResponse(BaseModel):
@@ -687,3 +724,22 @@ class DatabaseInstanceResponse(BaseModel):
 
 class SelfHealRequest(BaseModel):
     action: str
+
+
+class DeploymentJobResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    project_id: uuid.UUID
+    deployment_id: Optional[uuid.UUID] = None
+    status: str
+    cloud: str
+    region: str
+    terraform_status: str
+    deployment_status: str
+    estimated_cost: Optional[str] = None
+    live_url: Optional[str] = None
+    failure_reason: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)

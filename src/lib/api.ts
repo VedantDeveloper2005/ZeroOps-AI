@@ -458,6 +458,12 @@ export interface InfrastructurePlanComponent {
   available_services: string[];
 }
 
+export interface InfrastructureCostBreakdownItem {
+  component: string;
+  cost_monthly: number;
+  tier: string;
+}
+
 export interface InfrastructurePlan {
   id: string;
   project_id: string;
@@ -489,6 +495,16 @@ export interface InfrastructurePlan {
     };
     deployment: { approval_required: boolean; engine: string; summary: string };
   };
+  cost_estimate?: {
+    status: string;
+    monthly_estimate: number | null;
+    breakdown?: InfrastructureCostBreakdownItem[];
+  };
+  security_score?: number | null;
+  performance_score?: number | null;
+  reliability_score?: number | null;
+  estimated_deploy_time?: string | null;
+  ai_explanations?: Record<string, string>;
   approval_note: string | null;
   approved_at: string | null;
   created_at: string | null;
@@ -674,6 +690,32 @@ export const api = {
     request<{ reply: string; plan_updated?: boolean; infrastructure_plan?: InfrastructurePlan | null }>("/api/ai/chat", {
       method: "POST",
       body: JSON.stringify({ message, project_id: projectId }),
+    }),
+
+  analyzeRepository: (projectId: string) =>
+    request<Record<string, unknown>>(`/api/projects/${projectId}/analyze`, { method: "POST" }),
+
+  getProjectAnalysis: (projectId: string) =>
+    request<Record<string, unknown>>(`/api/projects/${projectId}/analysis`),
+
+  explainComponent: (projectId: string, componentId: string) =>
+    request<{ explanation: string }>(`/api/projects/${projectId}/infrastructure-spec/explain/${componentId}`, {
+      method: "POST"
+    }),
+
+  createDeploymentJob: (projectId: string, data: Record<string, unknown>) =>
+    request<{ status: string; deployment_id: string; project_id: string }>(`/api/projects/${projectId}/deploy`, {
+      method: "POST",
+      body: JSON.stringify(data)
+    }),
+
+  getDeploymentJobStatus: (jobId: string) =>
+    request<Record<string, unknown>>(`/api/deployment-jobs/${jobId}/status`),
+
+  architectChat: (message: string, projectId: string) =>
+    request<{ reply: string; plan_updated: boolean; plan: InfrastructurePlan | null }>("/api/ai/architect-chat", {
+      method: "POST",
+      body: JSON.stringify({ message, project_id: projectId })
     }),
 
   // ── Dashboard ──

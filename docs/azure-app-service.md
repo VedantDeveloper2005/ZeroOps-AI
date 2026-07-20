@@ -16,12 +16,16 @@ The deployment worker uses Azure Container Registry Tasks to build the customer 
 
 ```text
 APP_ENV=production
-DATABASE_URL=<managed-postgresql-url>
-JWT_SECRET=<long-random-secret>
-FRONTEND_URL=https://<zeroops-web-host>
-CORS_ORIGINS=https://<zeroops-web-host>
 AZURE_KEYVAULT_URL=https://<zeroops-vault>.vault.azure.net/
 ```
+
+These are the only bootstrap App Service settings. Enable the app's managed
+identity and store `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`,
+`CORS_ORIGINS`, OAuth credentials, SMTP/Twilio credentials, and all remaining
+application settings directly in Key Vault. See
+[production-key-vault.md](production-key-vault.md) for the exact naming
+convention. The application fails closed in production if Key Vault or a
+required value is unavailable.
 
 The isolated deployment worker must include the Azure CLI. Do not run customer builds in the frontend process or depend on a local Docker daemon.
 

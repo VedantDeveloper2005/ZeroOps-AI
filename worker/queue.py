@@ -7,7 +7,7 @@ from psycopg2.extras import RealDictCursor
 
 class JobQueue(ABC):
     @abstractmethod
-    def pop_job(self) -> Optional[Dict[str, Any]]:
+    def pop_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Pulls the next queued job from the queue and marks it as running."""
         pass
 
@@ -32,7 +32,7 @@ class PostgresJobQueue(JobQueue):
             return psycopg2.connect(self.conn_str, sslmode="require")
         return psycopg2.connect(self.conn_str)
 
-    def pop_job(self) -> Optional[Dict[str, Any]]:
+    def pop_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         conn = None
         try:
             conn = self._get_connection()
@@ -40,7 +40,7 @@ class PostgresJobQueue(JobQueue):
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Query next queued job and lock it
                 cursor.execute("""
-                    SELECT id, user_id, project_id, deployment_id, cloud, region 
+                    SELECT id, user_id, project_id, deployment_id, cloud, region, infrastructure_spec 
                     FROM deployment_jobs 
                     WHERE status = 'queued' 
                     ORDER BY created_at ASC 
@@ -55,9 +55,9 @@ class PostgresJobQueue(JobQueue):
                 # Mark it as running atomically
                 cursor.execute("""
                     UPDATE deployment_jobs 
-                    SET status = 'running', updated_at = NOW() 
+                    SET status = 'running', worker_id = %s, started_at = NOW(), updated_at = NOW() 
                     WHERE id = %s
-                """, (job['id'],))
+                """, (worker_id, job['id']))
                 
                 conn.commit()
                 # Return stringified UUIDs for standard dict usage
@@ -67,7 +67,8 @@ class PostgresJobQueue(JobQueue):
                     "project_id": str(job["project_id"]),
                     "deployment_id": str(job["deployment_id"]) if job["deployment_id"] else None,
                     "cloud": job["cloud"],
-                    "region": job["region"]
+                    "region": job["region"],
+                    "infrastructure_spec": job["infrastructure_spec"]
                 }
         except Exception as e:
             if conn:

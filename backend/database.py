@@ -1,4 +1,3 @@
-import os
 import ssl
 import logging
 from typing import AsyncGenerator
@@ -29,7 +28,7 @@ elif DATABASE_URL.startswith("postgres://"):
 
 # Configure SSL connection arguments for Azure or production PostgreSQL
 connect_args = {}
-if "postgres.database.azure.com" in DATABASE_URL or os.getenv("DB_SSL", "true").lower() == "true":
+if DATABASE_URL and config.DB_SSL_ENABLED:
     ctx = ssl.create_default_context()
     if not config.DB_SSL_VERIFY and not config.IS_PRODUCTION:
         ctx.check_hostname = False
@@ -286,6 +285,16 @@ async def run_migrations():
             END IF;
         END $$""",
 
+        # Deployment jobs must never retain a decrypted GitHub OAuth token.
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'deployment_jobs' AND column_name = 'github_token'
+            ) THEN
+                ALTER TABLE deployment_jobs DROP COLUMN github_token;
+            END IF;
+        END $$""",
+
         # Azure BYOS: audit_log_entries indexes
         "CREATE INDEX IF NOT EXISTS ix_audit_log_entries_user_id ON audit_log_entries(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_audit_log_entries_created_at ON audit_log_entries(created_at)",
@@ -333,13 +342,28 @@ async def run_migrations():
             deployment_status TEXT NOT NULL DEFAULT 'pending',
             estimated_cost TEXT,
             terraform_path TEXT,
-            github_token TEXT,
             logs TEXT,
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )""",
         "CREATE INDEX IF NOT EXISTS ix_deployment_jobs_status ON deployment_jobs(status)",
         "CREATE INDEX IF NOT EXISTS ix_deployment_jobs_project_id ON deployment_jobs(project_id)",
+        
+        # Evolved Cloud Architect database schema extensions
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS cost_estimate JSONB",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS security_score INTEGER",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS performance_score INTEGER",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS reliability_score INTEGER",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS estimated_deploy_time TEXT",
+        "ALTER TABLE infrastructure_plans ADD COLUMN IF NOT EXISTS ai_explanations JSONB",
+        
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS infrastructure_spec JSONB",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS terraform_plan_output TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS live_url TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS failure_reason TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS worker_id TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
     ]
 
     try:

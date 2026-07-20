@@ -1,25 +1,50 @@
-import os
 import time
-from dotenv import load_dotenv
+import signal
+import sys
+import uuid
+import socket
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from worker.queue import PostgresJobQueue
 from worker.terraform_runner import TerraformRunner
 from worker.azure import is_azure_cli_available, check_azure_login
 from worker.health import start_health_server
 
+try:
+    from backend import config
+except ImportError:
+    import config
+
+# Global keep_running flag for graceful shutdown
+keep_running = True
+
+def handle_sigterm(signum, frame):
+    global keep_running
+    print("\n[Worker] Termination signal received. Shutting down gracefully...", flush=True)
+    keep_running = False
+
 def main():
-    # Load environment variables
-    # If worker is launched in repository root, load .env
-    load_dotenv()
+    global keep_running
+    # Register signal handlers
+    signal.signal(signal.SIGINT, handle_sigterm)
+    signal.signal(signal.SIGTERM, handle_sigterm)
     
-    db_url = os.getenv("DATABASE_URL")
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    db_url = config.DATABASE_URL
+    poll_interval = config.WORKER_POLL_INTERVAL_SECONDS
+    
+    # Generate unique Worker ID
+    worker_id = f"worker-{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
     
     print("=" * 60)
-    print("ZeroOps AI Decoupled Terraform Worker Starting...")
+    print(f"ZeroOps AI Decoupled Terraform Worker {worker_id} Starting...")
     print("=" * 60)
     
     if not db_url:
-        print("[Worker Fatal] DATABASE_URL is not set. Exiting.")
+        print("[Worker Fatal] DATABASE_URL is not configured in Azure Key Vault. Exiting.")
         return
 
     # Check Azure CLI availability
@@ -37,14 +62,15 @@ def main():
 
     # Initialize queue and runner
     queue = PostgresJobQueue(database_url=db_url)
-    runner = TerraformRunner(db_url=db_url, backend_url=backend_url)
+    runner = TerraformRunner(db_url=db_url, worker_id=worker_id)
 
-    print("[Worker] Polling queue for jobs...", flush=True)
+    print(f"[Worker] Polling queue for jobs (every {poll_interval}s)...", flush=True)
     
     try:
-        while True:
+        while keep_running:
             # Check for next job
-            job = queue.pop_job()
+            # Pass worker_id to queue so we lock the job under this worker
+            job = queue.pop_job(worker_id=worker_id)
             if job:
                 print(f"[Worker] Picked up deployment job: {job['id']}")
                 try:
@@ -52,10 +78,12 @@ def main():
                 except Exception as e:
                     print(f"[Worker Exception] Job {job['id']} execution failed: {e}")
             else:
-                # Wait 5 seconds before polling again
-                time.sleep(5)
-    except KeyboardInterrupt:
-        print("\n[Worker] KeyboardInterrupt detected. Stopping worker loop.")
+                # Wait poll_interval seconds before polling again, checking shutdown flag
+                for _ in range(poll_interval):
+                    if not keep_running:
+                        break
+                    time.sleep(1)
+        print("[Worker] Loop stopped cleanly.")
     except Exception as e:
         print(f"[Worker Fatal] Unexpected loop crash: {e}")
 

@@ -51,9 +51,10 @@ ZeroOps is production-prepared for Azure App Service as two apps:
 
 See [docs/azure-app-service.md](docs/azure-app-service.md) for startup commands, required app settings, websocket notes, and troubleshooting.
 
-## Environment Variables
+## Configuration
 
-- `OPENAI_API_KEY`: optional, enables OpenAI-backed repository analysis.
-- `GITHUB_TOKEN`: optional, enables GitHub API access for private/public repos.
-- `AZURE_KEYVAULT_URL`: optional, enables Azure Key Vault secret storage.
-- `PORT` and `HOST`: optional FastAPI server settings.
+Production configuration is Azure Key Vault–only. Set `APP_ENV=production`
+and `AZURE_KEYVAULT_URL` as bootstrap app settings, enable a managed identity,
+and store every application value in Key Vault. Browser endpoint URLs remain
+public build configuration because Next.js embeds `NEXT_PUBLIC_*` values in
+the client bundle. See [docs/production-key-vault.md](docs/production-key-vault.md).

@@ -32,14 +32,15 @@ export default function LogsPage() {
   }, [selectedProject]);
 
   const latest = deployments[0];
+  const latestDeploymentId = latest?.id;
   useEffect(() => {
-    if (!latest) { setLogs([]); return; }
+    if (!latestDeploymentId) { setLogs([]); return; }
     setLoading(true);
-    api.getDeployment(latest.id)
+    api.getDeployment(latestDeploymentId)
       .then((detail) => setLogs(detail.logs || []))
       .catch(() => setLogs([]))
       .finally(() => setLoading(false));
-  }, [latest?.id]);
+  }, [latestDeploymentId]);
 
   const filtered = useMemo(() => logs.filter((log) => {
     const level = log.level.toLowerCase();
@@ -48,7 +49,8 @@ export default function LogsPage() {
 
   const toggleLevel = (level: string) => setActiveLevels((current) => {
     const next = new Set(current);
-    next.has(level) ? next.delete(level) : next.add(level);
+    if (next.has(level)) next.delete(level);
+    else next.add(level);
     return next;
   });
 

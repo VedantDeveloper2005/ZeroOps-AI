@@ -276,7 +276,7 @@ def is_recent_primary_authentication(user: User) -> bool:
 
 def create_verification_token() -> str:
     """Create a URL-safe token for email verification links."""
-    return secrets.token_urlsafe(48)
+    return "".join(str(secrets.randbelow(10)) for _ in range(6))
 
 
 def hash_verification_token(token: str) -> str:

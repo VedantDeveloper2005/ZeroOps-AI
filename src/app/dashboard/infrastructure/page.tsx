@@ -188,11 +188,93 @@ function InfrastructureWorkspace() {
     {error && <div role="alert" className="mx-auto max-w-7xl rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-foreground">{error}</div>}
 
     {loadingPlan ? <div className="flex min-h-[45vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"><Loader2 className="animate-spin text-primary" size={18} /> Loading architecture decisions…</div> : plan ? <>
-      <InfrastructurePlanView plan={plan} onUpdate={updatePlan} onApprove={approvePlan} onRegenerate={generatePlan} busy={busy} />
-      <DecisionIntelligencePanel graph={graph} simulation={simulation} accuracy={accuracy} loading={busy || intelligenceBusy} onRunSimulation={runSimulation} />
+      <div className="grid gap-6 lg:grid-cols-[1fr_360px] mx-auto max-w-7xl">
+        <div className="space-y-6">
+          <InfrastructurePlanView plan={plan} onUpdate={updatePlan} onApprove={approvePlan} onRegenerate={generatePlan} busy={busy} />
+          <DecisionIntelligencePanel graph={graph} simulation={simulation} accuracy={accuracy} loading={busy || intelligenceBusy} onRunSimulation={runSimulation} />
+        </div>
+        <div className="relative">
+          <div className="sticky top-6">
+            <ArchitectChatPanel projectId={selectedProjectId} onPlanUpdated={(newPlan) => setPlan(newPlan)} />
+          </div>
+        </div>
+      </div>
       {plan.status === "approved" && <div className="mx-auto flex max-w-7xl flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-foreground"><Sparkles size={16} className="text-success" /> Ready when you are</p><p className="mt-1 text-xs leading-5 text-foreground-muted">This approved plan will be checked again before the deployment workflow begins.</p></div><button disabled={busy} onClick={() => void startDeployment()} className="ops-primary shrink-0 px-5 disabled:opacity-60"><Rocket size={16} /> Start deployment</button></div>}
     </> : planMissing ? <div className="mx-auto max-w-2xl rounded-3xl border border-border bg-card p-8 text-center shadow-sm"><Sparkles size={30} className="mx-auto text-primary" /><h1 className="mt-4 text-xl font-bold text-foreground">Create an AI infrastructure plan</h1><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-foreground-muted">We&apos;ll use the application&apos;s recorded analysis to recommend an Azure architecture. Implementation details and credentials stay protected in the deployment engine.</p><button disabled={busy} onClick={() => void generatePlan()} className="ops-primary mt-6 px-5 disabled:opacity-60"><Sparkles size={16} /> Generate plan</button></div> : null}
   </div>;
+}
+
+function ArchitectChatPanel({ projectId, onPlanUpdated }: { projectId: string; onPlanUpdated: (plan: InfrastructurePlan) => void }) {
+  const [messages, setMessages] = useState<Array<{ sender: "user" | "architect"; text: string }>>([
+    { sender: "architect", text: "Hello! I am your Senior AI Cloud Architect. Ask me about this Azure spec, or request modifications like 'reduce cost' or 'add Redis'." }
+  ]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || busy) return;
+    
+    const userMsg = input.trim();
+    setInput("");
+    setMessages(prev => [...prev, { sender: "user", text: userMsg }]);
+    setBusy(true);
+
+    try {
+      const response = await api.architectChat(userMsg, projectId);
+      setMessages(prev => [...prev, { sender: "architect", text: response.reply }]);
+      if (response.plan_updated && response.plan) {
+        onPlanUpdated(response.plan);
+      }
+    } catch {
+      setMessages(prev => [...prev, { sender: "architect", text: "I encountered an error trying to process that request. Please check my connectivity." }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ops-card rounded-2xl p-5 h-[600px] flex flex-col border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border pb-3 mb-3">
+        <Sparkles size={16} className="text-primary" />
+        <h3 className="font-semibold text-foreground text-sm">AI Cloud Architect</h3>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
+        {messages.map((msg, idx) => (
+          <div key={idx} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
+            <div className={`max-w-[85%] rounded-2xl p-3 leading-5 ${msg.sender === "user" ? "bg-primary text-white" : "bg-background-secondary/60 text-foreground-muted"}`}>
+              {msg.text}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded-2xl p-3 bg-background-secondary/60 text-foreground-muted flex items-center gap-1.5">
+              <Loader2 className="animate-spin text-primary" size={12} /> Thinking…
+            </div>
+          </div>
+        )}
+      </div>
+
+      <form onSubmit={sendMessage} className="mt-3 flex gap-2">
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Ask or command architect..."
+          disabled={busy}
+          className="flex-1 min-h-10 px-3 bg-background border border-border rounded-xl text-xs outline-none focus:border-primary disabled:opacity-60"
+        />
+        <button
+          type="submit"
+          disabled={busy || !input.trim()}
+          className="ops-primary min-h-10 px-4 rounded-xl text-xs font-semibold disabled:opacity-60"
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  );
 }
 
 function InfrastructurePlanLoading() {

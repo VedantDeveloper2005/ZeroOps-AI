@@ -38,6 +38,27 @@ def test_plan_uses_source_evidence_without_inventing_pricing_or_secrets():
     assert "terraform" not in serialized.lower()
 
 
+def test_detailed_spec_and_revisions_do_not_invent_costs_or_readiness_scores():
+    specification = planner.build_infrastructure_spec(source_facts(), region="eastus")
+
+    assert specification["cost"]["monthly_estimate"] is None
+    assert specification["cost"]["status"] == "requires_connected_azure_subscription"
+    assert specification["assessment"]["security"]["value"] is None
+    assert specification["assessment"]["performance"]["value"] is None
+    assert specification["assessment"]["reliability"]["value"] is None
+    assert specification["deployment_time"]["estimate"] is None
+
+    updated = planner.apply_plan_update(
+        specification,
+        region=None,
+        component_id="application",
+        service=None,
+        tier="P0v3",
+    )
+    assert updated["cost"]["monthly_estimate"] is None
+    assert updated["assessment"]["security"]["value"] is None
+
+
 def test_chat_change_invalidates_deployable_target_without_hiding_limitation():
     plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
     updated, summary = planner.apply_chat_instruction(plan, "Use Azure Container Apps")

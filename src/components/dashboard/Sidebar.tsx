@@ -21,7 +21,6 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/lib/AuthContext";
 
 type NavItem = {
@@ -194,7 +193,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* Actions */}
       <div className="border-t border-border p-3 flex flex-col gap-2">
-        <ThemeToggle collapsed={collapsed} />
         <button
           onClick={logout}
           aria-label="Sign out"

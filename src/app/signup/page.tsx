@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Circle, Eye, EyeOff, ArrowRight, Mail, Loader2, Smartphone, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { Circle, Eye, EyeOff, ArrowRight, Mail, Loader2, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { isEmailVerificationPending, isPhoneVerificationPending, useAuth } from "@/lib/AuthContext";
 import { getErrorMessage } from "@/lib/api";

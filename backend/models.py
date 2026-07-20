@@ -108,6 +108,22 @@ class AuditResultStatus(str, enum.Enum):
     pending = "pending"
 
 
+class DeploymentJobStatus(str, enum.Enum):
+    queued = "queued"
+    cloning = "cloning"
+    generating_terraform = "generating_terraform"
+    terraform_init = "terraform_init"
+    terraform_plan = "terraform_plan"
+    awaiting_approval = "awaiting_approval"
+    terraform_apply = "terraform_apply"
+    deploying_app = "deploying_app"
+    health_check = "health_check"
+    monitoring_setup = "monitoring_setup"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 # ──────────────────────────────────────────────
 # USERS
 # ──────────────────────────────────────────────
@@ -278,6 +294,12 @@ class InfrastructurePlan(Base):
     status = Column(Text, nullable=False, default="draft")
     revision = Column(Integer, nullable=False, default=1)
     plan_data = Column(JSON, nullable=False, default=dict)
+    cost_estimate = Column(JSON, nullable=True)
+    security_score = Column(Integer, nullable=True)
+    performance_score = Column(Integer, nullable=True)
+    reliability_score = Column(Integer, nullable=True)
+    estimated_deploy_time = Column(Text, nullable=True)
+    ai_explanations = Column(JSON, nullable=True)
     approval_note = Column(Text, nullable=True)
     approved_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -987,8 +1009,14 @@ class DeploymentJob(Base):
     deployment_status = Column(Text, nullable=False, default="pending")  # pending, running, completed, failed
     estimated_cost = Column(Text, nullable=True)
     terraform_path = Column(Text, nullable=True)
-    github_token = Column(Text, nullable=True)
     logs = Column(Text, nullable=True)
+    infrastructure_spec = Column(JSON, nullable=True)
+    terraform_plan_output = Column(Text, nullable=True)
+    live_url = Column(Text, nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    worker_id = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

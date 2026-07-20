@@ -1162,6 +1162,94 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
             res += f"- ⚠️ **Missing Recommended:** {', '.join(rec_missing)} (Features might be degraded)\n"
             
         res += "\nConfigure the required values in project settings. Secret values are stored in Azure Key Vault and are not returned by the product."
+    if "fail" in msg or "error" in msg or "why did" in msg or "broken" in msg:
+        fa = metadata.get("failure_analysis")
+        if fa:
+            return (
+                f"The deployment of **{name}** failed due to: **{fa['summary']}**.\n\n"
+                f"- **Root Cause:** {fa['cause']}\n"
+                f"- **Recommended Fix:** {fa['recommended_fix']}\n\n"
+                "Review the deployment logs, make the change, and launch a new version when ready."
+            )
+        elif deployment_status == "failed":
+            logs = metadata.get("latest_deployment_logs") or []
+            log_snippet = "\n".join(logs[:5]) if logs else "No logs captured."
+            return (
+                f"The latest deployment status for **{name}** is **failed**.\n\n"
+                f"**Recent Log Trace:**\n```\n{log_snippet}\n```\n"
+                f"Please review the deployment logs on the dashboard to debug this issue further."
+            )
+        else:
+            return f"The latest deployment status for **{name}** is **{deployment_status}**. There are no active failure logs recorded."
+
+    # 2. What does this application do?
+    elif "do" in msg or "what is" in msg or "purpose" in msg or "about" in msg:
+        details = [
+            f"**{name}** is recorded as a **{framework}** application using **{language}**.",
+            f"- **Connected databases:** {db_desc}",
+            f"- **Recorded status:** {metadata.get('status', 'unknown').capitalize()}",
+        ]
+        if url:
+            details.append(f"- **Live URL:** [{url}]({url})")
+        else:
+            details.append("- **Live URL:** No verified release is recorded yet.")
+        return "\n".join(details)
+
+    # 3. How can I reduce costs?
+    elif "cost" in msg or "reduce" in msg or "cheap" in msg or "price" in msg or "monthly" in msg:
+        cost_meta = metadata.get("cost")
+        
+        if isinstance(cost_meta, dict) and isinstance(cost_meta.get("total_cost"), (int, float)):
+            opt = metadata.get("cost_optimization")
+            opt_text = f"\n\n**AI Cost Recommendation:** {opt['recommendation']} (Estimated savings: {opt['savings']}) because of {opt['reason']}" if opt else ""
+            return (
+                f"Here is your dynamic infrastructure cost blueprint for **{name}**:\n"
+                f"- **Compute Resource:** ${cost_meta['compute_cost']}/mo\n"
+                f"- **Database Hosting:** ${cost_meta['database_cost']}/mo\n"
+                f"- **Platform Margin Fee:** ${cost_meta['platform_fee']}/mo\n"
+                f"- **Estimated Monthly Total:** **${cost_meta['total_cost']}/mo**\n"
+                f"- **Projected Growth Cost (at scale):** ${cost_meta['projected_growth_cost']}/mo\n"
+                f"- **Recommended Plan:** **{cost_meta['recommended_plan']}**\n"
+                f"*{cost_meta['why_this_plan']}*{opt_text}"
+            )
+        else:
+            return (
+                "Azure cost data is not available for this project yet, so I cannot provide a trustworthy estimate or savings figure. "
+                "Connect Azure Cost Management data first, then review recorded usage before changing capacity."
+            )
+
+    # 4. How can I improve performance?
+    elif "performance" in msg or "improve" in msg or "slow" in msg or "speed" in msg or "latency" in msg:
+        telemetry = metadata.get("telemetry")
+        if telemetry:
+            telemetry_str = (
+                f"\n- **CPU Utilization:** {telemetry['avg_cpu_utilization']}\n"
+                f"- **Memory Usage:** {telemetry['avg_memory_utilization']}\n"
+                f"- **Average Error Rate:** {telemetry['recent_error_rate']}\n"
+                f"- **Response Latency:** {telemetry['recent_response_time_ms']}\n"
+            )
+            return (
+                f"Recorded performance signals for **{name}**:{telemetry_str}\n"
+                "Use these measurements to identify the bottleneck before changing capacity or application code."
+            )
+        return "No production telemetry has been recorded for this project yet. Launch it first, then use measured CPU, memory, errors, and response time to guide performance changes."
+
+    # 5. What environment variables are missing?
+    elif "env" in msg or "variable" in msg or "missing" in msg or "secret" in msg:
+        missing = metadata.get("missing_variables") or {}
+        req_missing = missing.get("required") or []
+        rec_missing = missing.get("recommended") or []
+        
+        if not req_missing and not rec_missing:
+            return f"No missing environment-variable requirements are recorded for **{name}**. This does not verify external service credentials; confirm them before launch."
+            
+        res = f"Here are the environment variable checks for **{name}**:\n"
+        if req_missing:
+            res += f"- ❌ **Missing Required:** {', '.join(req_missing)} (Deployment might crash without these)\n"
+        if rec_missing:
+            res += f"- ⚠️ **Missing Recommended:** {', '.join(rec_missing)} (Features might be degraded)\n"
+            
+        res += "\nConfigure the required values in project settings. Secret values are stored in Azure Key Vault and are not returned by the product."
         return res
 
     # 6. Can I deploy safely?
@@ -1191,3 +1279,89 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
         )
 
 
+def explain_infrastructure_decision(component_id: str, plan: dict) -> str:
+    """Return a detailed architectural explanation for why a component was chosen."""
+    explanations = plan.get("ai_explanations", {})
+    if component_id in explanations:
+        return explanations[component_id]
+        
+    if component_id == "application":
+        return "Azure App Service is selected for hosting as it provides fully managed HTTP runtimes with direct Git/GitHub integration and auto-healing features."
+    elif component_id == "database":
+        return "Azure Database for PostgreSQL Flexible Server is recommended to host user and app relational data, with native Azure AD integrated auth and standard backup features."
+    return "This component is part of the baseline ZeroOps architecture configuration design."
+
+
+def architect_chat(message: str, plan: dict) -> tuple[dict, str]:
+    """Process a chat message directed to the AI Cloud Architect, mutating the plan if requested."""
+    try:
+        from backend.services import planner
+    except ImportError:
+        import planner
+
+    # 1. Attempt to apply the change via planner's chat rules
+    updated_plan, change_msg = planner.apply_chat_instruction(plan, message)
+    
+    # If a change occurred, run build_infrastructure_spec to recalculate scores, costs, explanations
+    if change_msg:
+        region = updated_plan.get("region_label") or "eastus"
+        raw_region = "eastus"
+        for code, label in planner.SUPPORTED_REGIONS.items():
+            if label.lower() == region.lower():
+                raw_region = code
+                break
+        
+        evidence = updated_plan.get("application_evidence", {})
+        updated_plan = planner.build_infrastructure_spec(evidence, region=raw_region)
+        reply = f"Understood! I've updated the architecture configuration: {change_msg}"
+        return updated_plan, reply
+
+    # 2. Generate a friendly chat reply using OpenAI/fallback
+    api_key = GITHUB_MODELS_API_KEY or OPENAI_API_KEY
+    base_url = GITHUB_MODELS_ENDPOINT if GITHUB_MODELS_API_KEY else None
+    model_name = GITHUB_MODELS_MODEL if GITHUB_MODELS_API_KEY else OPENAI_MODEL
+    provider = "github-models" if GITHUB_MODELS_API_KEY else "openai"
+
+    system_prompt = """You are the Senior Cloud Architect at ZeroOps AI.
+Your job is to answer questions about the current cloud architecture design and make changes when requested.
+Always explain your reasoning concisely, like a senior solutions architect.
+
+Current Architecture Design:
+""" + json.dumps(plan, indent=2)
+
+    if api_key:
+        try:
+            start_time = time.time()
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=1)
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=0.7,
+                max_tokens=600
+            )
+            latency = time.time() - start_time
+            reply = str(response.choices[0].message.content or "").strip()
+            tokens_used = getattr(response.usage, 'total_tokens', 0) if hasattr(response, 'usage') and response.usage else 0
+            if reply:
+                log_ai_request(provider, model_name, latency, True, tokens_used)
+                return plan, reply
+        except Exception as e:
+            log_ai_request(provider, model_name, 0.0, False, error=str(e))
+            
+    # Local fallback responder
+    msg_lower = message.lower()
+    if "why" in msg_lower and "app service" in msg_lower:
+        reply = "App Service offers a fully managed platform with built-in load balancing, auto-scaling, and easy deployments, which is ideal for this application stack."
+    elif "why" in msg_lower and ("postgres" in msg_lower or "database" in msg_lower):
+        reply = "PostgreSQL is recommended due to its robustness, ACID compliance, and compatibility with the database dependencies detected in your codebase."
+    elif "cost" in msg_lower or "price" in msg_lower:
+        reply = "We choose standard tiers to maintain high availability and performance. Tell me to 'reduce cost' if you want to switch to standard basic/burstable configurations."
+    elif "scale" in msg_lower or "performance" in msg_lower or "scalability" in msg_lower:
+        reply = "We can increase performance by scaling up computing and database hosting. Tell me to 'increase scalability' or 'scale up' to apply it to the plan."
+    else:
+        reply = "I'm your AI Cloud Architect. Ask me questions like 'Why App Service?', 'Why PostgreSQL?', or tell me to 'reduce cost', 'use container apps', or 'add Redis'."
+        
+    return plan, reply

@@ -57,6 +57,9 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
   const [selectedService, setSelectedService] = useState("");
   const [tier, setTier] = useState("");
   const [approvalNote, setApprovalNote] = useState("");
+  const [showCostBreakdown, setShowCostBreakdown] = useState(false);
+  const [explainedComponent, setExplainedComponent] = useState<string | null>(null);
+
   const application = useMemo(
     () => plan.plan.components.find((component) => component.id === "application"),
     [plan.plan.components],
@@ -79,17 +82,26 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
     setEditing(null);
   };
 
+  // Extract costs and scores from spec
+  const monthlyCost = plan.cost_estimate?.monthly_estimate ?? plan.plan.cost.monthly_estimate;
+  const costBreakdown = plan.cost_estimate?.breakdown ?? [];
+  const securityScore = plan.security_score ?? plan.plan.assessment.security.value;
+  const performanceScore = plan.performance_score ?? plan.plan.assessment.performance.value;
+  const reliabilityScore = plan.reliability_score ?? plan.plan.assessment.reliability.value;
+  const deployTime = plan.estimated_deploy_time ?? plan.plan.deployment_time.estimate;
+  const scoreLabel = (value: number | null | undefined) => value == null ? "Awaiting validation" : `${value}/100`;
+
   return (
     <div className="mx-auto max-w-7xl space-y-5 pb-8">
       <section className="ops-card rounded-2xl p-5 sm:p-7">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
-            <p className="text-xs font-semibold text-primary">Architecture plan</p>
+            <p className="text-xs font-semibold text-primary">ZeroOps AI Cloud Architect</p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">A clear path to deployment</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Architect Spec</h1>
               <StatusBadge approved={plan.status === "approved"} />
             </div>
-            <p className="mt-3 text-sm leading-6 text-foreground-muted">Review the recommended services, make any change you need, then approve this exact plan. Implementation details and credentials stay protected.</p>
+            <p className="mt-3 text-sm leading-6 text-foreground-muted">We have translated codebase evidence into a production-ready Azure specification. Infrastructure details run invisibly in the background.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:w-[360px]">
             <label className="rounded-xl border border-border bg-background-secondary/55 px-3 py-2.5">
@@ -117,12 +129,27 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
 
       <section aria-labelledby="plan-summary-heading" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <h2 id="plan-summary-heading" className="sr-only">Plan summary</h2>
-        <SummaryItem label="Monthly cost" value={plan.plan.cost.monthly_estimate == null ? "Awaiting validation" : `$${plan.plan.cost.monthly_estimate}/mo`} detail={plan.plan.cost.message} />
-        <SummaryItem label="Deployment time" value={plan.plan.deployment_time.estimate || "Awaiting validation"} detail={plan.plan.deployment_time.message} />
-        <SummaryItem label="Security score" value={plan.plan.assessment.security.value == null ? "85/100" : `${plan.plan.assessment.security.value}/100`} detail="Validated by security policy and key checks." />
-        <SummaryItem label="Performance score" value={plan.plan.assessment.performance.value == null ? "90/100" : `${plan.plan.assessment.performance.value}/100`} detail="Estimated application request latency." />
-        <SummaryItem label="Reliability score" value={plan.plan.assessment.reliability.value == null ? "95/100" : `${plan.plan.assessment.reliability.value}/100`} detail="Estimated high-availability & uptime SLA." />
+        {costBreakdown.length > 0 ? <button type="button" onClick={() => setShowCostBreakdown((visible) => !visible)} aria-expanded={showCostBreakdown} className="cursor-pointer text-left"><SummaryItem label="Monthly cost" value={monthlyCost == null ? "Awaiting validation" : `$${monthlyCost}/mo`} detail="View the connected-cost breakdown" highlight={showCostBreakdown} /></button> : <SummaryItem label="Monthly cost" value={monthlyCost == null ? "Awaiting validation" : `$${monthlyCost}/mo`} detail={plan.plan.cost.message} />}
+        <SummaryItem label="Deployment time" value={deployTime || "Awaiting validation"} detail={plan.plan.deployment_time.message} />
+        <SummaryItem label="Security score" value={scoreLabel(securityScore)} detail="Validated only after configuration and policy checks complete." />
+        <SummaryItem label="Performance score" value={scoreLabel(performanceScore)} detail="Requires runtime telemetry from a deployed application." />
+        <SummaryItem label="Reliability score" value={scoreLabel(reliabilityScore)} detail="Requires runtime telemetry and health validation." />
       </section>
+
+      {showCostBreakdown && costBreakdown.length > 0 && (
+        <section className="ops-card rounded-2xl p-5 border border-primary/20 bg-primary/[0.02]">
+          <h3 className="text-sm font-semibold text-foreground mb-3">Cost Breakdown</h3>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {costBreakdown.map((item, idx) => (
+              <div key={idx} className="bg-card p-3 rounded-xl border border-border/60">
+                <p className="text-xs text-foreground-muted">{item.component}</p>
+                <p className="text-sm font-bold text-foreground mt-1">${item.cost_monthly}/mo</p>
+                <p className="text-[10px] text-foreground-muted mt-1">{item.tier}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section aria-labelledby="resources-heading">
         <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -130,13 +157,16 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
             <p className="text-xs font-semibold text-primary">Recommended services</p>
             <h2 id="resources-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">Architecture decisions</h2>
           </div>
-          <p className="max-w-xl text-xs leading-5 text-foreground-muted">Each recommendation is linked to recorded application evidence. Services marked “setup needed” are not provisioned automatically.</p>
+          <p className="max-w-xl text-xs leading-5 text-foreground-muted">Each recommendation is linked to codebase evidence. Deployment remains subject to preflight and Azure validation.</p>
         </div>
 
         <div className="ops-card overflow-hidden rounded-2xl">
           {plan.plan.components.map((component) => {
             const Icon = iconFor(component);
             const isEditing = editing === component.id;
+            const explanation = plan.ai_explanations?.[component.id] || "No custom decision logs found.";
+            const isExplained = explainedComponent === component.id;
+            
             return (
               <article key={component.id} className="border-b border-border p-4 last:border-b-0 sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -150,9 +180,24 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
                       </div>
                       <p className="mt-1 text-xs font-medium text-primary">{component.category}{component.tier ? ` · ${component.tier}` : ""}</p>
                       <p className="mt-2 max-w-3xl text-xs leading-5 text-foreground-muted">{component.reason}</p>
+                      
+                      {isExplained && (
+                        <div className="mt-3 p-3 rounded-xl bg-primary/[0.03] border border-primary/20 text-xs text-foreground-muted leading-5">
+                          <strong>Architect Reasoning:</strong> {explanation}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  {!isEditing && <button type="button" disabled={busy} onClick={() => beginEdit(component)} className="ops-secondary shrink-0 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"><Pencil size={14} /> Modify</button>}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setExplainedComponent(isExplained ? null : component.id)}
+                      className="ops-secondary px-3 py-1.5 text-xs text-primary bg-primary/5 hover:bg-primary/10 border-none rounded-lg"
+                    >
+                      Why?
+                    </button>
+                    {!isEditing && <button type="button" disabled={busy} onClick={() => beginEdit(component)} className="ops-secondary px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"><Pencil size={14} /> Modify</button>}
+                  </div>
                 </div>
 
                 {isEditing && <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
@@ -192,6 +237,6 @@ function StatusBadge({ approved }: { approved: boolean }) {
   return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${approved ? "border-success/25 bg-success/10 text-success" : "border-primary/20 bg-primary/10 text-primary"}`}>{approved ? <CheckCircle2 size={13} /> : <Pencil size={13} />}{approved ? "Approved" : "Review needed"}</span>;
 }
 
-function SummaryItem({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <article className="rounded-xl border border-border bg-card px-4 py-3.5"><p className="text-xs font-medium text-foreground-muted">{label}</p><p className="mt-1.5 text-sm font-semibold text-foreground">{value}</p><p className="mt-1.5 text-xs leading-4 text-foreground-muted">{detail}</p></article>;
+function SummaryItem({ label, value, detail, highlight = false }: { label: string; value: string; detail: string; highlight?: boolean }) {
+  return <article className={`rounded-xl border px-4 py-3.5 transition ${highlight ? "border-primary/60 bg-primary/[0.04]" : "border-border bg-card"}`}><p className="text-xs font-medium text-foreground-muted">{label}</p><p className="mt-1.5 text-sm font-semibold text-foreground">{value}</p><p className="mt-1.5 text-xs leading-4 text-foreground-muted">{detail}</p></article>;
 }

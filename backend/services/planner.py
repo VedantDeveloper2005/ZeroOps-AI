@@ -229,6 +229,67 @@ def build_infrastructure_plan(
     }
 
 
+def build_infrastructure_spec(
+    analysis: dict[str, Any] | None,
+    *,
+    region: str,
+    azure_connection: Any | None = None,
+) -> dict[str, Any]:
+    """Build a detailed but evidence-bound specification.
+
+    This intentionally does not manufacture pricing, scores, or deployment
+    durations. Those values require a connected Azure subscription and runtime
+    telemetry. Component explanations describe the selected architecture only.
+    """
+    plan = build_infrastructure_plan(analysis, region=region, azure_connection=azure_connection)
+    explanations: dict[str, str] = {}
+    framework = (analysis or {}).get("framework", "application")
+    for comp in plan["components"]:
+        comp_id = comp.get("id")
+        if comp_id == "application":
+            explanations[comp_id] = f"Azure App Service provides fully managed scalable hosting for your {framework} app with automated OS patching and scaling."
+        elif comp_id == "database":
+            explanations[comp_id] = "Azure Database for PostgreSQL Flexible Server delivers high availability, automated backups, and private networking for database storage."
+        elif comp_id == "cache":
+            explanations[comp_id] = "Azure Cache for Redis provides in-memory caching to boost performance and reduce latency for frequent data queries."
+        elif comp_id == "storage":
+            explanations[comp_id] = "Azure Blob Storage offers durable, secure, and infinitely scalable object storage for file uploads and static assets."
+        elif comp_id == "secrets":
+            explanations[comp_id] = "Azure Key Vault secures sensitive credentials, secrets, and environment variables using FIPS-compliant hardware security modules."
+        elif comp_id == "monitoring":
+            explanations[comp_id] = "Application Insights delivers end-to-end telemetry, application logs, and performance monitoring."
+        elif comp_id == "networking":
+            explanations[comp_id] = "Virtual Network (VNet) secures communications between resources by keeping traffic private within the cloud."
+
+    plan["ai_explanations"] = explanations
+    return plan
+
+
+def clear_unverified_estimates(plan: dict[str, Any]) -> dict[str, Any]:
+    """Remove legacy synthetic pricing, scores, and deployment estimates."""
+    updated = deepcopy(plan)
+    assessment = updated.get("assessment") or {}
+    updated["cost"] = {
+        "status": "requires_connected_azure_subscription",
+        "monthly_estimate": None,
+        "message": "A source scan cannot calculate subscription-specific Azure pricing. Connect Cost Management to validate a monthly estimate.",
+    }
+    updated["deployment_time"] = {
+        "status": "requires_resource_validation",
+        "estimate": None,
+        "message": "Deployment timing is calculated only after the Azure target and required services pass validation.",
+    }
+    updated["assessment"] = {
+        "security": {"status": "requires_configuration_review", "value": None},
+        "performance": {"status": "requires_runtime_telemetry", "value": None},
+        "reliability": {"status": "requires_runtime_telemetry", "value": None},
+        "source_findings": _as_list(assessment.get("source_findings")),
+        "unresolved_questions": _as_list(assessment.get("unresolved_questions")),
+        "readiness_message": assessment.get("readiness_message") or "Validate the Azure target and runtime telemetry before relying on readiness metrics.",
+    }
+    return updated
+
+
 def _find_component(plan: dict[str, Any], component_id: str) -> dict[str, Any]:
     for component in plan.get("components", []):
         if component.get("id") == component_id:
@@ -270,7 +331,7 @@ def apply_plan_update(plan: dict[str, Any], *, region: str | None, component_id:
             component["tier"] = tier_value
     elif service or tier:
         raise ValueError("Choose the component you want to modify.")
-    return updated
+    return clear_unverified_estimates(updated)
 
 
 def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str, Any], str | None]:
@@ -322,5 +383,34 @@ def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str
                 "Added after your architecture request. Confirm network access and cache usage before approval.",
                 deployable=False,
             ))
-            return updated, "Azure Cache for Redis added to the plan."
+            return clear_unverified_estimates(updated), "Azure Cache for Redis added to the plan."
+
+    if "reduce cost" in text or "lower cost" in text or "cheap" in text:
+        updated = deepcopy(plan)
+        changed = False
+        for comp in updated.get("components", []):
+            if comp.get("id") == "application":
+                comp["tier"] = "B1"  # lower basic tier
+                comp["reason"] = "Pricing tier reduced to B1 to optimize infrastructure costs."
+                changed = True
+            elif comp.get("id") == "database":
+                comp["tier"] = "Burstable B1ms"
+                changed = True
+        if changed:
+            return clear_unverified_estimates(updated), "Tiers were adjusted to lower-cost options; validate actual Azure pricing before approval."
+
+    if "increase scalability" in text or "scale up" in text or "premium" in text or "high performance" in text:
+        updated = deepcopy(plan)
+        changed = False
+        for comp in updated.get("components", []):
+            if comp.get("id") == "application":
+                comp["tier"] = "P0v3"  # high performance tier
+                comp["reason"] = "Pricing tier scaled up to P0v3 to support high-performance workloads."
+                changed = True
+            elif comp.get("id") == "database":
+                comp["tier"] = "General Purpose"
+                changed = True
+        if changed:
+            return clear_unverified_estimates(updated), "Tiers were adjusted for higher capacity; validate actual Azure pricing and capacity before approval."
+
     return deepcopy(plan), None

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { ThemeProvider } from "@/components/theme-provider";
 import { NotificationProvider } from "@/lib/NotificationContext";
 import { AuthProvider } from "@/lib/AuthContext";
 import { ToastContainer } from "@/components/ui/ToastContainer";
@@ -44,25 +43,17 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable}`}
-      suppressHydrationWarning
     >
-      <body className="min-h-screen bg-background text-foreground antialiased transition-colors duration-300">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="light"
-          enableSystem={false}
-          disableTransitionOnChange={false}
-        >
-          <NotificationProvider>
-            <AuthProvider>
-              <DeviceGate>
-                <a href="#main-content" className="skip-link">Skip to main content</a>
-                {children}
-                <ToastContainer />
-              </DeviceGate>
-            </AuthProvider>
-          </NotificationProvider>
-        </ThemeProvider>
+      <body className="min-h-screen bg-background text-foreground antialiased">
+        <NotificationProvider>
+          <AuthProvider>
+            <DeviceGate>
+              <a href="#main-content" className="skip-link">Skip to main content</a>
+              {children}
+              <ToastContainer />
+            </DeviceGate>
+          </AuthProvider>
+        </NotificationProvider>
       </body>
     </html>
   );

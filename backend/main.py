@@ -16,7 +16,6 @@ import json
 import uuid
 import requests
 import logging
-import os
 import secrets
 import shutil
 import zipfile
@@ -25,7 +24,7 @@ import stat
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from typing import Any, Optional, List, Union
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -60,6 +59,7 @@ async def lifespan(_: FastAPI):
     initialized = await init_db()
     if initialized:
         await migrate_legacy_environment_secrets()
+        await remove_unverified_plan_estimates()
         await recover_interrupted_deployments()
     daemon_task = asyncio.create_task(self_healing_daemon())
     try:
@@ -72,9 +72,9 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="ZeroOps AI Backend",
-    docs_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/docs",
-    redoc_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/redoc",
-    openapi_url=None if os.getenv("APP_ENV", "development").lower() == "production" else "/openapi.json",
+    docs_url=None if config.IS_PRODUCTION else "/docs",
+    redoc_url=None if config.IS_PRODUCTION else "/redoc",
+    openapi_url=None if config.IS_PRODUCTION else "/openapi.json",
     lifespan=lifespan,
 )
 
@@ -84,7 +84,7 @@ app.add_middleware(
     allow_origins=config.CORS_ORIGINS,
     allow_credentials=config.ALLOW_CREDENTIALS,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "Stripe-Signature"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "Stripe-Signature", "X-ZeroOps-Worker-Token"],
     expose_headers=["X-CSRF-Token"],
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.ALLOWED_HOSTS)
@@ -455,6 +455,30 @@ async def migrate_legacy_environment_secrets() -> None:
         if migrated:
             await db.commit()
             logger.info("Migrated %s legacy environment secrets to Key Vault.", migrated)
+
+
+async def remove_unverified_plan_estimates() -> None:
+    """Clear historical placeholder costs, scores, and durations from plans."""
+    if AsyncSessionLocal is None:
+        return
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(models.InfrastructurePlan))
+        sanitized_count = 0
+        for plan in result.scalars().all():
+            sanitized = planner.clear_unverified_estimates(plan.plan_data or {})
+            if sanitized == (plan.plan_data or {}):
+                continue
+            plan.plan_data = sanitized
+            plan.cost_estimate = sanitized.get("cost")
+            plan.security_score = sanitized.get("assessment", {}).get("security", {}).get("value")
+            plan.performance_score = sanitized.get("assessment", {}).get("performance", {}).get("value")
+            plan.reliability_score = sanitized.get("assessment", {}).get("reliability", {}).get("value")
+            plan.estimated_deploy_time = sanitized.get("deployment_time", {}).get("estimate")
+            sanitized_count += 1
+        if sanitized_count:
+            await db.commit()
+            logger.info("Cleared unverified cost and readiness estimates from %s infrastructure plan(s).", sanitized_count)
 
 
 async def recover_interrupted_deployments() -> None:
@@ -2933,14 +2957,8 @@ async def start_deploy(
         category="deployment"
     ))
 
-    clone_token = None
-    if current_user.github_access_token_encrypted:
-        try:
-            clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
-        except Exception:
-            clone_token = None
-
-    # Create deployment job record in Postgres queue
+    # Create a deployment job without copying an OAuth token into the queue.
+    # The worker decrypts the user's encrypted token only for the active run.
     job = models.DeploymentJob(
         id=uuid.uuid4(),
         user_id=current_user.id,
@@ -2949,7 +2967,7 @@ async def start_deploy(
         status="queued",
         cloud="azure",
         region=approved_plan.region,
-        github_token=clone_token,
+        infrastructure_spec=approved_plan.plan_data,
     )
     db.add(job)
     await db.commit()
@@ -3318,7 +3336,7 @@ async def analyze_repo(
         except Exception:
             pass
             
-    clone_token = user_token or token or os.getenv("GITHUB_TOKEN")
+    clone_token = user_token or token
     
     try:
         # Fetch repository context via GitHub API (no cloning, no git binary)
@@ -3490,6 +3508,12 @@ def _serialize_infrastructure_plan(plan: models.InfrastructurePlan) -> schemas.I
         status=plan.status,
         revision=plan.revision,
         plan=plan.plan_data or {},
+        cost_estimate=plan.cost_estimate or {},
+        security_score=plan.security_score,
+        performance_score=plan.performance_score,
+        reliability_score=plan.reliability_score,
+        estimated_deploy_time=plan.estimated_deploy_time,
+        ai_explanations=plan.ai_explanations or {},
         approval_note=plan.approval_note,
         approved_at=format_dt(plan.approved_at),
         created_at=format_dt(plan.created_at),
@@ -3641,7 +3665,7 @@ async def generate_infrastructure_plan(
         or project.region
         or config.AZURE_DEFAULT_REGION
     )
-    plan_data = planner.build_infrastructure_plan(
+    plan_data = planner.build_infrastructure_spec(
         _analysis_to_plan_facts(analysis),
         region=region,
         azure_connection=azure_connection,
@@ -3660,6 +3684,12 @@ async def generate_infrastructure_plan(
         record.status = "draft"
         record.revision += 1
         record.plan_data = plan_data
+        record.cost_estimate = plan_data.get("cost")
+        record.security_score = plan_data.get("assessment", {}).get("security", {}).get("value")
+        record.performance_score = plan_data.get("assessment", {}).get("performance", {}).get("value")
+        record.reliability_score = plan_data.get("assessment", {}).get("reliability", {}).get("value")
+        record.estimated_deploy_time = plan_data.get("deployment_time", {}).get("estimate")
+        record.ai_explanations = plan_data.get("ai_explanations")
         record.approval_note = None
         record.approved_at = None
     else:
@@ -3669,6 +3699,12 @@ async def generate_infrastructure_plan(
             provider="azure",
             region=region,
             plan_data=plan_data,
+            cost_estimate=plan_data.get("cost"),
+            security_score=plan_data.get("assessment", {}).get("security", {}).get("value"),
+            performance_score=plan_data.get("assessment", {}).get("performance", {}).get("value"),
+            reliability_score=plan_data.get("assessment", {}).get("reliability", {}).get("value"),
+            estimated_deploy_time=plan_data.get("deployment_time", {}).get("estimate"),
+            ai_explanations=plan_data.get("ai_explanations"),
         )
         db.add(record)
 
@@ -3736,13 +3772,19 @@ async def update_infrastructure_plan(
         raise HTTPException(status_code=404, detail="Generate an infrastructure plan before modifying it.")
 
     try:
-        plan.plan_data = planner.apply_plan_update(
+        updated_plan_data = planner.apply_plan_update(
             plan.plan_data or {},
             region=req.region,
             component_id=req.component_id,
             service=req.service,
             tier=req.tier,
         )
+        plan.plan_data = updated_plan_data
+        plan.cost_estimate = updated_plan_data.get("cost")
+        plan.security_score = updated_plan_data.get("assessment", {}).get("security", {}).get("value")
+        plan.performance_score = updated_plan_data.get("assessment", {}).get("performance", {}).get("value")
+        plan.reliability_score = updated_plan_data.get("assessment", {}).get("reliability", {}).get("value")
+        plan.estimated_deploy_time = updated_plan_data.get("deployment_time", {}).get("estimate")
         if req.region:
             plan.region = planner.normalize_region(req.region)
     except ValueError as error:
@@ -5739,26 +5781,37 @@ async def health_deployments(db: AsyncSession = Depends(get_db)):
 async def healthz():
     return {"status": "ok"}
 
+
+async def require_worker_event_token(
+    worker_token: Optional[str] = Header(default=None, alias="X-ZeroOps-Worker-Token"),
+) -> None:
+    """Reject callback requests before any database work is performed."""
+    if not worker_token or not hmac.compare_digest(worker_token, config.WORKER_EVENT_TOKEN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid worker credentials.")
+
+
 @app.post("/api/deployments/{deploy_id}/events")
 async def receive_worker_event(
-    deploy_id: str,
-    event: dict,
-    db: AsyncSession = Depends(get_db)
+    deploy_id: uuid.UUID,
+    event: schemas.WorkerDeploymentEvent,
+    _: None = Depends(require_worker_event_token),
+    db: AsyncSession = Depends(get_db),
 ):
-    import uuid
     from sqlalchemy.orm.attributes import flag_modified
-    
+
+    event_data = event.model_dump(exclude_none=True)
+
     # Broadcast to active WebSockets
-    await pipeline.broadcast_message(deploy_id, event)
+    await pipeline.broadcast_message(str(deploy_id), event_data)
     
     # Process event type
-    evt_type = event.get("type")
+    evt_type = event.type
     if evt_type == "log":
-        msg = event.get("text", "")
-        lvl = event.get("lineType", "info").upper()
-        line_num = event.get("line_number", 1)
+        msg = event.text
+        lvl = event.lineType.upper()
+        line_num = event.line_number
         db_log = models.DeploymentLog(
-            deployment_id=uuid.UUID(deploy_id),
+            deployment_id=deploy_id,
             line_number=line_num,
             level=lvl,
             message=msg,
@@ -5768,7 +5821,7 @@ async def receive_worker_event(
         await db.commit()
     elif evt_type == "stage":
         res = await db.execute(
-            select(models.Deployment).filter(models.Deployment.id == uuid.UUID(deploy_id))
+            select(models.Deployment).filter(models.Deployment.id == deploy_id)
         )
         dep = res.scalars().first()
         if dep:
@@ -5776,32 +5829,32 @@ async def receive_worker_event(
             stages = meta.setdefault("stages", [])
             stage_found = False
             for stage in stages:
-                if stage.get("id") == event.get("id"):
-                    stage["status"] = event.get("status")
-                    stage["duration"] = event.get("duration", "")
+                if stage.get("id") == event.id:
+                    stage["status"] = event.status or "pending"
+                    stage["duration"] = event.duration
                     stage_found = True
                     break
             if not stage_found:
                 stages.append({
-                    "id": event.get("id"),
-                    "label": event.get("label", ""),
-                    "status": event.get("status"),
-                    "duration": event.get("duration", "")
+                    "id": event.id,
+                    "label": event.label,
+                    "status": event.status or "pending",
+                    "duration": event.duration,
                 })
             flag_modified(dep, "infrastructure_metadata")
             await db.commit()
     elif evt_type == "status":
         res = await db.execute(
-            select(models.Deployment).filter(models.Deployment.id == uuid.UUID(deploy_id))
+            select(models.Deployment).filter(models.Deployment.id == deploy_id)
         )
         dep = res.scalars().first()
         if dep:
-            status_val = event.get("status")
+            status_val = event.status
             dep.status = status_val
             if status_val in ("running", "failed", "stopped", "rolled_back"):
                 dep.completed_at = datetime.utcnow()
                 if status_val == "failed":
-                    dep.failure_reason = event.get("failure_reason", "Worker build failure")
+                    dep.failure_reason = event.failure_reason or "Worker build failure"
             await db.commit()
     return {"status": "ok"}
 
@@ -5822,5 +5875,227 @@ async def deploy_websocket(websocket: WebSocket, deploy_id: str):
     except Exception as e:
         print(f"WS error in {deploy_id}: {e}")
         pipeline.unregister_connection(deploy_id, websocket)
+
+
+# ──────────────────────────────────────────────
+# AI CLOUD ARCHITECT EVOLVED ROUTERS
+# ──────────────────────────────────────────────
+
+from backend.services import analysis as zeroops_analysis
+
+@app.post("/api/projects/{project_id}/analyze")
+async def analyze_project_repository(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    repo_path = project.source_path or project.full_name
+    
+    clone_token = None
+    if current_user.github_access_token_encrypted:
+        try:
+            clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
+        except Exception:
+            pass
+
+    temp_dir = None
+    if project.source_type != "upload" and not project.source_path:
+        from backend.services import git
+        try:
+            temp_dir = git.clone_repo(project.full_name, clone_token)
+            repo_path = temp_dir
+        except Exception as e:
+            logger.warning(f"Failed to clone repo for analysis: {e}")
+            repo_path = project.full_name
+            
+    try:
+        raw_analysis = zeroops_analysis.analyze_repository(repo_path, str(project_id))
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                import shutil
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
+
+    db_analysis = models.AIAnalysis(
+        user_id=current_user.id,
+        project_id=project.id,
+        framework=raw_analysis.get("framework"),
+        framework_version=raw_analysis.get("version"),
+        language=raw_analysis.get("language"),
+        confidence=raw_analysis.get("confidence", 75),
+        cpu_recommendation=raw_analysis.get("resources", {}).get("cpu"),
+        memory_recommendation=raw_analysis.get("resources", {}).get("memory"),
+        storage_recommendation=raw_analysis.get("resources", {}).get("storage"),
+        port=raw_analysis.get("port"),
+        dependencies=raw_analysis.get("dependencies", []),
+        vulnerabilities=raw_analysis.get("vulnerabilities", []),
+        dockerfile=raw_analysis.get("dockerfile"),
+        kubernetes_manifest=raw_analysis.get("kubernetes_manifest"),
+        runtime=raw_analysis.get("runtime"),
+        package_manager=raw_analysis.get("package_manager"),
+        docker_support=raw_analysis.get("docker_support", False),
+        monorepo_structure=raw_analysis.get("monorepo_structure"),
+        database_dependencies=raw_analysis.get("database_dependencies", []),
+        deployment_strategy=raw_analysis.get("deployment_strategy"),
+        build_commands=raw_analysis.get("build_commands"),
+        start_commands=raw_analysis.get("start_commands"),
+        environment_variables=raw_analysis.get("environment_variables", []),
+        explanation=raw_analysis.get("explanation"),
+        deployment_risk=raw_analysis.get("deployment_risk"),
+        recommended_compute_tier=raw_analysis.get("recommended_compute_tier"),
+        estimated_cost=raw_analysis.get("estimated_cost"),
+        recommended_region=raw_analysis.get("recommended_region"),
+        expected_traffic=raw_analysis.get("expected_traffic"),
+        pricing_breakdown=raw_analysis.get("pricing_breakdown")
+    )
+    db.add(db_analysis)
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project_id,
+        action="Repository scanned",
+        details=f"Codebase scanner detected {db_analysis.framework} framework and database dependencies."
+    ))
+    await db.commit()
+    await db.refresh(db_analysis)
+    return raw_analysis
+
+
+@app.get("/api/projects/{project_id}/analysis")
+async def get_project_analysis(
+    project_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    analysis = await _latest_project_analysis(db, project_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="No analysis found. Run analyze endpoint first.")
+    
+    return {
+        "framework": analysis.framework,
+        "version": analysis.framework_version,
+        "language": analysis.language,
+        "runtime": analysis.runtime,
+        "package_manager": analysis.package_manager,
+        "docker_support": analysis.docker_support,
+        "database_dependencies": analysis.database_dependencies,
+        "environment_variables": analysis.environment_variables,
+        "vulnerabilities": analysis.vulnerabilities,
+        "explanation": analysis.explanation,
+        "deployment_risk": analysis.deployment_risk
+    }
+
+
+@app.post("/api/projects/{project_id}/infrastructure-spec/explain/{component_id}")
+async def explain_component_decision(
+    project_id: uuid.UUID,
+    component_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    project = await _owned_project_or_404(project_id, current_user, db)
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == project_id,
+            models.InfrastructurePlan.user_id == current_user.id
+        )
+    )
+    plan = plan_result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Infrastructure plan not found.")
+        
+    explanation = ai.explain_infrastructure_decision(component_id, plan.plan_data or {})
+    return {"explanation": explanation}
+
+
+@app.post("/api/projects/{project_id}/deploy")
+async def start_queue_deploy(
+    project_id: uuid.UUID,
+    req: schemas.DeploymentCreate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    from fastapi import BackgroundTasks
+    return await start_deploy(req, BackgroundTasks(), current_user, db)
+
+
+@app.get("/api/deployment-jobs/{job_id}/status")
+async def get_deployment_job_status(
+    job_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(models.DeploymentJob)
+        .filter(models.DeploymentJob.id == job_id, models.DeploymentJob.user_id == current_user.id)
+    )
+    job = result.scalars().first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Deployment job not found.")
+        
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "terraform_status": job.terraform_status,
+        "deployment_status": job.deployment_status,
+        "live_url": job.live_url,
+        "failure_reason": job.failure_reason,
+        "created_at": format_dt(job.created_at),
+        "updated_at": format_dt(job.updated_at)
+    }
+
+
+@app.post("/api/ai/architect-chat", response_model=schemas.ArchitectChatResponse)
+async def post_architect_chat(
+    req: schemas.ChatRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if not req.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required for architect chat.")
+        
+    project = await _owned_project_or_404(req.project_id, current_user, db)
+    plan_result = await db.execute(
+        select(models.InfrastructurePlan).filter(
+            models.InfrastructurePlan.project_id == req.project_id,
+            models.InfrastructurePlan.user_id == current_user.id
+        )
+    )
+    plan = plan_result.scalars().first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Generate infrastructure plan first.")
+
+    updated_plan_data, reply = ai.architect_chat(req.message, plan.plan_data or {})
+    
+    plan_updated = False
+    if updated_plan_data != plan.plan_data:
+        plan.plan_data = updated_plan_data
+        plan.cost_estimate = updated_plan_data.get("cost")
+        plan.security_score = updated_plan_data.get("assessment", {}).get("security", {}).get("value")
+        plan.performance_score = updated_plan_data.get("assessment", {}).get("performance", {}).get("value")
+        plan.reliability_score = updated_plan_data.get("assessment", {}).get("reliability", {}).get("value")
+        plan.estimated_deploy_time = updated_plan_data.get("deployment_time", {}).get("estimate")
+        plan.ai_explanations = updated_plan_data.get("ai_explanations")
+        plan.status = "draft"
+        plan.revision += 1
+        
+        db.add(models.ActivityEvent(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            action="Infrastructure spec updated by Architect chat",
+            details=reply
+        ))
+        await db.commit()
+        await db.refresh(plan)
+        plan_updated = True
+        
+    return schemas.ArchitectChatResponse(
+        reply=reply,
+        plan_updated=plan_updated,
+        plan=_serialize_infrastructure_plan(plan)
+    )
 
 

@@ -124,7 +124,7 @@ function ConfettiParticles() {
 const deploymentStages8 = [
   "Repository Analysis",
   "Infrastructure Planning",
-  "Terraform Generation",
+  "Infrastructure Generation",
   "Infrastructure Provisioning",
   "Application Deployment",
   "Health Checks",

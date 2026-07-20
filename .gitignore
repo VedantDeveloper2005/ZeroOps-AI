@@ -45,8 +45,8 @@ next-env.d.ts
 
 backend/workspace/
 backend/**/__pycache__/
+worker/**/__pycache__/
 .git.zip
 *.zip
 /tmp/
 /backend_logs_403/
- 
