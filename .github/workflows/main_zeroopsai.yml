@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -24,32 +23,10 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Login to Azure for Key Vault configuration
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1D49659F5B5345268A7FCB8EFD04FA52 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E6673234A5024B008E866F7F2B0F07E9 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BC200405435F4679AAE56FA9C421C8B9 }}
-
-      - name: Read public frontend configuration from Key Vault
-        id: public-config
-        shell: bash
-        run: |
-          if [ -z "${{ vars.ZEROOPS_KEYVAULT_NAME }}" ]; then
-            echo "Repository variable ZEROOPS_KEYVAULT_NAME is required." >&2
-            exit 1
-          fi
-          api_base_url="$(az keyvault secret show --vault-name "${{ vars.ZEROOPS_KEYVAULT_NAME }}" --name zeroops-next-public-api-base-url --query value --output tsv)"
-          if [ -z "$api_base_url" ]; then
-            echo "Key Vault secret zeroops-next-public-api-base-url is required." >&2
-            exit 1
-          fi
-          echo "api_base_url=$api_base_url" >> "$GITHUB_OUTPUT"
-
       - name: npm install, build, and test
         env:
-          NEXT_PUBLIC_API_BASE_URL: ${{ steps.public-config.outputs.api_base_url }}
-          ZEROOPS_BACKEND_URL: ${{ steps.public-config.outputs.api_base_url }}
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          ZEROOPS_BACKEND_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
         run: |
           npm install
           npm run build --if-present
