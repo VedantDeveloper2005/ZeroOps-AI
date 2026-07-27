@@ -141,7 +141,10 @@ class User(Base):
     avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     plan = Column(Text, default="starter")
+    # API keys are stored as SHA-256 digests; the raw credential is shown only
+    # in the response that creates or rotates it.
     api_key = Column(Text, nullable=True, unique=True)
+    api_key_prefix = Column(Text, nullable=True)
     refresh_token = Column(Text, nullable=True)
     last_primary_auth_at = Column(DateTime, nullable=True)
 

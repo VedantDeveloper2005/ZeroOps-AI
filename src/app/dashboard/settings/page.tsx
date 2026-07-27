@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
 
   // Health check states
   const [sysHealth, setSysHealth] = useState<SystemHealth | null>(null);
@@ -206,6 +207,7 @@ export default function SettingsPage() {
       try {
         const data = await api.getApiKey();
         setApiKey(data.apiKey);
+        setApiKeyConfigured(data.configured);
       } catch (err) {
         console.error("Failed to load API key", err);
       }
@@ -258,6 +260,7 @@ export default function SettingsPage() {
   };
 
   const copyApiKey = () => {
+    if (!apiKey) return;
     navigator.clipboard.writeText(apiKey);
     setCopied(true);
     addToast("Access token copied to clipboard!", "success");
@@ -268,6 +271,7 @@ export default function SettingsPage() {
     try {
       const data = await api.regenerateApiKey();
       setApiKey(data.apiKey);
+      setApiKeyConfigured(data.configured);
       addToast("Regenerated CLI access token.", "success");
     } catch {
       addToast("Failed to regenerate access key", "error");
@@ -899,7 +903,7 @@ export default function SettingsPage() {
                 <div className="flex gap-2 text-xs">
                   <div className="flex-1 bg-background-secondary border border-border rounded-xl px-3.5 py-2.5 flex items-center justify-between min-w-0">
                     <span className="font-mono text-xs truncate select-none text-foreground-muted">
-                      {apiKeyVisible ? apiKey : "••••••••••••••••••••••••••••••••••••"}
+                      {apiKeyVisible ? apiKey || (apiKeyConfigured ? "Stored securely — regenerate to reveal a new key" : "No key available") : "••••••••••••••••••••••••••••••••••••"}
                     </span>
                     <button
                       onClick={() => setApiKeyVisible(!apiKeyVisible)}
@@ -910,7 +914,8 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={copyApiKey}
-                    className="px-4 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-sm"
+                    disabled={!apiKey}
+                    className="px-4 bg-primary hover:bg-primary-hover text-white font-bold rounded-xl transition cursor-pointer shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {copied ? "Copied" : "Copy"}
                   </button>

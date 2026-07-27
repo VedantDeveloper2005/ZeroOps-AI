@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 try:
     from backend.main import app
@@ -38,3 +39,12 @@ def test_csrf_middleware_gating():
     
     # Cleanup cookies
     client.cookies.clear()
+
+
+def test_deployment_websocket_rejects_unauthenticated_connections():
+    """Deployment events must never be exposed before session validation."""
+    client.cookies.clear()
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/deployments/00000000-0000-0000-0000-000000000000"):
+            pass
+    assert exc_info.value.code == 1008

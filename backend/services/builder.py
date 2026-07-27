@@ -39,7 +39,6 @@ def build_and_tag_image(repo_path: str, image_name: str, tag: str) -> Generator[
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        shell=True,
     )
 
     while True:
@@ -69,7 +68,6 @@ def push_image(image_ref: str) -> Generator[str, None, None]:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        shell=True,
     )
     while True:
         line = process.stdout.readline() if process.stdout else ""

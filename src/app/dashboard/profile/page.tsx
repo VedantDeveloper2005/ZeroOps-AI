@@ -17,6 +17,7 @@ export default function ProfilePage() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [apiKeyLoading, setApiKeyLoading] = useState(true);
   const [apiKeyRegenerating, setApiKeyRegenerating] = useState(false);
   const [mfaStatus, setMfaStatus] = useState<MFAStatus | null>(null);
@@ -47,6 +48,7 @@ export default function ProfilePage() {
       try {
         const data = await api.getApiKey();
         setApiKey(data.apiKey);
+        setApiKeyConfigured(data.configured);
       } catch (err) {
         console.error("Failed to load API key:", err);
         addToast("Failed to load API key", "error");
@@ -101,6 +103,7 @@ export default function ProfilePage() {
     try {
       const data = await api.regenerateApiKey();
       setApiKey(data.apiKey);
+      setApiKeyConfigured(data.configured);
       addToast("Regenerated CLI access token.", "success");
     } catch (err) {
       console.error(err);
@@ -447,7 +450,7 @@ export default function ProfilePage() {
               <div className="flex gap-2">
                 <div className="flex-1 bg-background-secondary border border-border rounded-lg px-3 py-2 flex items-center justify-between min-w-0">
                   <span className="font-mono text-xs truncate select-none text-foreground-muted">
-                    {apiKeyLoading ? "Loading..." : apiKeyVisible ? apiKey || "No key available" : "••••••••••••••••••••••••••••••••"}
+                    {apiKeyLoading ? "Loading..." : apiKeyVisible ? apiKey || (apiKeyConfigured ? "Stored securely — regenerate to reveal a new key" : "No key available") : "••••••••••••••••••••••••••••••••"}
                   </span>
                   <button
                     onClick={() => setApiKeyVisible(!apiKeyVisible)}

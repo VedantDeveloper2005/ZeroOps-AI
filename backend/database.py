@@ -192,6 +192,7 @@ async def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_prefix TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_primary_auth_at TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE",

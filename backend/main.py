@@ -27,6 +27,7 @@ from typing import Any, Optional, List, Union
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from jose import JWTError, jwt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -5191,25 +5192,47 @@ async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db
 # ──────────────────────────────────────────────
 
 def _generate_api_key() -> str:
-    import secrets
     return f"zo_{secrets.token_urlsafe(32)}"
+
+
+def _hash_api_key(api_key: str) -> str:
+    """Store API credentials irreversibly; API keys have high entropy."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _is_hashed_api_key(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value.lower())
+
+
+async def _rotate_api_key(current_user: models.User, db: AsyncSession) -> str:
+    api_key = _generate_api_key()
+    current_user.api_key = _hash_api_key(api_key)
+    current_user.api_key_prefix = api_key[:11]
+    db.add(current_user)
+    await db.commit()
+    return api_key
 
 @app.get("/api/settings/api-key")
 async def get_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     if not current_user.api_key:
-        current_user.api_key = _generate_api_key()
+        api_key = await _rotate_api_key(current_user, db)
+        return {"apiKey": api_key, "configured": True}
+
+    # Upgrade legacy plaintext values on their next use. Their raw value is
+    # intentionally not returned again; users can rotate it to obtain a new
+    # one-time credential.
+    if not _is_hashed_api_key(current_user.api_key):
+        current_user.api_key_prefix = current_user.api_key[:11]
+        current_user.api_key = _hash_api_key(current_user.api_key)
         db.add(current_user)
         await db.commit()
-        await db.refresh(current_user)
-    return {"apiKey": current_user.api_key or ""}
+
+    return {"apiKey": "", "configured": True}
 
 @app.post("/api/settings/api-key/regenerate")
 async def regenerate_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    current_user.api_key = _generate_api_key()
-    db.add(current_user)
-    await db.commit()
-    await db.refresh(current_user)
-    return {"apiKey": current_user.api_key}
+    api_key = await _rotate_api_key(current_user, db)
+    return {"apiKey": api_key, "configured": True}
 
 
 # ──────────────────────────────────────────────
@@ -5865,6 +5888,42 @@ async def receive_worker_event(
 
 @app.websocket("/ws/deployments/{deploy_id}")
 async def deploy_websocket(websocket: WebSocket, deploy_id: str):
+    """Stream deployment events only to the deployment owner.
+
+    WebSockets do not run the normal HTTP dependency chain, so ownership must
+    be checked explicitly before accepting the connection.
+    """
+    access_token = websocket.cookies.get(auth.ACCESS_COOKIE)
+    if not access_token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        payload = jwt.decode(access_token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
+        user_id = uuid.UUID(payload["sub"])
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type")
+        deployment_id = uuid.UUID(deploy_id)
+    except (JWTError, KeyError, ValueError):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(models.Deployment.id).filter(
+                    models.Deployment.id == deployment_id,
+                    models.Deployment.user_id == user_id,
+                )
+            )
+            if result.scalars().first() is None:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+    except Exception:
+        logger.exception("Unable to authorize deployment WebSocket connection.")
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
+
     await websocket.accept()
     await pipeline.register_connection(deploy_id, websocket)
     try:

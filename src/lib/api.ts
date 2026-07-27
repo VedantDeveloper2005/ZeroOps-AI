@@ -4,14 +4,52 @@
 // ============================================
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const CSRF_HEADER = "X-CSRF-Token";
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+let csrfToken: string | null = null;
+let csrfBootstrap: Promise<void> | null = null;
+
+function rememberCsrfToken(response: Response) {
+  const token = response.headers.get(CSRF_HEADER);
+  if (token) csrfToken = token;
+}
+
+async function ensureCsrfToken() {
+  if (csrfToken || typeof window === "undefined") return;
+  if (!csrfBootstrap) {
+    csrfBootstrap = fetch(`${API_BASE_URL}/api/health`, { credentials: "include" })
+      .then(rememberCsrfToken)
+      .catch(() => undefined)
+      .finally(() => {
+        csrfBootstrap = null;
+      });
+  }
+  await csrfBootstrap;
+}
+
+function requestHeaders(options: RequestInit | undefined, includeJsonContentType: boolean) {
+  const headers = new Headers(options?.headers);
+  if (includeJsonContentType && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const method = (options?.method || "GET").toUpperCase();
+  if (UNSAFE_METHODS.has(method) && csrfToken && !headers.has(CSRF_HEADER)) {
+    headers.set(CSRF_HEADER, csrfToken);
+  }
+  return headers;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase();
+  if (UNSAFE_METHODS.has(method)) await ensureCsrfToken();
   const url = `${API_BASE_URL}${path}`;
   const res = await fetch(url, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
     ...options,
+    credentials: "include",
+    headers: requestHeaders(options, true),
   });
+  rememberCsrfToken(res);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -32,12 +70,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+  await ensureCsrfToken();
   const url = `${API_BASE_URL}${path}`;
   const res = await fetch(url, {
     method: "POST",
     credentials: "include",
+    headers: requestHeaders({ method: "POST" }, false),
     body: formData,
   });
+  rememberCsrfToken(res);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -456,6 +497,12 @@ export interface InfrastructurePlanComponent {
   recommended: boolean;
   deployable: boolean;
   available_services: string[];
+}
+
+export interface ApiKeyResponse {
+  /** A newly created key. It is returned only once and must be saved by the user. */
+  apiKey: string;
+  configured: boolean;
 }
 
 export interface InfrastructureCostBreakdownItem {
@@ -890,9 +937,9 @@ export const api = {
     }),
 
   // ── API Key ──
-  getApiKey: () => request<{ apiKey: string }>("/api/settings/api-key"),
+  getApiKey: () => request<ApiKeyResponse>("/api/settings/api-key"),
   regenerateApiKey: () =>
-    request<{ apiKey: string }>("/api/settings/api-key/regenerate", {
+    request<ApiKeyResponse>("/api/settings/api-key/regenerate", {
       method: "POST",
     }),
 

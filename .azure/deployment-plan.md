@@ -1,177 +1,177 @@
-# ZeroOps AI Terraform Worker Migration Plan
+# Azure Deployment Plan — ZeroOps AI
 
-> **Status:** Planning — awaiting owner approval. This plan changes application code only; it does not create, modify, or delete Azure resources.
+> **Status:** Planning
 
-Generated: 2026-07-20
+Generated: 2026-07-26
 
-## 1. Project overview
+---
 
-**Goal:** Evolve the existing ZeroOps deployment path into an AI Cloud Architect workflow. The backend remains a control plane: it records repository analysis, architecture decisions, approvals, and deployment jobs. A separately deployed worker performs all repository cloning, Terraform lifecycle commands, Azure provisioning, application deployment, health verification, and status reporting.
+## 1. Project Overview
 
-**Path:** Modify existing Azure-aware SaaS.
+**Goal:** Make the existing ZeroOps AI website safely deploy from GitHub on every push to `main`, then complete the missing production configuration needed for a real release.
 
-**Non-goals for this migration:** expose Terraform or cloud credentials; execute Terraform in FastAPI; create a new application; provision the ZeroOps control-plane Azure environment; add AWS/GCP implementations.
+**Path:** Add Components to an existing Azure deployment (MODIFY).
 
-## 2. Requirements and operating assumptions
+**Repository:** `https://github.com/VedantDeveloper2005/ZeroOps-AI.git`
 
-| Attribute | Decision |
-|---|---|
-| Classification | Production-style SaaS MVP / demonstration environment |
-| Scale | Small to medium control plane; deployment workers scale independently |
-| Budget posture | Balanced; actual customer cost estimates remain unavailable until subscription pricing and policy validation are connected |
-| Cloud provider | Azure, through a provider interface that permits AWS/GCP implementations later |
-| Default region | Central India, overridable through the approved infrastructure specification |
-| Subscription | Not supplied. No Azure operation is included in this migration. Each approved deployment must validate its own subscription, policy, quota, and region before `terraform apply`. |
-| Compliance/data residency | Not supplied. Private networking and residency controls must be supplied as explicit approved-plan requirements before a customer deployment. |
+The existing GitHub Actions workflows already target the two App Service applications. This plan replaces no application identity and uses a new, dedicated deployment identity for GitHub Actions.
 
-## 3. Repository audit
+---
 
-### Reusable components
+## 2. Requirements
 
-| Area | Existing implementation | Migration use |
-|---|---|---|
-| Authentication and ownership | FastAPI dependencies plus project/user-scoped queries | Preserve for all plan, job, approval, and status endpoints |
-| Repository access | GitHub OAuth encryption and repository-analysis endpoints | Worker decrypts a token only for an active job and clones with a non-logging credential mechanism |
-| Analysis | `backend/services/analysis.py`, `ai.py`, persisted `AIAnalysis` data | Normalize into a structured repository-analysis report used by the planner |
-| Architecture plan | `InfrastructurePlan`, planner APIs, architect chat, plan approval | Retain as the customer-facing infrastructure specification; never return Terraform source |
-| Queue and status | `DeploymentJob`, Postgres row locking, deployment logs, event relay | Extend into the durable worker state machine and timeline |
-| Frontend | Infrastructure workspace, deployment timeline, logs, API client | Keep the business-facing experience; bind it to real worker stages and resource summaries |
-| Security | Azure Key Vault configuration and project-secret storage | Preserve; worker uses managed identity/Key Vault references and never persists plaintext credentials |
+| Attribute | Value |
+|-----------|-------|
+| Classification | Production-style SaaS MVP / demonstration |
+| Scale | Small (single region) |
+| Budget | Cost-optimized; reuse the existing Basic B1 Linux App Service plan |
+| Compliance | No additional requirement supplied; secrets remain in Azure Key Vault and must not enter GitHub or source control |
+| **Subscription** | Proposed current: Azure for Students (`9277603e-b858-4253-b1ed-e6747e316519`) — requires user confirmation before execution |
+| **Location** | Proposed current: Central India (`centralindia`) — requires user confirmation before execution |
 
-### Obsolete or incomplete deployment path
+### Policy Constraints
 
-| Finding | Required change |
-|---|---|
-| `start_deploy` creates an internal HCL artifact in FastAPI | Move all Terraform source generation and filesystem writes into the worker |
-| `worker/terraform_runner.py` calls `pipeline.run_deployment_pipeline` | Replace with a real Terraform execution adapter; retain the App Service deploy helper only as a post-provision deployment action |
-| Existing Terraform generator is one incomplete file | Replace with internal, provider-scoped generator modules and no user-visible Terraform output |
-| Legacy FastAPI background-task pipeline calls still exist for retry/rollback paths | Route every provisioning/release path through the queue; FastAPI must not spawn deployment pipelines |
-| Deployment job status is broad `queued/running/completed/failed` | Enforce typed stage transitions, attempts, timestamps, redacted logs, idempotency, cancellation, and failure details |
-| User Azure service-principal secret is supported | Prefer worker managed identity. When cross-subscription credentials are unavoidable, retrieve them from Key Vault only for the active job and never return/store them in job data |
+The subscription’s enforced **Allowed resource deployment regions** policy permits `centralindia` (as well as Austria East, Indonesia Central, Korea Central, and East Asia). All resources in this plan remain in Central India.
 
-## 4. Target architecture
+---
 
-```text
-Next.js UI
-  -> FastAPI control plane
-       -> Repository analysis + AI architecture planner
-       -> Approved InfrastructurePlan (customer-visible resource decisions)
-       -> PostgreSQL deployment_jobs queue
-            -> Independent Terraform Worker
-                 -> secure repository clone
-                 -> internal provider/generator modules
-                 -> terraform fmt / validate / init / plan / apply
-                 -> Azure provisioning + application release
-                 -> health checks + redacted events/logs
-       <- deployment timeline, live URL, monitoring state
-```
+## 3. Components Detected
 
-Terraform files, Terraform state handles, raw plans, provider credentials, and Key Vault secret values remain worker-only. The API returns only resource summaries, stage state, safe diagnostics, and a verified live URL.
+| Component | Type | Technology | Path |
+|-----------|------|------------|------|
+| web | SSR frontend | Next.js 16 / Node.js 22 | `.` |
+| api | API | FastAPI / Python 3.11 | `backend` |
+| worker | Background worker | Python, database-backed queue | `worker` |
+| database | Relational data | PostgreSQL required by API and worker | Azure resource currently absent |
 
-## 5. Architecture and recipe selection
+Existing Azure resources are the `zeroopsai` frontend App Service, the `zeroops-backend` API App Service, a shared Linux Basic B1 App Service plan, `zeroops-kv-prod` Key Vault, and two application user-assigned identities. There is no worker host and the former PostgreSQL server was deleted.
 
-**Selected recipe:** Application-managed Terraform worker (not `azd up`).
+---
 
-**Rationale:** ZeroOps generates per-customer Azure infrastructure from an approved architecture specification. Terraform is therefore an internal job artifact rather than static project infrastructure. The worker executes Terraform using a managed identity, an isolated per-job workspace, a remote encrypted state backend, and a deployment-specific lock.
+## 4. Recipe Selection
 
-### Provider abstraction
+**Selected:** AZCLI + existing GitHub Actions
 
-| Interface | Responsibility |
-|---|---|
-| `CloudProvider` | Validate a specification, translate supported components, produce a safe resource summary, execute provider lifecycle hooks, and derive verified URLs |
-| `AzureProvider` | Initial implementation for App Service, App Service Plan, PostgreSQL Flexible Server, Blob Storage, Key Vault, Application Insights, managed identity, and VNet |
-| Future providers | AWS/GCP implementations behind the same interface; no provider-specific details in plan APIs or React components |
+**Rationale:** The applications, App Service plan, Key Vault, and deployment workflows already exist. The immediate work is secure identity, configuration, and validation—not a new infrastructure build. AZCLI is the least disruptive way to configure the existing estate; GitHub Actions remains the delivery mechanism.
 
-### Supported V1 resource matrix
+---
 
-| Specification component | Azure implementation | Execution policy |
-|---|---|---|
-| Application | Linux App Service and Plan | Supported for deploy when source/build prerequisites pass |
-| Database | PostgreSQL Flexible Server | Provision after explicit plan approval; use Entra/managed identity patterns, never generated admin passwords |
-| Storage | Storage Account and private Blob container | Managed identity/RBAC access; no storage keys returned |
-| Secrets | Key Vault | Key Vault references and least-privilege role assignments |
-| Monitoring | Log Analytics + Application Insights | Required for a completed deployment |
-| Networking | VNet, subnets, private endpoints where approved | Validate CIDRs, DNS, policy, and quota before apply |
-| Container Apps, AKS, Redis, Cosmos DB, Azure Functions | Architecture choices may be planned | Explicitly marked unsupported for V1 execution until a provider module and validation coverage exist |
+## 5. Architecture
 
-## 6. Implementation phases
+**Stack:** App Service
 
-1. **Domain and database migration**
-   - Version the infrastructure specification and repository-analysis report.
-   - Add job attempt, locked-by/locked-at, stage, approval, redacted event, idempotency, and Terraform-state metadata columns/indexes.
-   - Preserve existing jobs and map legacy statuses safely; create an append-only deployment-event table for durable timelines.
+### Service Mapping
 
-2. **Provider and planner boundaries**
-   - Introduce `backend/services/cloud/` with `CloudProvider` and `AzureProvider`.
-   - Split analysis normalization, specification validation, cost/estimate capability status, and provider resource summaries.
-   - Keep architect chat updates constrained to validated specification mutations. Unsupported choices remain visible as planned but are not deployable.
+| Component | Azure Service | SKU / Configuration |
+|-----------|---------------|---------------------|
+| web | Existing App Service `zeroopsai` | Linux Node 22 on shared Basic B1 plan |
+| api | Existing App Service `zeroops-backend` | Linux Python 3.11 on shared Basic B1 plan |
+| worker | No host currently | Must be provisioned or intentionally deferred before worker-backed features are live |
+| database | PostgreSQL Flexible Server | Must be recreated before API or worker can be production-ready |
+| CI/CD identity | New user-assigned managed identity `zeroops-github-deploy-mi` | GitHub Actions OIDC only; Website Contributor at each app scope |
 
-3. **Terraform worker engine**
-   - Move HCL generation, workspace creation, and all Terraform commands to `worker/`.
-   - Implement command allowlists, timeouts, cancellation, process cleanup, per-job directories, source cleanup, plan/apply locks, redaction, and structured event emission.
-   - Execute `fmt`, `validate`, `init`, `plan`, and `apply` in order. A plan that needs approval transitions to `awaiting_approval`; an approved specification is the default V1 approval gate.
-   - Reuse the existing App Service deployment helper only after Terraform has provisioned a valid target; then perform an HTTP health check before completion.
+### Supporting Services
 
-4. **Control-plane API refactor**
-   - Make plan approval and job creation transactional and idempotent.
-   - Remove FastAPI-side internal-IaC generation and background deployment execution from deploy/retry/rollback paths.
-   - Add authenticated worker lease/event endpoints and typed job/timeline responses; never return raw Terraform or credentials.
+| Service | Purpose |
+|---------|---------|
+| Azure Key Vault `zeroops-kv-prod` | Stores runtime secrets; no secret values are placed in GitHub |
+| User-assigned managed identities | Application-to-Key-Vault access; the CI/CD identity is separate and has no Key Vault permission |
+| GitHub Actions | Builds and deploys `main` to the existing web apps through Azure OIDC |
+| Application Insights / Log Analytics | Not currently found; recommended before public release, but not created in this first CI/CD configuration step |
 
-5. **Frontend alignment**
-   - Retain the existing infrastructure workspace and resource cards.
-   - Replace inferred progress/countdown UI with actual job stages, approval states, provider validation results, redacted logs, verified endpoint status, and unsupported-choice guidance.
-   - Keep all Terraform implementation details hidden.
+### Security Design
 
-6. **Documentation, migration, and tests**
-   - Document worker deployment, managed-identity RBAC, remote Terraform state, supported-resource matrix, rollback/cancellation behavior, and operator runbooks.
-   - Add unit tests for specification/provider validation and status transitions; integration tests with a fake Terraform binary; API ownership tests; and frontend lint/build verification.
-   - Run a non-production Azure smoke test only after the owner supplies a subscription, region, permitted resources, and explicit deployment approval.
+1. Create exactly one dedicated `zeroops-github-deploy-mi` identity in Central India.
+2. Create an OIDC federation restricted to `repo:VedantDeveloper2005/ZeroOps-AI:ref:refs/heads/main` and audience `api://AzureADTokenExchange`.
+3. Grant that identity `Website Contributor` only on the two individual App Service resources—not on the resource group, subscription, Key Vault, or database.
+4. Preserve the existing workflows’ generic GitHub secret references. The repository administrator must set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` in GitHub Actions after the identity is created. OIDC requires no client secret.
+5. Set the GitHub Actions repository variable `NEXT_PUBLIC_API_BASE_URL=https://zeroops-backend.azurewebsites.net` for the frontend build.
 
-## 7. Security controls
+### Release Readiness Dependencies
 
-- The worker runs with a managed identity; the FastAPI service has no Terraform binary or Terraform credentials.
-- Azure Key Vault is the only secret source. Per-job credentials, if required, are read into process memory only and redacted from command lines, logs, and database rows.
-- Terraform state uses a remote encrypted backend with locking. State locations are never returned to the browser.
-- Generated IaC is constrained to a schema-validated specification and a fixed provider version; arbitrary Terraform blocks, shell fragments, and user supplied paths are rejected.
-- Repository checkout uses isolated workspaces, branch validation, size/time limits, and cleanup in `finally` blocks.
-- Apply is gated on an approved specification, a current plan revision, Azure target validation, policy/quota checks, and idempotency/lease ownership.
+Automatic deployment can be configured first, but a genuine production release must wait for all of the following:
 
-## 8. Capacity and Azure prerequisites
+- A new managed PostgreSQL database and its encrypted `DATABASE_URL` value in Key Vault. The current database resource does not exist.
+- A long, cryptographically random `JWT_SECRET` in Key Vault.
+- Real SMTP credentials (or an explicitly approved product decision to remove/disable email flows); they cannot be safely invented.
+- `FRONTEND_URL`, `ALLOWED_HOSTS`, and database TLS settings in Key Vault.
+- A decision for phone verification: valid Twilio credentials or an explicit configuration disabling it.
+- A worker hosting choice, because the current worker has no Azure host.
+- HTTPS-only, startup configuration, and health validation for both App Services.
 
-This code migration provisions no resources, so subscription quotas and Azure Policy cannot be queried yet. Before the first customer deployment, the worker must validate the supplied subscription and region for App Service capacity, PostgreSQL Flexible Server, Storage, Key Vault, Application Insights/Log Analytics, VNet/private endpoints, provider registration, and organization policy. Any failed prerequisite blocks the job before `terraform apply`.
+Do not enable Key Vault purge protection in this work item: it is irreversible and needs separate explicit approval.
 
-## 9. Validation and acceptance criteria
+---
 
-- FastAPI contains no Terraform command invocation, Terraform file generation, or deployment background task.
-- The worker is the only process that runs Terraform, writes Terraform artifacts, and performs Azure provisioning.
-- A job cannot apply an unapproved or superseded specification and can be safely retried without duplicate resources.
-- Every worker transition is durable, authenticated, redacted, and visible in the deployment timeline.
-- No endpoint or UI surface exposes HCL, Terraform plan output, provider credentials, Key Vault values, or state locations.
-- Existing GitHub, analysis, plan, deployment, logs, and App Service flows remain functional through compatibility tests.
-- Backend tests, Python compilation, frontend lint, and production build pass before each phase is marked complete.
+## 6. Provisioning Limit Checklist
 
-## 10. Files expected to change
+### Phase 1: Resource Inventory
 
-| Area | Planned work |
-|---|---|
-| `backend/models.py`, `database.py`, `schemas.py` | Versioned spec, durable job/event model, safe migrations |
-| `backend/services/cloud/` | New provider contracts and Azure implementation |
-| `backend/services/analysis.py`, `planner.py` | Structured evidence and validated architecture mutations |
-| `backend/services/terraform_generator.py` | Remove control-plane generation responsibility; replace with worker-only generator modules |
-| `backend/main.py` | Queue-only deployment APIs, approval/status/event flows, removal of direct pipeline starts |
-| `worker/` | Secure executor, generator, provider adapter, event publisher, lifecycle/health handling |
-| `src/app/dashboard/*`, `src/components/dashboard/*`, `src/lib/api.ts` | Real architecture and deployment-stage UI without Terraform exposure |
-| `backend/tests/`, documentation | Migration, security, contract, and end-to-end coverage plus operator guidance |
+| Resource Type | Number to Deploy | Total After Deployment | Limit/Quota | Notes |
+|---------------|------------------|------------------------|-------------|-------|
+| `Microsoft.ManagedIdentity/userAssignedIdentities` | 1 | 3 in Central India | Quota API does not support this provider; Azure documents an Entra object quota and a creation throttle of 80 identities per subscription/region per 20 seconds | Resource Graph counted 2 existing identities; creating 1 is within the documented throttle. Source: `az quota` fallback + [Azure subscription service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits). |
 
-## 11. Execution checklist
+**Status:** ✅ Capacity is sufficient for the one planned CI/CD identity. No compute, network, database, or monitoring resource is included in the first CI/CD configuration change.
 
-- [x] Audit repository and identify reusable/obsolete deployment modules.
-- [x] Create this implementation plan.
-- [ ] Owner approves the plan and confirms that code refactoring may begin.
-- [ ] Implement phases 1–6 with tests after each phase.
-- [ ] Obtain Azure subscription/region and explicit authorization for any non-production smoke deployment.
-- [ ] Validate Azure policy, quota, identity, state backend, and provider registration before any `terraform apply`.
+---
 
-## 12. Next step
+## 7. Execution Checklist
 
-Await approval to begin the code refactor. Azure provisioning remains deferred until separately authorized.
+### Phase 1: Planning
+
+- [x] Analyze workspace and existing Azure estate
+- [x] Gather available requirements and document assumptions
+- [ ] Confirm subscription and location with user
+- [x] Prepare resource inventory
+- [x] Check quota API and validate capacity using Azure Resource Graph plus official service-limit fallback
+- [x] Scan codebase and confirm no Copilot SDK routing requirement
+- [x] Select AZCLI + GitHub Actions recipe
+- [x] Plan architecture and least-privilege access
+- [ ] **User approved this plan**
+
+### Phase 2: Execution — after approval only
+
+- [ ] Research App Service deployment and OIDC role requirements from official Microsoft documentation
+- [ ] Create the dedicated CI/CD managed identity and its branch-restricted OIDC federation
+- [ ] Assign least-privilege deployment access to only `zeroopsai` and `zeroops-backend`
+- [ ] Validate the existing GitHub Actions workflows without overwriting unrelated user changes
+- [ ] Record the exact GitHub Actions secret/variable values for the repository administrator to enter
+- [ ] Apply safe App Service configuration hardening after confirming each cost/security impact
+- [ ] Document missing Key Vault values and database/worker production blockers
+- [ ] Perform local build and test verification
+- [ ] Update this plan status to `Ready for Validation`
+
+### Phase 3: Validation
+
+- [ ] Invoke `azure-validate`
+- [ ] Verify workflow OIDC configuration, RBAC scopes, environment configuration, and readiness blockers
+- [ ] Update plan status to `Validated`
+
+### Phase 4: Deployment
+
+- [ ] Invoke `azure-deploy` only after validation and the runtime prerequisites are fulfilled
+- [ ] Trigger or allow the first GitHub push deployment
+- [ ] Verify public endpoint health and application flows after warm-up
+- [ ] Update plan status to `Deployed`
+
+---
+
+## 8. Files to Generate or Update
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `.azure/deployment-plan.md` | Deployment source of truth | ✅ Updated |
+| `.github/workflows/main_zeroops-backend.yml` | Existing backend CI/CD workflow | Review only; it has user changes to preserve |
+| `.github/workflows/main_zeroopsai.yml` | Existing frontend CI/CD workflow | Review only; it has user changes to preserve |
+| `azure.yaml` / `infra/` | Not required for this targeted existing-App-Service configuration | Not planned |
+
+---
+
+## 9. Next Steps
+
+**Current phase:** Awaiting approval.
+
+1. Confirm the Azure subscription and Central India location shown above.
+2. Approve creation of the dedicated GitHub deployment identity and its two least-privilege role assignments.
+3. Configure the three GitHub Actions OIDC values and frontend API URL in the GitHub repository.
+4. Supply real production email credentials and approve a new PostgreSQL deployment before a live backend release.

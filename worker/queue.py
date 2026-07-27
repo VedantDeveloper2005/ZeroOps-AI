@@ -17,6 +17,20 @@ class JobQueue(ABC):
         pass
 
 class PostgresJobQueue(JobQueue):
+    _UPDATABLE_FIELDS = {
+        "terraform_status",
+        "deployment_status",
+        "estimated_cost",
+        "terraform_path",
+        "logs",
+        "terraform_plan_output",
+        "live_url",
+        "failure_reason",
+        "worker_id",
+        "started_at",
+        "completed_at",
+    }
+
     def __init__(self, database_url: str):
         # Convert postgresql+asyncpg or similar to psycopg2 compatible url
         cleaned_url = database_url
@@ -82,6 +96,9 @@ class PostgresJobQueue(JobQueue):
     def update_job_status(self, job_id: str, status: str, **kwargs) -> None:
         conn = None
         try:
+            unsupported_fields = set(kwargs) - self._UPDATABLE_FIELDS
+            if unsupported_fields:
+                raise ValueError(f"Unsupported deployment job update fields: {', '.join(sorted(unsupported_fields))}")
             conn = self._get_connection()
             with conn.cursor() as cursor:
                 # Build dynamic update statement based on args
