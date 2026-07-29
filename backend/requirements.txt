@@ -1,3 +1,4 @@
+aiosqlite==0.21.0
 asyncpg==0.31.0
 Authlib==1.7.2
 azure-identity==1.25.3

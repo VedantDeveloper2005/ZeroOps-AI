@@ -41,7 +41,7 @@ jobs:
 
       - name: Validate backend rewrite target
         env:
-          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL }}
+          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend.azurewebsites.net' }}
         run: |
           test -n "$ZEROOPS_BACKEND_URL"
           case "$ZEROOPS_BACKEND_URL" in
@@ -52,7 +52,7 @@ jobs:
       - name: Build frontend
         env:
           DEPLOYMENT_VERSION: ${{ github.sha }}
-          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL }}
+          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend.azurewebsites.net' }}
         run: npm run build
 
       - name: Prepare deployment artifact
