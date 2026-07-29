@@ -7,6 +7,7 @@ source); production never falls back to a local file or process environment.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import threading
@@ -105,9 +106,24 @@ def clear_application_setting_cache() -> None:
 
 
 def _secret_name(project_id: str, key: str) -> str:
-    value = re.sub(r"[^0-9a-z-]", "-", f"zo-{project_id}-{key}".lower())
-    value = re.sub(r"-+", "-", value).strip("-")
-    return value[:127].rstrip("-")
+    project_value = str(project_id).lower()
+    if not re.fullmatch(r"[0-9a-f-]{36}", project_value):
+        raise ValueError("Project secret names require a canonical project UUID.")
+    if key and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,254}", key):
+        raise ValueError("Environment variable keys must use uppercase letters, digits, and underscores.")
+
+    prefix = f"zo-{project_value}-"
+    normalized_key = key.lower().replace("_", "-")
+    value = f"{prefix}{normalized_key}".rstrip("-")
+    if len(value) <= 127:
+        return value
+
+    # Preserve readable names while preventing the truncation collisions that
+    # would otherwise make two long environment keys overwrite one another.
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    readable_length = 127 - len(prefix) - len(digest) - 1
+    readable_key = normalized_key[:readable_length].rstrip("-")
+    return f"{prefix}{readable_key}-{digest}"
 
 
 def _require_client():
@@ -117,7 +133,21 @@ def _require_client():
 
 
 def set_project_secret(project_id: str, key: str, value: str) -> bool:
-    _require_client().set_secret(_secret_name(project_id, key), value)
+    client = _require_client()
+    secret_name = _secret_name(project_id, key)
+    try:
+        client.set_secret(secret_name, value)
+    except Exception as error:
+        # Key Vault soft-delete reserves a name. Recovering it before writing a
+        # new version lets a user intentionally recreate a deleted variable.
+        is_conflict = (
+            getattr(error, "status_code", None) == 409
+            or error.__class__.__name__ == "ResourceExistsError"
+        )
+        if not is_conflict:
+            raise
+        client.begin_recover_deleted_secret(secret_name).result()
+        client.set_secret(secret_name, value)
     return True
 
 
@@ -147,5 +177,5 @@ def get_project_secrets(project_id: str) -> dict[str, str]:
 
 
 def delete_project_secret(project_id: str, key: str) -> bool:
-    _require_client().begin_delete_secret(_secret_name(project_id, key))
+    _require_client().begin_delete_secret(_secret_name(project_id, key)).result()
     return True

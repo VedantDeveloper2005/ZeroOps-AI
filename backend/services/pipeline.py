@@ -4,7 +4,7 @@ import time
 import uuid
 import logging
 from datetime import datetime
-from typing import Dict, List
+from typing import Callable, Dict, List
 from fastapi import WebSocket
 from sqlalchemy.future import select
 
@@ -18,8 +18,10 @@ except ImportError:
     import models
 
 # Active websockets registry: deploy_id -> list of WebSockets
+# Kept for compatibility with same-process callers. The production WebSocket
+# route uses the database-backed stream below so worker processes do not depend
+# on this process-local registry.
 connections: Dict[str, List[WebSocket]] = {}
-event_buffers: Dict[str, List[dict]] = {}
 
 # Active deployments history (legacy compatibility)
 deployments_history = []
@@ -36,8 +38,6 @@ async def register_connection(deploy_id: str, websocket: WebSocket):
     if deploy_id not in connections:
         connections[deploy_id] = []
     connections[deploy_id].append(websocket)
-    for message in event_buffers.get(deploy_id, []):
-        await websocket.send_text(json.dumps(message))
     print(f"WebSocket registered for deployment {deploy_id}. Total listeners: {len(connections[deploy_id])}")
 
 def unregister_connection(deploy_id: str, websocket: WebSocket):
@@ -50,14 +50,138 @@ def unregister_connection(deploy_id: str, websocket: WebSocket):
     print(f"WebSocket disconnected from deployment {deploy_id}.")
 
 async def broadcast_message(deploy_id: str, message: dict):
-    """Broadcast a JSON message to all listeners for a deployment."""
-    event_buffers.setdefault(deploy_id, []).append(message)
-    event_buffers[deploy_id] = event_buffers[deploy_id][-300:]
+    """Broadcast a transient message to same-process listeners, if any."""
     if deploy_id in connections:
         payload = json.dumps(message)
         tasks = [ws.send_text(payload) for ws in connections[deploy_id]]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _snapshot_events(
+    deployment,
+    logs,
+    seen_log_ids: set[str],
+    stage_states: dict[str, tuple],
+    last_status: str | None,
+) -> tuple[list[dict], str | None]:
+    """Convert authoritative database state into de-duplicated stream events."""
+    events: list[dict] = []
+    for log_entry in logs:
+        log_id = str(log_entry.id)
+        if log_id in seen_log_ids:
+            continue
+        seen_log_ids.add(log_id)
+        events.append({
+            "type": "log",
+            "text": log_entry.message,
+            "lineType": str(log_entry.level or "info").lower(),
+            "line_number": log_entry.line_number,
+            "timestamp": log_entry.timestamp.isoformat() if log_entry.timestamp else None,
+        })
+
+    metadata = deployment.infrastructure_metadata or {}
+    stages = metadata.get("stages") if isinstance(metadata, dict) else []
+    if isinstance(stages, list):
+        for stage in stages:
+            if not isinstance(stage, dict) or stage.get("id") is None:
+                continue
+            stage_key = str(stage["id"])
+            signature = (
+                stage.get("label"),
+                stage.get("status") or "pending",
+                stage.get("duration") or "",
+            )
+            if stage_states.get(stage_key) == signature:
+                continue
+            stage_states[stage_key] = signature
+            events.append({
+                "type": "stage",
+                "id": stage["id"],
+                "label": stage.get("label"),
+                "status": signature[1],
+                "duration": signature[2],
+            })
+
+    current_status = deployment.status
+    if current_status != last_status:
+        events.append({
+            "type": "status",
+            "status": current_status,
+            "live_url": deployment.live_url,
+            "failure_reason": deployment.failure_reason if current_status == "failed" else None,
+        })
+    return events, current_status
+
+
+async def stream_deployment_updates(
+    deploy_id: str,
+    websocket: WebSocket,
+    *,
+    poll_interval: float = 0.75,
+) -> None:
+    """Stream deployment progress from the shared database.
+
+    The API and deployment worker can run in separate processes or instances.
+    Database polling makes logs, stage transitions, and terminal state visible
+    regardless of which process executed the pipeline.
+    """
+    deployment_id = uuid.UUID(deploy_id)
+    seen_log_ids: set[str] = set()
+    stage_states: dict[str, tuple] = {}
+    last_status: str | None = None
+    last_log_line = 0
+    page_size = 500
+    terminal_statuses = {"running", "failed", "stopped", "rolled_back"}
+
+    while True:
+        async with AsyncSessionLocal() as db:
+            deployment_result = await db.execute(
+                select(models.Deployment).filter(models.Deployment.id == deployment_id)
+            )
+            deployment = deployment_result.scalars().first()
+            if deployment is None:
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "status": "unavailable",
+                }))
+                return
+
+            logs_result = await db.execute(
+                select(models.DeploymentLog)
+                .filter(
+                    models.DeploymentLog.deployment_id == deployment_id,
+                    models.DeploymentLog.line_number > last_log_line,
+                )
+                .order_by(
+                    models.DeploymentLog.line_number.asc(),
+                    models.DeploymentLog.timestamp.asc(),
+                )
+                .limit(page_size)
+            )
+            logs = logs_result.scalars().all()
+
+        events, last_status = _snapshot_events(
+            deployment,
+            logs,
+            seen_log_ids,
+            stage_states,
+            last_status,
+        )
+        for event in events:
+            await websocket.send_text(json.dumps(event))
+
+        if logs:
+            last_log_line = max(last_log_line, max(log.line_number for log in logs))
+
+        # A deployment status is terminal only after the final page of stored
+        # logs has been delivered. Closing here prevents a completed release
+        # from leaving a database-polling socket open forever.
+        if deployment.status in terminal_statuses and len(logs) < page_size:
+            return
+        if len(logs) == page_size:
+            continue
+        await asyncio.sleep(poll_interval)
 
 
 class PipelineLogger:
@@ -107,8 +231,16 @@ def enqueue_deployment(deploy_id: str, repo_name: str, branch: str, background_t
     background_tasks.add_task(run_deployment_pipeline, deploy_id, repo_name, branch, clone_token)
 
 
-async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, clone_token: str | None = None):
-    """Runs the full 10-stage deployment pipeline in an async background task."""
+async def run_deployment_pipeline(
+    deploy_id: str,
+    repo_name: str,
+    branch: str,
+    clone_token: str | None = None,
+    *,
+    commit_sha: str | None = None,
+    lease_guard: Callable[[], bool] | None = None,
+):
+    """Run one immutable release while its queue lease remains current."""
     import secrets
     from sqlalchemy.orm.attributes import flag_modified
 
@@ -116,6 +248,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
     project_id_raw = normalize_project_id(repo_name)
     live_url = None
     release = None
+    workspace_path: str | None = None
     
     # Instantiate logger
     p_logger = PipelineLogger(deploy_id)
@@ -134,7 +267,14 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
         {"id": 10, "label": "Generate Live URL", "status": "pending", "duration": ""}
     ]
 
+    def require_current_lease() -> None:
+        if lease_guard is not None and not lease_guard():
+            raise RuntimeError(
+                "The deployment worker lost its queue lease; release processing stopped."
+            )
+
     async def update_stage(stage_id: int, status: str, duration: str = ""):
+        require_current_lease()
         for stage in stages_metadata:
             if stage["id"] == stage_id:
                 stage["status"] = status
@@ -155,7 +295,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
         except Exception as ex:
             print(f"Error persisting stages: {ex}")
     
-    # Load deployment from DB and set initial state
+    # The worker crosses the release side-effect boundary by changing the
+    # deployment to building under its lease. Never revive a reconciled failure.
+    require_current_lease()
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(models.Deployment).filter(models.Deployment.id == uuid.UUID(deploy_id))
@@ -165,8 +307,10 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             print(f"Deployment record {deploy_id} not found in DB!")
             return
             
-        deployment.status = "building"
-        await db.commit()
+        if deployment.status != "building":
+            raise RuntimeError(
+                f"Deployment {deploy_id} is not authorized to start from status {deployment.status}."
+            )
         
     start_time = time.time()
     
@@ -208,7 +352,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 requested_provider,
             )
             namespace_prefix = deployment_targets.namespace_prefix(selected_target, deployment.user_id)
-            project_id_raw = normalize_project_id(f"{namespace_prefix}-{project.name}")
+            project_id_raw = normalize_project_id(
+                f"{namespace_prefix}-{project.name}-{str(project.id)[:8]}"
+            )
             image_ref = deployment.image or deployment_targets.image_ref_for_target(
                 selected_target,
                 project_id_raw,
@@ -223,9 +369,9 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             await p_logger.log(f"$ zeroops deploy --repo {repo_name} --env production", "command")
             await p_logger.log("ZeroOps AI deployment engine online", "info")
             await p_logger.log(f"> Project identity resolved: {project_id_raw}", "info")
+            await p_logger.log(f"> Immutable source revision: {commit_sha}", "info")
             await p_logger.log(f"> Cloud target: {selected_target.label} ({selected_target.reason})", "info")
             await p_logger.log("> Launch settings confirmed. Your live address will be created after verification.", "info")
-            await asyncio.sleep(0.5)
             await p_logger.log("  ✓ Repository configuration verified.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(1, "completed", step_dur)
@@ -239,12 +385,19 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             if getattr(project, "source_type", "github") == "upload":
                 if not project.source_path:
                     raise RuntimeError("Uploaded source path is missing for this project.")
-                repo_path = project.source_path
+                repo_path = git.prepare_local_source(project.source_path, deploy_id)
+                workspace_path = repo_path
                 await p_logger.log(f"$ zeroops source use-upload {project.full_name}", "command")
             else:
                 await p_logger.log(f"$ git clone --branch {branch} https://github.com/{repo_name}.git .", "command")
-                await asyncio.sleep(0.5)
-                repo_path = git.clone_repo(repo_name, clone_token)
+                repo_path = git.clone_repo(
+                    repo_name,
+                    clone_token,
+                    branch=branch,
+                    commit_sha=commit_sha,
+                    workspace_key=deploy_id,
+                )
+                workspace_path = repo_path
             await p_logger.log("  Source prepared successfully on local filesystem.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(2, "completed", step_dur)
@@ -255,19 +408,25 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             # ──────────────────────────────────────────────
             step_start = time.time()
             await update_stage(3, "active", "...")
-            await p_logger.log("▸ AI analyzing repository structure...", "info")
-            await asyncio.sleep(0.5)
+            await p_logger.log("▸ Analyzing repository structure...", "info")
             try:
                 metadata = ai.analyze_repository(repo_path, project_id_raw)
-                await p_logger.log("  ◆ AI-powered remote scanner analysis complete", "success")
+                await p_logger.log("  ◆ Model-assisted repository interpretation returned.", "success")
             except (ValueError, RuntimeError) as ai_err:
                 await p_logger.log(f"  ⚠ AI provider unavailable: {ai_err}. Using local analyzer.", "warning")
                 metadata = ai.analyze_repo_local(repo_path, project_id_raw)
             
             await p_logger.log(f"  ◆ Framework: {metadata.get('framework')} ({metadata.get('version')})", "info")
             await p_logger.log(f"  ◆ Core language: {metadata.get('language')}", "info")
-            await p_logger.log(f"  ◆ CPU recommendation: {metadata['resources']['cpu']}", "info")
-            await p_logger.log(f"  ◆ Memory recommendation: {metadata['resources']['memory']}", "info")
+            resources = metadata.get("resources") or {}
+            if resources.get("cpu") or resources.get("memory"):
+                await p_logger.log(
+                    f"  ◆ Recorded resource guidance: CPU {resources.get('cpu') or 'not provided'}, "
+                    f"memory {resources.get('memory') or 'not provided'}",
+                    "info",
+                )
+            else:
+                await p_logger.log("  ◆ Resource limits were not inferred from source code.", "info")
             
             # Save AI Analysis in DB
             analysis = models.AIAnalysis(
@@ -276,11 +435,11 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 framework=metadata.get("framework"),
                 framework_version=metadata.get("version"),
                 language=metadata.get("language"),
-                risk_score=metadata.get("risk_score", 15),
-                confidence=metadata.get("confidence", 95),
-                cpu_recommendation=metadata["resources"]["cpu"],
-                memory_recommendation=metadata["resources"]["memory"],
-                storage_recommendation=metadata["resources"]["storage"],
+                risk_score=metadata.get("risk_score", 0),
+                confidence=metadata.get("confidence", 0),
+                cpu_recommendation=resources.get("cpu"),
+                memory_recommendation=resources.get("memory"),
+                storage_recommendation=resources.get("storage"),
                 dependencies=metadata.get("dependencies", []),
                 vulnerabilities=metadata.get("vulnerabilities", []),
                 dockerfile=metadata.get("dockerfile"),
@@ -305,8 +464,8 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             db.add(analysis)
             
             for vuln in metadata.get("vulnerabilities", []):
-                await p_logger.log(f"  ⚠️ Scan finding: {vuln}", "warning")
-            await p_logger.log("  ✓ AI codebase fingerprinting complete.", "success")
+                await p_logger.log(f"  ⚠️ Analyzer warning: {vuln}", "warning")
+            await p_logger.log("  ✓ Repository analysis recorded.", "success")
             step_dur = f"{round(time.time() - step_start, 1)}s"
             await update_stage(3, "completed", step_dur)
             await p_logger.flush_to_db(db)
@@ -317,7 +476,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
             step_start = time.time()
             await update_stage(4, "active", "...")
             await p_logger.log("▸ Generating build specification...", "info")
-            await asyncio.sleep(0.5)
             await p_logger.log(f"  ◆ Build Command: {metadata.get('build_commands') or 'None'}", "info")
             await p_logger.log(f"  ◆ Startup Command: {metadata.get('start_commands') or 'None'}", "info")
             await p_logger.log("  ✓ Build instructions prepared.", "success")
@@ -410,89 +568,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                         )
                     await p_logger.log(f"  Database dependency {db_dep} will use configured {var_key}.", "info")
                 await p_logger.log("  Automatic database provisioning is disabled; using configured external database resources only.", "info")
-                db_deps = []
-            if db_deps:
-                for db_dep in db_deps:
-                    db_type = db_dep.lower()
-                    if db_type not in ["postgresql", "mysql", "mongodb", "redis"]:
-                        continue
-                    
-                    await p_logger.log(f"▸ Provisioning managed {db_dep} database...", "info")
-                    
-                    # Check if project already has a DatabaseInstance of this type
-                    db_inst_result = await db.execute(
-                        select(models.DatabaseInstance).filter(
-                            models.DatabaseInstance.project_id == project.id,
-                            models.DatabaseInstance.type == db_dep
-                        )
-                    )
-                    db_instance = db_inst_result.scalars().first()
-                    
-                    if not db_instance:
-                        # Provision new DB
-                        db_name = f"db_{project_id_raw.replace('-', '_')}"
-                        db_user = f"user_{secrets.token_hex(4)}"
-                        db_pass = secrets.token_urlsafe(16)
-                        
-                        if "postgres" in db_type:
-                            db_host = "managed-postgres-db.zeroops.internal"
-                            db_port = 5432
-                            conn_str = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-                            var_key = "DATABASE_URL"
-                        elif "mysql" in db_type:
-                            db_host = "managed-mysql-db.zeroops.internal"
-                            db_port = 3306
-                            conn_str = f"mysql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-                            var_key = "DATABASE_URL"
-                        elif "mongo" in db_type:
-                            db_host = "managed-mongodb.zeroops.internal"
-                            db_port = 27017
-                            conn_str = f"mongodb://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-                            var_key = "MONGODB_URI"
-                        elif "redis" in db_type:
-                            db_host = "managed-redis.zeroops.internal"
-                            db_port = 6379
-                            conn_str = f"redis://default:{db_pass}@{db_host}:{db_port}"
-                            var_key = "REDIS_URL"
-                        
-                        db_instance = models.DatabaseInstance(
-                            project_id=project.id,
-                            type=db_dep,
-                            db_name=db_name,
-                            username=db_user,
-                            password=db_pass,
-                            host=db_host,
-                            port=db_port,
-                            connection_string=conn_str,
-                            status="available"
-                        )
-                        db.add(db_instance)
-                        await p_logger.log(f"  ◆ Managed {db_dep} database instance initialized statefully.", "success")
-                        
-                        # Store in Vault & Environment Variables
-                        vault.set_project_secret(str(project.id), var_key, conn_str)
-                        
-                        # Check if environment variable already exists
-                        env_var_result = await db.execute(
-                            select(models.EnvironmentVariable).filter(
-                                models.EnvironmentVariable.environment_id == env.id,
-                                models.EnvironmentVariable.key == var_key
-                            )
-                        )
-                        env_var = env_var_result.scalars().first()
-                        if not env_var:
-                            env_var = models.EnvironmentVariable(
-                                environment_id=env.id,
-                                key=var_key,
-                                value=conn_str,
-                                is_secret=True
-                            )
-                            db.add(env_var)
-                        else:
-                            env_var.value = conn_str
-                        await p_logger.log(f"  ◆ Connected connection credentials to environment variable: {var_key}", "success")
-                    else:
-                        await p_logger.log(f"  ◆ Using existing managed {db_dep} database instance.", "info")
             else:
                 await p_logger.log("  Database provisioning skipped; external database resources are user-configured.", "info")
             
@@ -518,7 +593,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                 generated_dockerfile=metadata.get("dockerfile"),
             ):
                 await p_logger.log(log_line.strip(), "success" if "ready" in log_line.lower() else "info")
-                await asyncio.sleep(0.01)
                 
             build_dur = f"{round(time.time() - build_start, 1)}s"
             await update_stage(7, "completed", build_dur)
@@ -561,7 +635,6 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                     await p_logger.log("  ✓ Azure has prepared a ready version.", "success")
                     continue
                 await p_logger.log(str(deployment_result).strip(), "info")
-                await asyncio.sleep(0.01)
             if not release:
                 raise RuntimeError("Azure did not return a ready application version.")
                 
@@ -758,7 +831,7 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                         severity=failure_analysis_res.get("severity", "error"),
                         recommended_fix=failure_analysis_res.get("recommended_fix", "No fix recommended."),
                         step_by_step_resolution=failure_analysis_res.get("step_by_step_resolution", []),
-                        confidence=failure_analysis_res.get("confidence", 92),
+                        confidence=failure_analysis_res.get("confidence", 0),
                         impact="Deployment Halted"
                     )
                     db.add(db_failure_analysis)
@@ -766,6 +839,12 @@ async def run_deployment_pipeline(deploy_id: str, repo_name: str, branch: str, c
                     print(f"Failed to generate failure analysis: {analysis_err}")
                 
                 await db.commit()
-                
-        await p_logger.flush_to_db(db)
+                await p_logger.flush_to_db(db)
+
         await broadcast_message(deploy_id, {"type": "status", "status": "failed"})
+    finally:
+        if workspace_path:
+            try:
+                git.cleanup_workspace(workspace_path)
+            except Exception as cleanup_error:
+                print(f"Failed to clean deployment workspace {workspace_path}: {cleanup_error}")

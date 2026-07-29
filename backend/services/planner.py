@@ -247,19 +247,40 @@ def build_infrastructure_spec(
     for comp in plan["components"]:
         comp_id = comp.get("id")
         if comp_id == "application":
-            explanations[comp_id] = f"Azure App Service provides fully managed scalable hosting for your {framework} app with automated OS patching and scaling."
+            explanations[comp_id] = (
+                f"Azure App Service is the deployment target currently implemented for this {framework} app. "
+                "The connected subscription must provide a validated Linux App Service plan before deployment."
+            )
         elif comp_id == "database":
-            explanations[comp_id] = "Azure Database for PostgreSQL Flexible Server delivers high availability, automated backups, and private networking for database storage."
+            explanations[comp_id] = (
+                "Repository dependencies indicate a database requirement. This managed-database entry is a proposal only; "
+                "availability, backups, retention, and network access still require explicit configuration."
+            )
         elif comp_id == "cache":
-            explanations[comp_id] = "Azure Cache for Redis provides in-memory caching to boost performance and reduce latency for frequent data queries."
+            explanations[comp_id] = (
+                "Repository dependencies reference Redis. The cache is not provisioned by the current deployment workflow "
+                "and its capacity, persistence, and network settings remain unresolved."
+            )
         elif comp_id == "storage":
-            explanations[comp_id] = "Azure Blob Storage offers durable, secure, and infinitely scalable object storage for file uploads and static assets."
+            explanations[comp_id] = (
+                "Source configuration references object storage. Azure Blob Storage is a proposed dependency, not a "
+                "provisioned resource; lifecycle, redundancy, and data-residency settings need review."
+            )
         elif comp_id == "secrets":
-            explanations[comp_id] = "Azure Key Vault secures sensitive credentials, secrets, and environment variables using FIPS-compliant hardware security modules."
+            explanations[comp_id] = (
+                "Source configuration references sensitive values. ZeroOps stores project secrets through its configured "
+                "Key Vault integration; access policy and managed-identity permissions must be validated."
+            )
         elif comp_id == "monitoring":
-            explanations[comp_id] = "Application Insights delivers end-to-end telemetry, application logs, and performance monitoring."
+            explanations[comp_id] = (
+                "Application Insights is shown as a monitoring proposal. ZeroOps does not claim telemetry is available "
+                "until a connected source has written runtime metrics."
+            )
         elif comp_id == "networking":
-            explanations[comp_id] = "Virtual Network (VNet) secures communications between resources by keeping traffic private within the cloud."
+            explanations[comp_id] = (
+                "A private-network decision is recommended for managed data services. The current workflow does not "
+                "provision or verify this network component."
+            )
 
     plan["ai_explanations"] = explanations
     return plan

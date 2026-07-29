@@ -1,6 +1,3 @@
-"use client";
-
-import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
 export type StatusType =
@@ -114,23 +111,22 @@ export function StatusBadge({
   className,
 }: StatusBadgeProps) {
   const config = statusConfig[status as StatusType] || {
-    dot: "status-dot-green",
-    bg: "bg-success/10 border-success/20",
-    text: "text-success",
-    label: status || "Active",
+    dot: "bg-foreground-muted opacity-60",
+    bg: "bg-foreground-muted/10 border-foreground-muted/20",
+    text: "text-foreground-muted",
+    label: status
+      ? status.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase())
+      : "Unknown",
   };
 
   return (
-    <motion.div
+    <span
       className={cn(
         "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
         config.bg,
         config.text,
         className
       )}
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.3 }}
     >
       <span
         className={cn(
@@ -140,6 +136,6 @@ export function StatusBadge({
         )}
       />
       <span>{label ?? config.label}</span>
-    </motion.div>
+    </span>
   );
 }

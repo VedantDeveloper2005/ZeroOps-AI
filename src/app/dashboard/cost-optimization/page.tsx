@@ -1,128 +1,44 @@
-"use client";
-
-import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { AlertTriangle, Database, DollarSign, Loader2, TrendingDown } from "lucide-react";
-import { useNotifications } from "@/lib/NotificationContext";
-import { LockedView } from "@/components/dashboard/LockedView";
-import { api, type CostOptimization } from "@/lib/api";
+import { BarChart3, DatabaseZap } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
 
 export default function CostOptimizationPage() {
-  const { hasDeployed, projects, isLoading: projectsLoading } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [costData, setCostData] = useState<CostOptimization | null>(null);
-  const [costLoading, setCostLoading] = useState(false);
-
-  useEffect(() => {
-    if (!hasDeployed || projects.length === 0) return;
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [hasDeployed, projects, selectedProjectId]);
-
-  useEffect(() => {
-    if (!selectedProjectId) return;
-    setCostLoading(true);
-    api.getCostOptimization(selectedProjectId)
-      .then(setCostData)
-      .catch(() => setCostData(null))
-      .finally(() => setCostLoading(false));
-  }, [selectedProjectId]);
-
-  if (!hasDeployed) {
-    return (
-      <div className="space-y-6">
-        <LockedView featureName="Cost Optimization & FinOps" />
-      </div>
-    );
-  }
-
-  if (projectsLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-foreground-muted text-sm font-medium">Loading cost context...</p>
-      </div>
-    );
-  }
-
-  const recommendations = costData?.recommendations || [];
-  const hasCostTelemetry = Boolean(costData && (costData.current_cost > 0 || recommendations.length > 0));
-
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-card border border-border rounded-xl p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-primary/10 border border-primary/20 text-primary">
-            <Database size={20} />
-          </div>
+    <div className="mx-auto max-w-5xl">
+      <PageHeader
+        eyebrow="FinOps"
+        title="Cost optimization"
+        description="Cost recommendations require measured billing data, not estimates."
+      />
+
+      <StatePanel
+        variant="disconnected"
+        title="Azure cost data is not connected"
+        description="The cost-optimization endpoint is intentionally unavailable until Azure Cost Management data can be read. No spend, savings, or rightsizing figures are shown."
+      />
+
+      <section
+        aria-labelledby="cost-data-heading"
+        className="mt-6 rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6"
+      >
+        <div className="flex gap-3">
+          <DatabaseZap size={20} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
           <div>
-            <h2 className="text-sm font-bold text-foreground">Cost Optimization</h2>
-            <p className="text-[10px] text-foreground-muted">Uses backend cost telemetry only. No estimated savings are shown without recorded data.</p>
+            <h2 id="cost-data-heading" className="text-sm font-semibold text-foreground">
+              What is missing
+            </h2>
+            <p className="mt-1.5 max-w-2xl text-xs leading-5 text-foreground-muted">
+              ZeroOps has no Azure billing import, resource-cost history, or usage-based savings model yet.
+            </p>
           </div>
         </div>
-
-        <select
-          value={selectedProjectId}
-          onChange={(event) => setSelectedProjectId(event.target.value)}
-          className="bg-background-secondary border border-border text-xs rounded-lg px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold max-w-[240px]"
-        >
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.full_name}</option>
-          ))}
-        </select>
-      </div>
-
-      {costLoading ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3 bg-card border border-border rounded-xl shadow-sm">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <p className="text-xs text-foreground-muted">Loading cost telemetry...</p>
-        </div>
-      ) : !hasCostTelemetry ? (
-        <div className="bg-card border border-border rounded-xl p-10 text-center shadow-sm">
-          <AlertTriangle className="w-10 h-10 mx-auto text-foreground-muted/40 mb-3" />
-          <h3 className="text-sm font-bold text-foreground mb-1">No cost telemetry connected</h3>
-          <p className="text-xs text-foreground-muted max-w-md mx-auto">
-            Connect billing or resource-cost telemetry before showing savings, idle resource, or rightsizing recommendations.
+        <div className="mt-5 flex gap-3 border-t border-border pt-5">
+          <BarChart3 size={20} className="mt-0.5 shrink-0 text-foreground-subtle" aria-hidden="true" />
+          <p className="text-xs leading-5 text-foreground-muted">
+            This page will remain empty instead of presenting synthetic monthly totals or savings claims.
           </p>
         </div>
-      ) : (
-        <>
-          <div className="grid md:grid-cols-3 gap-4">
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-card border border-border rounded-xl p-6 text-center shadow-sm">
-              <DollarSign size={32} className="text-primary mx-auto mb-2" />
-              <p className="text-3xl font-bold text-foreground">${costData?.current_cost.toFixed(2)}</p>
-              <p className="text-xs text-foreground-muted mt-1">Current monthly cost</p>
-            </motion.div>
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }} className="bg-card border border-border rounded-xl p-6 text-center shadow-sm">
-              <TrendingDown size={32} className="text-success mx-auto mb-2" />
-              <p className="text-3xl font-bold text-success">${costData?.savings.toFixed(2)}</p>
-              <p className="text-xs text-foreground-muted mt-1">Recorded savings opportunity</p>
-            </motion.div>
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.16 }} className="bg-card border border-border rounded-xl p-6 text-center shadow-sm">
-              <DollarSign size={32} className="text-info mx-auto mb-2" />
-              <p className="text-3xl font-bold text-foreground">${costData?.recommended_cost.toFixed(2)}</p>
-              <p className="text-xs text-foreground-muted mt-1">Recommended monthly cost</p>
-            </motion.div>
-          </div>
-
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-            <h3 className="text-sm font-bold text-foreground">Cost Recommendations</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {recommendations.map((rec, index) => (
-                <div key={`${rec.title}-${index}`} className="bg-card border border-border rounded-xl p-5 shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[9px] uppercase px-2 py-0.5 rounded-full font-bold border bg-info/10 text-info border-info/25">backend</span>
-                    <span className="text-sm font-bold text-success">${rec.savings.toFixed(2)}</span>
-                  </div>
-                  <h4 className="text-xs font-bold text-foreground mb-1">{rec.title}</h4>
-                  <p className="text-xs text-foreground-muted leading-relaxed">{rec.description}</p>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        </>
-      )}
+      </section>
     </div>
   );
 }

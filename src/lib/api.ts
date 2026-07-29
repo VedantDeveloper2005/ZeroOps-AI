@@ -3,12 +3,31 @@
 // All data fetched from FastAPI backend (per-user, database-backed)
 // ============================================
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 const CSRF_HEADER = "X-CSRF-Token";
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 let csrfToken: string | null = null;
 let csrfBootstrap: Promise<void> | null = null;
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  const forwardAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) controller.abort();
+  else upstreamSignal?.addEventListener("abort", forwardAbort, { once: true });
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    globalThis.clearTimeout(timeout);
+    upstreamSignal?.removeEventListener("abort", forwardAbort);
+  }
+}
 
 function rememberCsrfToken(response: Response) {
   const token = response.headers.get(CSRF_HEADER);
@@ -18,7 +37,11 @@ function rememberCsrfToken(response: Response) {
 async function ensureCsrfToken() {
   if (csrfToken || typeof window === "undefined") return;
   if (!csrfBootstrap) {
-    csrfBootstrap = fetch(`${API_BASE_URL}/api/health`, { credentials: "include" })
+    csrfBootstrap = fetchWithTimeout(
+      "/api/health",
+      { credentials: "include" },
+      10_000,
+    )
       .then(rememberCsrfToken)
       .catch(() => undefined)
       .finally(() => {
@@ -43,12 +66,15 @@ function requestHeaders(options: RequestInit | undefined, includeJsonContentType
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const method = (options?.method || "GET").toUpperCase();
   if (UNSAFE_METHODS.has(method)) await ensureCsrfToken();
-  const url = `${API_BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    credentials: "include",
-    headers: requestHeaders(options, true),
-  });
+  const res = await fetchWithTimeout(
+    path,
+    {
+      ...options,
+      credentials: "include",
+      headers: requestHeaders(options, true),
+    },
+    30_000,
+  );
   rememberCsrfToken(res);
 
   if (!res.ok) {
@@ -71,13 +97,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   await ensureCsrfToken();
-  const url = `${API_BASE_URL}${path}`;
-  const res = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: requestHeaders({ method: "POST" }, false),
-    body: formData,
-  });
+  const res = await fetchWithTimeout(
+    path,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: requestHeaders({ method: "POST" }, false),
+      body: formData,
+    },
+    120_000,
+  );
   rememberCsrfToken(res);
 
   if (!res.ok) {
@@ -178,18 +207,6 @@ export interface Notification {
   category: string;
   read: boolean;
   action_url: string | null;
-  created_at: string | null;
-}
-
-export interface AIAction {
-  id: string;
-  project_id: string | null;
-  type: "scaling" | "security" | "deployment" | "optimization" | "healing" | "monitoring";
-  severity: "info" | "warning" | "success" | "critical";
-  message: string;
-  recommendation: string | null;
-  status: "pending" | "applied" | "dismissed";
-  icon: string;
   created_at: string | null;
 }
 
@@ -356,7 +373,7 @@ export interface TelemetryMetric {
 }
 
 export interface SecurityStatus {
-  securityScore: number;
+  securityScore: number | null;
   firewallStatus: string;
   httpsStatus: string;
   secretsManaged: number;
@@ -367,22 +384,6 @@ export interface SecurityStatus {
   rbacEnabled: boolean;
 }
 
-export interface CustomDomain {
-  name: string;
-  default: boolean;
-  ssl: boolean;
-  dns_verified: boolean;
-  https_enabled: boolean;
-  created_at: string;
-}
-
-export interface ProjectMember {
-  email: string;
-  role: string;
-  name: string;
-  joined_at: string;
-}
-
 export interface ProjectActivity {
   id: string;
   project_id: string | null;
@@ -390,30 +391,6 @@ export interface ProjectActivity {
   action: string;
   details: string | null;
   created_at: string;
-}
-
-export interface HealthScore {
-  score: number;
-  status: string;
-  breakdown: {
-    performance: number;
-    security: number;
-    reliability: number;
-    scalability: number;
-    cost: number | null;
-  };
-  recommendations: string[];
-}
-
-export interface CostOptimization {
-  current_cost: number;
-  recommended_cost: number;
-  savings: number;
-  recommendations: {
-    title: string;
-    description: string;
-    savings: number;
-  }[];
 }
 
 export interface BillingOperation {
@@ -497,12 +474,6 @@ export interface InfrastructurePlanComponent {
   recommended: boolean;
   deployable: boolean;
   available_services: string[];
-}
-
-export interface ApiKeyResponse {
-  /** A newly created key. It is returned only once and must be saved by the user. */
-  apiKey: string;
-  configured: boolean;
 }
 
 export interface InfrastructureCostBreakdownItem {
@@ -706,20 +677,6 @@ export const api = {
     request<void>("/api/notifications/read-all", { method: "POST" }),
 
   // ── AI Actions ──
-  getAIActions: (opts?: { status?: string; type?: string; limit?: number }) => {
-    const params = new URLSearchParams();
-    if (opts?.status) params.set("status", opts.status);
-    if (opts?.type) params.set("type", opts.type);
-    if (opts?.limit) params.set("limit", String(opts.limit));
-    return request<AIAction[]>(`/api/ai/actions?${params}`);
-  },
-
-  applyAIAction: (id: string) =>
-    request<void>(`/api/ai/actions/${id}/apply`, { method: "POST" }),
-
-  dismissAIAction: (id: string) =>
-    request<void>(`/api/ai/actions/${id}/dismiss`, { method: "POST" }),
-
   // ── AI Analysis ──
   getAIAnalysis: (projectId: string) =>
     request<AIAnalysis>(`/api/ai/analysis/${projectId}`),
@@ -904,45 +861,11 @@ export const api = {
     return request<RuntimeResourceMetrics>(`/api/monitoring/metrics${params}`);
   },
 
-  // ── Secrets ──
-  addSecret: (projectId: string, key: string, value: string) =>
-    request<void>("/api/secrets", {
-      method: "POST",
-      body: JSON.stringify({ projectId, key, value }),
-    }),
-
-  getSecrets: (projectId: string) =>
-    request<{ key: string; value: string }[]>(`/api/secrets/${projectId}`),
-
-  deleteSecret: (projectId: string, key: string) =>
-    request<void>(`/api/secrets/${projectId}/${key}`, { method: "DELETE" }),
-
   // ── Security ──
   getSecurityStatus: (projectId: string) =>
     request<SecurityStatus>(`/api/security/status/${projectId}`),
 
   // ── Autoscaling ──
-  getAutoscalingStatus: (projectId: string) =>
-    request<Record<string, unknown>>(`/api/autoscaling/${projectId}`),
-
-  configureAutoscaling: (data: {
-    projectId: string;
-    minReplicas: number;
-    maxReplicas: number;
-    cpuTarget: number;
-  }) =>
-    request<void>("/api/autoscaling/configure", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  // ── API Key ──
-  getApiKey: () => request<ApiKeyResponse>("/api/settings/api-key"),
-  regenerateApiKey: () =>
-    request<ApiKeyResponse>("/api/settings/api-key/regenerate", {
-      method: "POST",
-    }),
-
   // ── Project Metrics & Env Vars ──
   getProjectMetrics: (projectId: string) =>
     request<TelemetryMetric>(`/api/projects/${projectId}/metrics`),
@@ -969,12 +892,6 @@ export const api = {
     request<FailureAnalysis>(`/api/deployments/${deploymentId}/failure-analysis`),
 
   // ── Collaboration & Optimization Endpoints ──
-  getHealthScore: (projectId: string) =>
-    request<HealthScore>(`/api/projects/${projectId}/health-score`),
-
-  getCostOptimization: (projectId: string) =>
-    request<CostOptimization>(`/api/projects/${projectId}/cost-optimization`),
-
   createBillingOperation: (data: {
     operation_type: string;
     project_id?: string;
@@ -993,64 +910,11 @@ export const api = {
       method: "POST",
     }),
 
-  getProjectDomains: (projectId: string) =>
-    request<CustomDomain[]>(`/api/projects/${projectId}/domains`),
-
-  connectDomain: (projectId: string, name: string) =>
-    request<CustomDomain[]>(`/api/projects/${projectId}/domains`, {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }),
-
-  verifyDomain: (projectId: string, name: string) =>
-    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}/verify`, {
-      method: "POST",
-    }),
-
-  renewSSL: (projectId: string, name: string) =>
-    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}/renew-ssl`, {
-      method: "POST",
-    }),
-
-  removeDomain: (projectId: string, name: string) =>
-    request<CustomDomain[]>(`/api/projects/${projectId}/domains/${name}`, {
-      method: "DELETE",
-    }),
-
-  getProjectMembers: (projectId: string) =>
-    request<ProjectMember[]>(`/api/projects/${projectId}/members`),
-
-  addMember: (projectId: string, email: string, role: string) =>
-    request<ProjectMember[]>(`/api/projects/${projectId}/members`, {
-      method: "POST",
-      body: JSON.stringify({ email, role }),
-    }),
-
-  removeMember: (projectId: string, email: string) =>
-    request<ProjectMember[]>(`/api/projects/${projectId}/members/${email}`, {
-      method: "DELETE",
-    }),
-
   getProjectActivity: (projectId: string) =>
     request<ProjectActivity[]>(`/api/projects/${projectId}/activity`),
 
   getGlobalActivity: () =>
     request<ProjectActivity[]>("/api/activity"),
 
-  fixDeploymentAutomatically: (deployId: string) =>
-    request<{ status: string; message: string; deployment_id: string; project_id: string }>(
-      `/api/deployments/${deployId}/fix-auto`,
-      { method: "POST" }
-    ),
-
-  selfHeal: (projectId: string, action: string) =>
-    request<{ status: string; message: string; deployment_id?: string }>(
-      `/api/projects/${projectId}/self-heal`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      }
-    ),
 };
 

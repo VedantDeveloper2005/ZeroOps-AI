@@ -60,7 +60,11 @@ def _parse_csv(name: str, default_values: list[str]) -> list[str]:
 
 # Bootstrap settings. APP_ENV is deliberately not read from Key Vault because
 # the application must know whether to fail closed before loading its config.
-APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+# It is mandatory and exact so an omitted or misspelled production setting
+# cannot silently select permissive development behavior.
+APP_ENV = os.environ.get("APP_ENV", "")
+if APP_ENV not in {"development", "test", "production"}:
+    raise RuntimeError("APP_ENV must be explicitly set to development, test, or production.")
 IS_PRODUCTION = APP_ENV == "production"
 AZURE_KEYVAULT_URL = vault.AZURE_KEYVAULT_URL
 
@@ -158,7 +162,26 @@ MAX_UPLOAD_COMPRESSION_RATIO = _integer("MAX_UPLOAD_COMPRESSION_RATIO", 100)
 MAX_RATE_LIMIT_KEYS = _integer("MAX_RATE_LIMIT_KEYS", 10000)
 DB_SSL_ENABLED = _boolean("DB_SSL_ENABLED", True)
 DB_SSL_VERIFY = _boolean("DB_SSL_VERIFY", True)
+DB_SSL_ROOT_CERT = _setting("DB_SSL_ROOT_CERT", "")
 WORKER_POLL_INTERVAL_SECONDS = _integer("WORKER_POLL_INTERVAL_SECONDS", 5)
+WORKER_LEASE_SECONDS = _integer("WORKER_LEASE_SECONDS", 180)
+WORKER_HEARTBEAT_SECONDS = _integer("WORKER_HEARTBEAT_SECONDS", 30)
+WORKER_MAX_ATTEMPTS = _integer("WORKER_MAX_ATTEMPTS", 3)
+WORKER_RECOVERY_BATCH_SIZE = _integer("WORKER_RECOVERY_BATCH_SIZE", 25)
+WORKER_HEALTH_PORT = _integer("WORKER_HEALTH_PORT", 8085)
+
+if WORKER_POLL_INTERVAL_SECONDS < 1:
+    raise RuntimeError("WORKER_POLL_INTERVAL_SECONDS must be at least 1.")
+if WORKER_LEASE_SECONDS < 30:
+    raise RuntimeError("WORKER_LEASE_SECONDS must be at least 30.")
+if not 1 <= WORKER_HEARTBEAT_SECONDS < WORKER_LEASE_SECONDS:
+    raise RuntimeError("WORKER_HEARTBEAT_SECONDS must be positive and shorter than WORKER_LEASE_SECONDS.")
+if not 1 <= WORKER_MAX_ATTEMPTS <= 10:
+    raise RuntimeError("WORKER_MAX_ATTEMPTS must be between 1 and 10.")
+if not 1 <= WORKER_RECOVERY_BATCH_SIZE <= 100:
+    raise RuntimeError("WORKER_RECOVERY_BATCH_SIZE must be between 1 and 100.")
+if not 1024 <= WORKER_HEALTH_PORT <= 65535:
+    raise RuntimeError("WORKER_HEALTH_PORT must be between 1024 and 65535.")
 
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "workspace"))
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
@@ -193,6 +216,8 @@ if IS_PRODUCTION and FRONTEND_URL.lower().startswith("http://"):
     raise RuntimeError("FRONTEND_URL must use HTTPS when APP_ENV=production.")
 if IS_PRODUCTION and not ALLOWED_HOSTS:
     raise RuntimeError("ALLOWED_HOSTS must be configured in Azure Key Vault when APP_ENV=production.")
+if IS_PRODUCTION and not DB_SSL_ENABLED:
+    raise RuntimeError("DB_SSL_ENABLED must remain enabled when APP_ENV=production.")
 if IS_PRODUCTION and not DB_SSL_VERIFY:
     raise RuntimeError("DB_SSL_VERIFY must remain enabled when APP_ENV=production.")
 if IS_PRODUCTION and not (SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL):

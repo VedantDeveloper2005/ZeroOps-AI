@@ -2,103 +2,406 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import { ArrowRight, CheckCircle2, Clock3, ExternalLink, FolderPlus, Rocket, Sparkles } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  FolderKanban,
+  GitPullRequestArrow,
+  Loader2,
+  Plus,
+  Rocket,
+  ShieldAlert,
+} from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { MetricCard } from "@/components/ui/MetricCard";
+import { StatePanel } from "@/components/ui/StatePanel";
 import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, type Deployment } from "@/lib/api";
+import {
+  api,
+  getErrorMessage,
+  type Deployment,
+  type InfrastructurePlan,
+} from "@/lib/api";
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "Not launched yet";
+const activeStatuses = new Set(["queued", "building", "deploying"]);
+const successfulStatuses = new Set(["running", "completed", "success", "active"]);
+
+function formatDate(value?: string | null) {
+  if (!value) return "Not recorded";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not launched yet";
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-};
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
-const statusLabel = (status?: string | null) => {
-  if (["running", "success", "completed", "active"].includes(status || "")) return { label: "Live", className: "bg-success/10 text-success border-success/20" };
-  if (["building", "deploying", "pending", "queued"].includes(status || "")) return { label: "In progress", className: "bg-primary/10 text-primary border-primary/20" };
-  if (["failed", "error"].includes(status || "")) return { label: "Needs attention", className: "bg-danger/10 text-danger border-danger/20" };
-  return { label: "Ready to launch", className: "bg-background-secondary text-foreground-muted border-border" };
-};
+function projectState(status?: string | null) {
+  if (successfulStatuses.has(status || "")) {
+    return { label: "Healthy release", className: "border-success/25 bg-success-subtle text-success" };
+  }
+  if (activeStatuses.has(status || "")) {
+    return { label: "In progress", className: "border-info/25 bg-info-subtle text-info" };
+  }
+  if (status === "failed" || status === "error") {
+    return { label: "Needs attention", className: "border-danger/25 bg-danger-subtle text-danger" };
+  }
+  return { label: "Not deployed", className: "border-border bg-surface-subtle text-foreground-muted" };
+}
 
 export default function DashboardHome() {
   const { user } = useAuth();
-  const { projects, isLoading: projectsLoading } = useNotifications();
+  const {
+    projects,
+    dashboardStats,
+    notifications,
+    isLoading: workspaceLoading,
+  } = useNotifications();
   const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [loadingDeployments, setLoadingDeployments] = useState(true);
+  const [draftPlanProjectIds, setDraftPlanProjectIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
-    api.getDeployments(50)
-      .then((data) => { if (active) setDeployments(data); })
-      .catch(() => { if (active) setDeployments([]); })
-      .finally(() => { if (active) setLoadingDeployments(false); });
-    return () => { active = false; };
-  }, []);
+    let cancelled = false;
+
+    async function loadOverview() {
+      setLoading(true);
+      setError(null);
+      try {
+        const deploymentData = await api.getDeployments(50);
+        if (cancelled) return;
+        setDeployments(deploymentData);
+
+        const planResults = await Promise.allSettled(
+          projects.map((project) => api.getInfrastructurePlan(project.id)),
+        );
+        if (cancelled) return;
+        const awaitingApproval = new Set<string>();
+        planResults.forEach((result, index) => {
+          if (
+            result.status === "fulfilled" &&
+            (result.value as InfrastructurePlan).status === "draft"
+          ) {
+            awaitingApproval.add(projects[index].id);
+          }
+        });
+        setDraftPlanProjectIds(awaitingApproval);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(getErrorMessage(loadError, "The workspace overview could not be loaded."));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    if (!workspaceLoading) void loadOverview();
+    return () => {
+      cancelled = true;
+    };
+  }, [projects, workspaceLoading]);
 
   const latestByProject = useMemo(() => {
     const records = new Map<string, Deployment>();
-    for (const deployment of deployments) {
-      const previous = records.get(deployment.project_id);
-      const currentTime = new Date(deployment.completed_at || deployment.started_at || 0).getTime();
-      const previousTime = new Date(previous?.completed_at || previous?.started_at || 0).getTime();
-      if (!previous || currentTime > previousTime) records.set(deployment.project_id, deployment);
-    }
+    deployments.forEach((deployment) => {
+      if (!records.has(deployment.project_id)) records.set(deployment.project_id, deployment);
+    });
     return records;
   }, [deployments]);
 
+  const activeDeployments = deployments.filter((deployment) => activeStatuses.has(deployment.status));
+  const failedDeployments = deployments.filter((deployment) => deployment.status === "failed");
+  const incidentNotifications = notifications.filter((notification) => notification.category === "incident");
+  const criticalNotifications = notifications.filter(
+    (notification) => !notification.read && notification.type === "critical",
+  );
   const firstName = user?.first_name || user?.firstName || "there";
-  const isLoading = projectsLoading || loadingDeployments;
 
-  if (isLoading) {
-    return <div className="flex min-h-[55vh] items-center justify-center"><span className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
+  const attentionItems = [
+    ...Array.from(draftPlanProjectIds).map((projectId) => {
+      const project = projects.find((item) => item.id === projectId);
+      return {
+        id: `plan-${projectId}`,
+        icon: GitPullRequestArrow,
+        tone: "warning",
+        title: `${project?.name || "Project"} architecture is awaiting approval`,
+        description: "Review the resource plan, estimate status, and preflight evidence before deployment.",
+        href: `/dashboard/infrastructure?project=${projectId}`,
+        action: "Review plan",
+      };
+    }),
+    ...failedDeployments.slice(0, 3).map((deployment) => ({
+      id: `deployment-${deployment.id}`,
+      icon: AlertCircle,
+      tone: "danger",
+      title: `${deployment.project_name || "Deployment"} failed`,
+      description: "Open the recorded stages and logs before deciding whether to retry.",
+      href: `/dashboard/deployments?id=${deployment.id}`,
+      action: "View failure",
+    })),
+    ...criticalNotifications.slice(0, 2).map((notification) => ({
+      id: `notification-${notification.id}`,
+      icon: ShieldAlert,
+      tone: "danger",
+      title: notification.title,
+      description: notification.message,
+      href: notification.action_url || "/dashboard/activity",
+      action: "Review",
+    })),
+  ];
+
+  if (workspaceLoading || loading) {
+    return (
+      <div className="space-y-6" aria-busy="true" aria-label="Loading workspace overview">
+        <div className="skeleton h-28 w-full" />
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="skeleton h-32" />
+          ))}
+        </div>
+        <div className="skeleton h-64 w-full" />
+      </div>
+    );
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-9 pb-10">
-      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="relative overflow-hidden rounded-3xl border border-border bg-card px-6 py-8 shadow-sm sm:px-8">
-        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-primary/10 blur-3xl" />
-        <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-          <div className="max-w-xl">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary"><Sparkles size={12} /> YOUR WORKSPACE</span>
-            <h1 className="mt-4 text-3xl font-bold tracking-tight text-foreground">Good to see you, {firstName}.</h1>
-            <p className="mt-2 text-sm leading-6 text-foreground-muted">Everything important about your applications is here. The platform details stay out of your way.</p>
-          </div>
-          <Link href="/dashboard/repositories" className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white shadow-md shadow-primary/15 transition hover:bg-primary-hover"><FolderPlus size={16} /> Add application</Link>
-        </div>
-      </motion.section>
+    <div className="pb-8">
+      <PageHeader
+        eyebrow="Workspace overview"
+        title={`Good to see you, ${firstName}.`}
+        description="Start with decisions that need your attention, then check active releases and production context."
+        actions={
+          <Link href="/dashboard/repositories" className="ops-primary">
+            <Plus size={16} />
+            New project
+          </Link>
+        }
+      />
 
-      {projects.length === 0 ? (
-        <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08, duration: 0.35 }} className="rounded-3xl border border-border bg-card p-8 text-center shadow-sm sm:p-12">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-primary/10 text-primary"><Rocket size={25} /></div>
-          <h2 className="mt-5 text-xl font-bold text-foreground">Bring your first application</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-foreground-muted">Connect a repository or upload a ZIP. You&apos;ll review the essentials before anything goes live.</p>
-          <Link href="/dashboard/repositories" className="mt-6 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover">Choose your code <ArrowRight size={16} /></Link>
-        </motion.section>
-      ) : (
-        <section>
-          <div className="mb-4 flex items-center justify-between"><div><h2 className="text-lg font-bold text-foreground">Your applications</h2><p className="mt-0.5 text-xs text-foreground-muted">Current status from your workspace.</p></div><span className="text-xs font-semibold text-foreground-muted">{projects.length} total</span></div>
-          <div className="grid gap-3">
-            {projects.map((project, index) => {
-              const deployment = latestByProject.get(project.id);
-              const status = statusLabel(deployment?.status || project.latest_deployment_status || project.status);
-              const source = project.full_name.startsWith("upload/") ? "Uploaded code" : project.full_name;
-              return (
-                <motion.article key={project.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }} className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm transition hover:border-border-hover sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-bold text-foreground">{project.name}</h3><span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${status.className}`}>{status.label}</span></div><p className="mt-1 truncate text-xs text-foreground-muted">{source}</p><p className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-foreground-muted"><Clock3 size={12} /> {formatDate(deployment?.completed_at || deployment?.started_at || project.last_deployed_at)}</p></div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {deployment?.live_url && <a href={deployment.live_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground-muted transition hover:bg-card-hover hover:text-foreground">Visit <ExternalLink size={13} /></a>}
-                    <Link href={`/dashboard/apps/${project.id}`} className="inline-flex items-center gap-1.5 rounded-lg bg-background-secondary px-3 py-2 text-xs font-bold text-foreground transition hover:bg-card-hover">Open <ArrowRight size={13} /></Link>
-                  </div>
-                </motion.article>
-              );
-            })}
-          </div>
-        </section>
+      {error && (
+        <StatePanel
+          variant="error"
+          title="Overview data is temporarily unavailable"
+          description={error}
+          action={{ label: "Retry", onClick: () => window.location.reload() }}
+          compact
+          className="mb-6"
+        />
       )}
 
-      {deployments.length > 0 && <section className="rounded-2xl border border-border bg-card p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-base font-bold text-foreground">Recent activity</h2><p className="mt-0.5 text-xs text-foreground-muted">A clear record of what has happened.</p></div><CheckCircle2 size={18} className="text-success" /></div><div className="divide-y divide-border/60">{deployments.slice(0, 4).map((deployment) => { const status = statusLabel(deployment.status); return <Link key={deployment.id} href={`/dashboard/deployments?id=${deployment.id}`} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0 transition hover:opacity-70"><div className="min-w-0"><p className="truncate text-sm font-semibold text-foreground">{deployment.project_name || "Application update"}</p><p className="mt-0.5 text-xs text-foreground-muted">{formatDate(deployment.completed_at || deployment.started_at)}</p></div><span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${status.className}`}>{status.label}</span></Link>; })}</div></section>}
+      {projects.length === 0 ? (
+        <StatePanel
+          title="Connect your first codebase"
+          description="Connect GitHub or upload a ZIP archive. ZeroOps will record the source, analyze deployment requirements, and prepare a reviewable Azure App Service plan."
+          action={{ label: "Connect code", href: "/dashboard/repositories" }}
+          className="mb-8"
+        />
+      ) : (
+        <>
+          <section aria-labelledby="attention-heading" className="mb-8">
+            <div className="mb-3 flex items-end justify-between gap-4">
+              <div>
+                <h2 id="attention-heading" className="text-base font-semibold text-foreground">
+                  Attention required
+                </h2>
+                <p className="mt-1 text-xs text-foreground-muted">
+                  Only actions that need a decision or recovery step appear here.
+                </p>
+              </div>
+              {attentionItems.length > 0 && (
+                <span className="text-xs font-medium text-foreground-subtle">{attentionItems.length} open</span>
+              )}
+            </div>
+            {attentionItems.length === 0 ? (
+              <div className="flex items-center gap-3 rounded-xl border border-success/25 bg-success-subtle px-4 py-4">
+                <CheckCircle2 size={19} className="shrink-0 text-success" />
+                <div>
+                  <p className="text-sm font-medium text-foreground">No approval or recovery actions are open</p>
+                  <p className="mt-0.5 text-xs text-foreground-muted">New findings and failed releases will appear here.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                {attentionItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.id} className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+                      <span
+                        className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${
+                          item.tone === "danger"
+                            ? "bg-danger-subtle text-danger"
+                            : "bg-warning-subtle text-warning"
+                        }`}
+                      >
+                        <Icon size={18} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-semibold text-foreground">{item.title}</h3>
+                        <p className="mt-1 text-xs leading-5 text-foreground-muted">{item.description}</p>
+                      </div>
+                      <Link
+                        href={item.href}
+                        className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:bg-surface-raised"
+                      >
+                        {item.action} <ArrowRight size={13} />
+                      </Link>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {activeDeployments.length > 0 && (
+            <section aria-labelledby="active-deployments-heading" className="mb-8">
+              <div className="mb-3">
+                <h2 id="active-deployments-heading" className="text-base font-semibold text-foreground">
+                  Active deployments
+                </h2>
+                <p className="mt-1 text-xs text-foreground-muted">Current state reported by the deployment queue.</p>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {activeDeployments.slice(0, 4).map((deployment) => (
+                  <Link
+                    key={deployment.id}
+                    href={`/dashboard/deployments?id=${deployment.id}`}
+                    className="group rounded-xl border border-info/25 bg-card p-4 shadow-sm transition-colors hover:border-info/50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-foreground">
+                          {deployment.project_name || "Deployment"}
+                        </p>
+                        <p className="mt-1 text-xs text-foreground-muted">
+                          {deployment.environment} · {deployment.branch}
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-info/25 bg-info-subtle px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-info">
+                        <Loader2 size={11} className="animate-spin" />
+                        {deployment.status}
+                      </span>
+                    </div>
+                    <p className="mt-4 text-xs text-foreground-subtle">
+                      Waiting for the deployment worker to report the next durable status.
+                    </p>
+                    <p className="mt-2 flex items-center gap-1.5 text-[11px] text-foreground-subtle">
+                      <Clock3 size={12} /> Started {formatDate(deployment.started_at)}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section aria-labelledby="health-summary-heading" className="mb-8">
+            <div className="mb-3">
+              <h2 id="health-summary-heading" className="text-base font-semibold text-foreground">
+                Platform summary
+              </h2>
+              <p className="mt-1 text-xs text-foreground-muted">
+                Recorded workspace state—not inferred uptime or security guarantees.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                label="Connected projects"
+                value={String(projects.length)}
+                supportingText="GitHub repositories and uploaded archives"
+                icon={FolderKanban}
+                tone="info"
+              />
+              <MetricCard
+                label="Active deployments"
+                value={String(activeDeployments.length)}
+                supportingText="Queued, building, or deploying"
+                icon={Rocket}
+                tone={activeDeployments.length > 0 ? "info" : "neutral"}
+              />
+              <MetricCard
+                label="Failed deployments"
+                value={String(dashboardStats?.failed_deployments ?? failedDeployments.length)}
+                supportingText="Recorded release failures"
+                icon={AlertCircle}
+                tone={failedDeployments.length > 0 ? "danger" : "neutral"}
+              />
+              <MetricCard
+                label="Incident records"
+                value={String(incidentNotifications.length)}
+                supportingText="Backend incident notifications; read state is not resolution"
+                icon={ShieldAlert}
+                tone={incidentNotifications.length > 0 ? "warning" : "neutral"}
+              />
+            </div>
+          </section>
+
+          <section aria-labelledby="projects-heading">
+            <div className="mb-3 flex items-end justify-between gap-4">
+              <div>
+                <h2 id="projects-heading" className="text-base font-semibold text-foreground">Projects</h2>
+                <p className="mt-1 text-xs text-foreground-muted">Latest recorded release state for each codebase.</p>
+              </div>
+              <Link href="/dashboard/projects" className="text-xs font-semibold text-primary hover:text-primary-hover">
+                View all
+              </Link>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+              {projects.slice(0, 6).map((project) => {
+                const deployment = latestByProject.get(project.id);
+                const state = projectState(
+                  deployment?.status || project.latest_deployment_status || project.status,
+                );
+                return (
+                  <article
+                    key={project.id}
+                    className="flex flex-col gap-4 border-b border-border p-4 last:border-b-0 sm:flex-row sm:items-center"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-sm font-semibold text-foreground">{project.name}</h3>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${state.className}`}>
+                          {state.label}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-foreground-muted">
+                        {project.full_name.startsWith("upload/") ? "Uploaded archive" : project.full_name}
+                      </p>
+                      <p className="mt-2 text-[11px] text-foreground-subtle">
+                        {project.branch || "No branch recorded"} · {project.region || "No region selected"} · Last release{" "}
+                        {formatDate(deployment?.completed_at || deployment?.started_at || project.last_deployed_at)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {deployment?.live_url && (
+                        <a
+                          href={deployment.live_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+                        >
+                          Open URL <ExternalLink size={13} />
+                        </a>
+                      )}
+                      <Link
+                        href={`/dashboard/apps/${project.id}`}
+                        className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-surface-subtle px-3 text-xs font-semibold text-foreground transition-colors hover:bg-surface-raised"
+                      >
+                        Open project <ArrowRight size={13} />
+                      </Link>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }

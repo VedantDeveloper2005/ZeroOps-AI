@@ -9,8 +9,10 @@ Tokens are NEVER exposed to the frontend.
 import base64
 import hashlib
 import logging
+import re
 import secrets
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 from cryptography.fernet import Fernet
@@ -21,6 +23,8 @@ except ImportError:
     import config
 
 logger = logging.getLogger("zeroops.github_oauth")
+_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # ──────────────────────────────────────────────
 # TOKEN ENCRYPTION (Fernet)
@@ -307,10 +311,56 @@ async def get_repo_branches(token: str, owner: str, repo: str) -> list[str]:
         )
         if response.status_code != 200:
             logger.warning(f"GitHub branches fetch failed for {owner}/{repo}: HTTP {response.status_code}")
-            return ["main"]
+            return []
 
         branches = response.json()
         return [b.get("name", "") for b in branches if b.get("name")]
+
+
+async def resolve_branch_commit(
+    token: str,
+    repo_full_name: str,
+    branch: str,
+) -> Optional[str]:
+    """Resolve a saved GitHub branch to a complete immutable commit SHA."""
+
+    if not token or not _REPOSITORY_PATTERN.fullmatch(repo_full_name or ""):
+        return None
+    if (
+        not isinstance(branch, str)
+        or not branch
+        or len(branch) > 255
+        or branch.startswith(("-", "/"))
+        or branch.endswith(("/", ".", ".lock"))
+        or ".." in branch
+        or "@{" in branch
+        or any(ord(char) < 32 or char in " ~^:?*[\\\x7f" for char in branch)
+    ):
+        return None
+
+    encoded_branch = quote(branch, safe="")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo_full_name}/commits/{encoded_branch}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "ZeroOps-AI",
+                },
+            )
+        if response.status_code != 200:
+            logger.warning(
+                "GitHub commit resolution failed for %s at the saved branch: HTTP %s",
+                repo_full_name,
+                response.status_code,
+            )
+            return None
+        commit_sha = str(response.json().get("sha") or "")
+        return commit_sha.lower() if _COMMIT_PATTERN.fullmatch(commit_sha) else None
+    except (httpx.HTTPError, ValueError, TypeError) as error:
+        logger.warning("GitHub commit resolution failed for %s: %s", repo_full_name, error)
+        return None
 
 
 # ──────────────────────────────────────────────

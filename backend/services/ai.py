@@ -275,23 +275,25 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     runtime = None
     package_manager = None
     docker_support = False
-    monorepo_structure = "None"
+    monorepo_structure = None
     database_dependencies = []
-    deployment_strategy = "Managed application environment"
+    deployment_strategy = None
     build_commands = None
     start_commands = None
     port = None
     
     dependencies = []
     vulnerabilities = []
-    cpu = "200m"
-    memory = "256Mi"
-    storage = "1Gi"
+    cpu = None
+    memory = None
+    storage = None
+    dockerfile = None
 
     # Check for Dockerfile
     if has_file(repo_path, "Dockerfile"):
         docker_support = True
         dockerfile_content = read_file_content(repo_path, "Dockerfile")
+        dockerfile = dockerfile_content or None
         port_match = re.search(r"^\s*EXPOSE\s+(\d{1,5})\b", dockerfile_content, flags=re.IGNORECASE | re.MULTILINE)
         if port_match and 1 <= int(port_match.group(1)) <= 65535:
             port = port_match.group(1)
@@ -312,16 +314,10 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         # Package manager detection
         if has_file(repo_path, "pnpm-lock.yaml"):
             package_manager = "pnpm"
-            build_commands = "pnpm run build"
-            start_commands = "pnpm start"
         elif has_file(repo_path, "yarn.lock"):
             package_manager = "yarn"
-            build_commands = "yarn build"
-            start_commands = "yarn start"
         else:
             package_manager = "npm"
-            build_commands = "npm run build"
-            start_commands = "npm start"
 
         try:
             pkg_content = read_file_content(repo_path, "package.json")
@@ -336,8 +332,6 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                     build_commands = f"{package_manager} run build"
                 if "start" in scripts:
                     start_commands = f"{package_manager} start"
-                elif "dev" in scripts:
-                    start_commands = f"{package_manager} run dev"
 
                 # A repository script is a stronger port signal than a generic
                 # framework default. Never ask the model to guess this value.
@@ -354,21 +348,15 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 if "next" in deps:
                     framework = "Next.js"
                     version = deps["next"].replace("^", "").replace("~", "")
-                    cpu = "200m"
-                    memory = "256Mi"
                 elif "express" in deps:
                     framework = "Express.js"
                     version = deps["express"].replace("^", "").replace("~", "")
-                    cpu = "100m"
-                    memory = "128Mi"
                 elif "@nestjs/core" in deps:
                     framework = "NestJS"
                     version = deps["@nestjs/core"].replace("^", "").replace("~", "")
-                    cpu = "250m"
-                    memory = "512Mi"
                 else:
-                    framework = "Node.js App"
-                    version = "1.0.0"
+                    framework = "Node.js"
+                    version = None
                     
                 if "typescript" in deps or "typescript" in dev_deps:
                     language = "TypeScript"
@@ -392,23 +380,21 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                     if dep_name in db_keywords:
                         database_dependencies.append(db_keywords[dep_name])
                 database_dependencies = list(set(database_dependencies))
-                if not port:
-                    port = "3000"
         except Exception:
             pass
             
     # Python Project Analysis
     elif has_file(repo_path, "requirements.txt"):
         language = "Python"
-        runtime = "Python 3.10"
         package_manager = "pip"
-        build_commands = "None"
-        start_commands = "uvicorn main:app --host 0.0.0.0 --port 8080"
-        if not port:
-            port = "8080"
-        cpu = "150m"
-        memory = "128Mi"
         dependencies = []
+
+        for runtime_file in (".python-version", "runtime.txt"):
+            if has_file(repo_path, runtime_file):
+                runtime_value = read_file_content(repo_path, runtime_file).strip().splitlines()
+                if runtime_value:
+                    runtime = runtime_value[0][:80]
+                    break
 
         try:
             reqs_content = read_file_content(repo_path, "requirements.txt")
@@ -420,13 +406,15 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                         dependencies.append(line)
                         if "fastapi" in line.lower():
                             framework = "FastAPI"
-                            start_commands = "uvicorn main:app --host 0.0.0.0 --port 8080"
                         elif "flask" in line.lower():
                             framework = "Flask"
-                            start_commands = "python app.py"
                         elif "django" in line.lower():
                             framework = "Django"
-                            start_commands = "python manage.py runserver 0.0.0.0:8000"
+
+                if framework == "Flask" and has_file(repo_path, "app.py"):
+                    start_commands = "python app.py"
+                elif framework == "Django" and has_file(repo_path, "manage.py"):
+                    start_commands = "python manage.py runserver"
 
                 # Database dependencies detection
                 db_keywords = {
@@ -449,8 +437,6 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     if database_dependencies and any(k in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL"] for k in scanned_vars):
         vulnerabilities.append("Medium: Ensure database connection string uses SSL connection options in production.")
 
-    # Dynamic generation of templates
-    dockerfile = generate_default_dockerfile(framework)
     # Azure App Service derives runtime configuration from the reviewed
     # application and does not consume generated cluster manifests.
     k8s_manifest = ""
@@ -499,9 +485,9 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
             detected_vars_detail.append({
                 "key": local_secret,
                 "type": "required",
-                "is_missing": False,
-                "has_default": True,
-                "default_val": "server-generated"
+                "is_missing": True,
+                "has_default": False,
+                "default_val": ""
             })
 
     # Find Recommended/Optional variables
@@ -528,12 +514,6 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 "default_val": ""
             })
 
-    db_text = f"{database_dependencies[0]} configuration" if database_dependencies else "no database dependency"
-    why_this_plan = (
-        f"ZeroOps detected {framework} with {db_text}. The estimate is a scanner heuristic only; "
-        "real cloud costs and resource names depend on the user's connected deployment target."
-    )
-
     # Source scanning cannot truthfully quote Azure costs. Pricing is calculated
     # only from the connected subscription and selected controls later on.
     pricing_breakdown = {
@@ -549,14 +529,14 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         "framework": framework,
         "version": version,
         "language": language,
-        "confidence": 75 if framework != "Unknown" else 0,
+        "confidence": 0,
         "resources": {
             "cpu": cpu,
             "memory": memory,
         "storage": storage
         },
         "port": port,
-        "risk_score": 12 if not vulnerabilities else 22,
+        "risk_score": 0,
         "dependencies": dependencies,
         "vulnerabilities": vulnerabilities,
         "dockerfile": dockerfile,
@@ -1044,7 +1024,6 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
     latest_deployment = metadata.get("latest_deployment") or {}
     url = latest_deployment.get("live_url") if isinstance(latest_deployment, dict) else None
     deployment_status = latest_deployment.get("status") if isinstance(latest_deployment, dict) else "unknown"
-    health_score = metadata.get("health_score")
     architecture = metadata.get("architecture_plan") or {}
     architecture_components = architecture.get("components") if isinstance(architecture, dict) else []
     if not isinstance(architecture_components, list):
@@ -1251,19 +1230,25 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
             
         res += "\nConfigure the required values in project settings. Secret values are stored in Azure Key Vault and are not returned by the product."
         return res
+        return res
 
     # 6. Can I deploy safely?
     elif "safe" in msg or "deploy safely" in msg or "security" in msg or "readiness" in msg:
-        vuln_count = metadata.get("vulnerabilities_count", 0)
-        vuln_text = f"We found **{vuln_count} security vulnerabilities** in your codebase packages." if vuln_count > 0 else "No package vulnerabilities detected."
+        warning_count = metadata.get("analysis_warning_count", 0)
+        warning_text = (
+            f"The repository analyzer recorded **{warning_count} warning(s)** that require review."
+            if warning_count > 0
+            else "The repository analyzer recorded no warnings. This is not a vulnerability scan."
+        )
         report = [
             f"**Launch-readiness check for {name}:**",
-            f"- **Security scan:** {vuln_text}",
+            f"- **Repository analysis:** {warning_text}",
             f"- **Latest recorded status:** {deployment_status.capitalize()}",
         ]
-        if health_score is not None:
-            report.append(f"- **Recorded health score:** {health_score}/100")
-        report.append("Before launch, verify required variables, run the production build, and review Azure's completed release status.")
+        report.append(
+            "Before launch, verify required variables, run independent dependency and image scans, "
+            "run the production build, and review Azure's completed release status."
+        )
         return "\n".join(report)
 
     else:

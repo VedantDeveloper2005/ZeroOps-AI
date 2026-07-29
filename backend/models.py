@@ -141,8 +141,8 @@ class User(Base):
     avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     plan = Column(Text, default="starter")
-    # API keys are stored as SHA-256 digests; the raw credential is shown only
-    # in the response that creates or rotates it.
+    # Legacy API-key columns are retained for schema compatibility. API-key
+    # authentication and credential generation are not currently available.
     api_key = Column(Text, nullable=True, unique=True)
     api_key_prefix = Column(Text, nullable=True)
     refresh_token = Column(Text, nullable=True)
@@ -577,10 +577,10 @@ class UserSettings(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
-    predictive_scaling = Column(Boolean, default=True)
-    auto_rollback = Column(Boolean, default=True)
-    ai_threat_mitigation = Column(Boolean, default=True)
-    auto_oom_restart = Column(Boolean, default=True)
+    predictive_scaling = Column(Boolean, default=False)
+    auto_rollback = Column(Boolean, default=False)
+    ai_threat_mitigation = Column(Boolean, default=False)
+    auto_oom_restart = Column(Boolean, default=False)
     slack_notifications = Column(Boolean, default=False)
     email_alerts = Column(Boolean, default=True)
     theme = Column(Text, default="dark")
@@ -951,7 +951,7 @@ class FailureAnalysis(Base):
     severity = Column(Text, nullable=False)
     recommended_fix = Column(Text, nullable=False)
     step_by_step_resolution = Column(JSON, default=list)
-    confidence = Column(Integer, default=95)
+    confidence = Column(Integer, default=0)
     impact = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1018,6 +1018,10 @@ class DeploymentJob(Base):
     live_url = Column(Text, nullable=True)
     failure_reason = Column(Text, nullable=True)
     worker_id = Column(Text, nullable=True)
+    lease_token = Column(Text, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1030,6 +1034,7 @@ class DeploymentJob(Base):
 
     __table_args__ = (
         Index("ix_deployment_jobs_status", "status"),
+        Index("ix_deployment_jobs_lease", "status", "lease_expires_at"),
         Index("ix_deployment_jobs_project_id", "project_id"),
     )
 

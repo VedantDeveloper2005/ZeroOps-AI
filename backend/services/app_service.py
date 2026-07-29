@@ -40,7 +40,16 @@ def normalize_app_name(value: str) -> str:
     """Return an App Service-compatible, globally readable site name."""
     raw = "".join(char.lower() if char.isalnum() else "-" for char in value)
     raw = re.sub(r"-+", "-", raw).strip("-") or "app"
-    raw = raw[:60].rstrip("-")
+    if len(raw) > 60:
+        # Queue callers append a stable project UUID fragment. Preserve it
+        # when truncating long repository names so global App Service names do
+        # not collapse to the same prefix.
+        identity_suffix = re.search(r"-[0-9a-f]{8}$", raw)
+        if identity_suffix:
+            suffix = identity_suffix.group(0)
+            raw = f"{raw[: 60 - len(suffix)].rstrip('-')}{suffix}"
+        else:
+            raw = raw[:60].rstrip("-")
     return raw if len(raw) >= 2 else f"{raw}0"
 
 

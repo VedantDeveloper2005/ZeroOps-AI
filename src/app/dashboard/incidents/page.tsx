@@ -1,241 +1,174 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle, Copy, FileText, RefreshCw, X } from "lucide-react";
-import { api, type Notification } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Check, Copy, Loader2, RefreshCw } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
 import { useNotifications } from "@/lib/NotificationContext";
-import { LockedView } from "@/components/dashboard/LockedView";
+import { api, getErrorMessage, type Notification } from "@/lib/api";
 
-interface Incident {
-  id: string;
-  title: string;
-  severity: "critical" | "warning" | "resolved";
-  startTime: string;
-  status: "active" | "investigating" | "resolved";
-  description: string;
+function formatTimestamp(value: string | null) {
+  if (!value) return "Time not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time not recorded";
+  return date.toLocaleString();
 }
 
-const severityConfig: Record<Incident["severity"], { color: string; border: string; dot: string }> = {
-  critical: { color: "text-danger", border: "border-l-danger", dot: "bg-danger" },
-  warning: { color: "text-warning", border: "border-l-warning", dot: "bg-warning" },
-  resolved: { color: "text-success", border: "border-l-success", dot: "bg-success" },
-};
-
-function mapNotificationToIncident(notification: Notification): Incident {
-  const severity: Incident["severity"] =
-    notification.type === "critical" ? "critical" : notification.read || notification.type === "success" ? "resolved" : "warning";
-  const status: Incident["status"] = notification.read ? "resolved" : notification.type === "warning" ? "investigating" : "active";
-  const date = new Date(notification.created_at || Date.now());
-
-  return {
-    id: notification.id,
-    title: notification.title,
-    severity,
-    startTime: `${date.toLocaleTimeString()} ${date.toLocaleDateString()}`,
-    status,
-    description: notification.message,
-  };
+function eventTone(type: Notification["type"]) {
+  if (type === "critical") return "border-l-danger";
+  if (type === "warning") return "border-l-warning";
+  if (type === "success") return "border-l-success";
+  return "border-l-info";
 }
 
 export default function IncidentsPage() {
-  const { addToast, hasDeployed } = useNotifications();
-  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const { addToast } = useNotifications();
+  const [events, setEvents] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [reportIncident, setReportIncident] = useState<Incident | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadEvents = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setEvents(await api.getNotifications("incident"));
+    } catch (requestError) {
+      setEvents([]);
+      setError(getErrorMessage(requestError, "Operational events could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!hasDeployed) {
-      setLoading(false);
-      return;
+    void loadEvents();
+  }, [loadEvents]);
+
+  const acknowledge = async (event: Notification) => {
+    if (event.read) return;
+    setEvents((current) =>
+      current.map((item) => (item.id === event.id ? { ...item, read: true } : item)),
+    );
+    try {
+      await api.markNotificationRead(event.id);
+    } catch (requestError) {
+      setEvents((current) =>
+        current.map((item) => (item.id === event.id ? { ...item, read: false } : item)),
+      );
+      addToast(getErrorMessage(requestError, "The event could not be acknowledged."), "error");
     }
-
-    let active = true;
-    async function loadIncidents() {
-      setLoading(true);
-      try {
-        const notifs = await api.getNotifications("incident");
-        if (active) setIncidents(notifs.map(mapNotificationToIncident));
-      } catch (err) {
-        console.error("Failed to load incidents", err);
-        if (active) setIncidents([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-
-    void loadIncidents();
-    return () => {
-      active = false;
-    };
-  }, [hasDeployed]);
-
-  const handleCopyReport = () => {
-    if (!reportIncident) return;
-    const reportText = [
-      "ZEROOPS AI INCIDENT REPORT",
-      "==========================",
-      `Incident ID: ${reportIncident.id}`,
-      `Title: ${reportIncident.title}`,
-      `Severity: ${reportIncident.severity}`,
-      `Status: ${reportIncident.status}`,
-      `Recorded At: ${reportIncident.startTime}`,
-      "",
-      "SUMMARY:",
-      reportIncident.description,
-    ].join("\n");
-
-    navigator.clipboard.writeText(reportText);
-    addToast("Incident report copied to clipboard.", "success");
-    setReportIncident(null);
   };
 
-  if (!hasDeployed) {
-    return (
-      <div className="space-y-6">
-        <LockedView featureName="Incident Management" />
-      </div>
-    );
-  }
+  const copyEvent = async (event: Notification) => {
+    const report = [
+      "ZEROOPS OPERATIONAL EVENT",
+      `Event ID: ${event.id}`,
+      `Recorded: ${formatTimestamp(event.created_at)}`,
+      `Type: ${event.type}`,
+      `Acknowledged: ${event.read ? "yes" : "no"}`,
+      "",
+      event.title,
+      event.message,
+    ].join("\n");
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <RefreshCw className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-foreground-muted text-sm font-medium">Loading incidents...</p>
-      </div>
-    );
-  }
+    try {
+      await navigator.clipboard.writeText(report);
+      addToast("Operational event copied.", "success");
+    } catch {
+      addToast("Clipboard access was not available.", "error");
+    }
+  };
 
-  const activeIncidents = incidents.filter((incident) => incident.status !== "resolved");
+  const unacknowledged = events.filter((event) => !event.read).length;
 
   return (
     <div className="space-y-6">
-      {activeIncidents.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-card border border-border border-l-4 border-l-warning rounded-xl p-5 relative overflow-hidden shadow-sm"
-        >
-          <div className="absolute inset-0 bg-warning/5 pointer-events-none" />
-          <div className="relative flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center shrink-0">
-              <AlertTriangle size={20} className="text-warning" />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-foreground">
-                {activeIncidents.length} Active Incident{activeIncidents.length > 1 ? "s" : ""}
-              </p>
-              <p className="text-xs text-foreground-muted mt-0.5">
-                {activeIncidents.map((incident) => incident.title).join(", ")}
-              </p>
-            </div>
-          </div>
-        </motion.div>
-      )}
+      <PageHeader
+        eyebrow="Operations"
+        title="Operational events"
+        description="Backend notifications categorized as incidents. Acknowledging an event marks it read; it does not resolve an underlying service condition."
+        actions={
+          <button
+            type="button"
+            onClick={() => void loadEvents()}
+            disabled={loading}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm hover:bg-surface-raised disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        }
+      />
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-card border border-border rounded-xl p-6 shadow-sm"
-      >
-        <h3 className="text-sm font-bold text-foreground mb-4">Incident Event Log</h3>
-        <div className="space-y-3">
-          {incidents.length === 0 ? (
-            <div className="p-8 text-center space-y-2 bg-card/20 border border-border rounded-xl">
-              <CheckCircle size={32} className="text-success mx-auto" />
-              <p className="text-sm font-semibold text-foreground">No incidents recorded</p>
-              <p className="text-xs text-foreground-muted">Incident notifications from the backend will appear here.</p>
-            </div>
-          ) : (
-            incidents.map((incident, index) => {
-              const config = severityConfig[incident.severity];
-              return (
-                <motion.div
-                  key={incident.id}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                  className={`rounded-xl p-4 border border-border border-l-4 ${config.border} bg-background-secondary`}
-                >
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-                      <h4 className="text-xs font-bold text-foreground truncate">{incident.title}</h4>
-                      <span className={`text-[9px] uppercase px-2 py-0.5 rounded-full font-bold bg-card border border-border/80 ${config.color}`}>
-                        {incident.status}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-foreground-muted font-mono font-semibold shrink-0">
-                      {incident.startTime}
+      <div className="rounded-xl border border-info/25 bg-info-subtle px-4 py-3 text-xs leading-5 text-foreground">
+        <strong className="font-semibold">{unacknowledged}</strong> unacknowledged event
+        {unacknowledged === 1 ? "" : "s"}. ZeroOps does not currently run an independent incident lifecycle or resolution workflow.
+      </div>
+
+      {error ? (
+        <StatePanel
+          variant="error"
+          title="Operational events are unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadEvents() }}
+        />
+      ) : loading ? (
+        <div role="status" className="flex min-h-52 items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm text-foreground-muted">
+          <Loader2 size={18} className="animate-spin text-primary" />
+          Loading recorded events…
+        </div>
+      ) : events.length === 0 ? (
+        <StatePanel
+          variant="empty"
+          title="No operational events are recorded"
+          description="This means the backend has not saved any incident-category notifications. It is not proof that the deployed service has had no incidents."
+        />
+      ) : (
+        <section aria-label="Recorded operational events" className="space-y-3">
+          {events.map((event) => (
+            <article
+              key={event.id}
+              className={`rounded-xl border border-l-4 border-border bg-card p-4 shadow-sm ${eventTone(event.type)}`}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <AlertTriangle size={15} className={event.type === "critical" ? "text-danger" : "text-warning"} />
+                    <h2 className="text-sm font-semibold text-foreground">{event.title}</h2>
+                    <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground-muted">
+                      {event.type}
+                    </span>
+                    <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-foreground-muted">
+                      {event.read ? "Acknowledged" : "Unacknowledged"}
                     </span>
                   </div>
-                  <p className="text-xs text-foreground-muted mb-3 leading-relaxed">{incident.description}</p>
+                  <p className="mt-2 text-xs leading-5 text-foreground-muted">{event.message}</p>
+                  <p className="mt-2 text-[11px] text-foreground-subtle">{formatTimestamp(event.created_at)}</p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {!event.read && (
+                    <button
+                      type="button"
+                      onClick={() => void acknowledge(event)}
+                      className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-surface-raised"
+                    >
+                      <Check size={14} />
+                      Acknowledge
+                    </button>
+                  )}
                   <button
-                    onClick={() => setReportIncident(incident)}
-                    className="flex items-center gap-1.5 text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                    type="button"
+                    onClick={() => void copyEvent(event)}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-surface-raised"
                   >
-                    <FileText size={12} />
-                    Create report from event
+                    <Copy size={14} />
+                    Copy
                   </button>
-                </motion.div>
-              );
-            })
-          )}
-        </div>
-      </motion.div>
-
-      {reportIncident && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-card border border-border max-w-lg w-full p-6 rounded-xl shadow-2xl relative flex flex-col max-h-[90vh]"
-          >
-            <button
-              onClick={() => setReportIncident(null)}
-              className="absolute top-4 right-4 text-foreground-muted hover:text-foreground cursor-pointer transition"
-            >
-              <X size={16} />
-            </button>
-
-            <h3 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2">
-              <FileText size={18} className="text-primary" />
-              Incident Report
-            </h3>
-            <p className="text-[10px] text-foreground-muted font-semibold uppercase tracking-wider mb-4">
-              Built from recorded backend incident notification
-            </p>
-
-            <div className="flex-1 overflow-y-auto bg-background-secondary border border-border/60 rounded-lg p-4 font-mono text-[11px] text-foreground space-y-3 no-scrollbar">
-              <p className="text-primary font-bold"># {reportIncident.title}</p>
-              <p className="text-foreground-muted">Incident ID: {reportIncident.id}</p>
-              <p className="text-foreground-muted">Severity: {reportIncident.severity}</p>
-              <p className="text-foreground-muted">Status: {reportIncident.status}</p>
-              <p className="text-foreground-muted">Recorded At: {reportIncident.startTime}</p>
-              <div>
-                <p className="text-warning font-bold">## Summary</p>
-                <p className="text-foreground-muted leading-relaxed mt-1">{reportIncident.description}</p>
+                </div>
               </div>
-            </div>
-
-            <div className="flex gap-3 justify-end pt-4 mt-2">
-              <button
-                onClick={() => setReportIncident(null)}
-                className="px-3.5 py-2 border border-border rounded-lg text-xs font-semibold hover:bg-background-secondary transition cursor-pointer"
-              >
-                Close
-              </button>
-              <button
-                onClick={handleCopyReport}
-                className="px-3.5 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
-              >
-                <Copy size={12} />
-                Copy Report
-              </button>
-            </div>
-          </motion.div>
-        </div>
+            </article>
+          ))}
+        </section>
       )}
     </div>
   );

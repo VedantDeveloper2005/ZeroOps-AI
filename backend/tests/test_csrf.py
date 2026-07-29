@@ -19,9 +19,8 @@ def test_csrf_middleware_gating():
     csrf_cookie_val = response.cookies["csrf_token"]
     assert csrf_cookie_val is not None
 
-    # 2. POST request WITHOUT cookie authentication should pass (e.g. API keys or unauthenticated public routes)
-    # The health GKE connection check or list projects or billing operations
-    # Let's hit a POST route. If there is no session cookie, it passes the CSRF check (returning 401 or 503 depending on db status).
+    # 2. A POST without cookie auth should pass CSRF and reach the route's
+    # normal authentication boundary.
     response = client.post("/api/billing/operations", json={})
     assert response.status_code in [401, 503]
 

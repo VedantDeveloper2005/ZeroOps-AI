@@ -18,15 +18,20 @@ logger = logging.getLogger("zeroops.sms")
 
 
 def is_configured() -> bool:
-    return True
+    return bool(
+        config.TWILIO_ACCOUNT_SID
+        and config.TWILIO_AUTH_TOKEN
+        and config.TWILIO_FROM_NUMBER
+    )
 
 
 def send_phone_verification_otp(phone_number: str, otp_code: str) -> bool:
     """Send a short-lived verification OTP through Twilio's REST API."""
-    if not (config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN and config.TWILIO_FROM_NUMBER):
-        # Local development fallback: print OTP to backend console
-        print(f"\n[LOCAL DEVELOPER SMS BYPASS] phone={phone_number} otp_code={otp_code}\n", flush=True)
-        return True
+    if not is_configured():
+        # Never expose a phone number or OTP through process output. Missing
+        # provider credentials are a delivery failure, not a successful bypass.
+        logger.warning("Phone verification SMS delivery is not configured.")
+        return False
 
     url = (
         "https://api.twilio.com/2010-04-01/Accounts/"

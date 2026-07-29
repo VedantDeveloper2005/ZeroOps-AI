@@ -1,6 +1,8 @@
 # ZeroOps AI
 
-An Azure-first application launch platform for turning GitHub repositories and ZIP uploads into verified live applications.
+An Azure-first application launch platform for reviewing source and releasing
+commit-pinned GitHub projects to verified Azure App Service endpoints. ZIP
+uploads are supported for review and planning, not isolated-worker deployment.
 
 ## Local Runbook
 
@@ -21,8 +23,11 @@ npm run dev
 ```bash
 cd backend
 pip install -r requirements.txt
+export APP_ENV=development
 uvicorn main:app --reload --port 8000
 ```
+
+In PowerShell, use `$env:APP_ENV = "development"` before starting Uvicorn.
 
 The dashboard expects the FastAPI backend for repository analysis, deployments, logs, monitoring, security status, and settings data. If Azure Key Vault or required Azure hosting configuration is unavailable, launch stays blocked instead of showing synthetic production data.
 
@@ -44,10 +49,11 @@ python -m py_compile backend/main.py backend/config.py backend/services/ai.py ba
 
 ## Azure App Service
 
-ZeroOps is production-prepared for Azure App Service as two apps:
+ZeroOps is production-prepared as three isolated runtimes:
 
 - Next.js frontend App Service
 - FastAPI backend App Service
+- Deployment worker Azure Container App
 
 See [docs/azure-app-service.md](docs/azure-app-service.md) for startup commands, required app settings, websocket notes, and troubleshooting.
 

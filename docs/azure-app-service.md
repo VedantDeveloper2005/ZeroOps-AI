@@ -29,6 +29,19 @@ required value is unavailable.
 
 The isolated deployment worker must include the Azure CLI. Do not run customer builds in the frontend process or depend on a local Docker daemon.
 
+The repository workflow builds `worker/Dockerfile` into an existing ACR and
+updates an existing, private Azure Container App with one minimum replica.
+Configure the repository variables documented in
+`.github/workflows/main_zeroops-backend.yml`, grant that Container App managed
+identity Key Vault access and ACR pull access, and configure its readiness
+probe for `/ready` on port `8085`.
+
+ZIP uploads remain available for source review and architecture planning, but
+they are not queueable for deployment: their extracted source currently lives
+on API-local storage that an isolated worker cannot read. A deployment request
+returns a clear conflict response until durable shared source storage is
+implemented.
+
 ## Before a real Azure rollout
 
 1. Confirm the subscription and region, then validate quotas.

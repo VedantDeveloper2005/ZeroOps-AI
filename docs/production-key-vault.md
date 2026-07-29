@@ -6,7 +6,7 @@ plaintext process variables. The only bootstrap settings are:
 
 | App setting | Purpose |
 |---|---|
-| `APP_ENV=production` | Selects fail-closed production startup before any secret is fetched. |
+| `APP_ENV=production` | Required exact runtime mode. Missing or unrecognized values stop startup. |
 | `AZURE_KEYVAULT_URL` | Key Vault endpoint, for example `https://<vault>.vault.azure.net/`. |
 | `AZURE_CLIENT_ID` | Optional selector for a user-assigned managed identity. It is not a secret. |
 
@@ -31,12 +31,17 @@ Store each setting under `zeroops-<setting-name-in-kebab-case>`. For example:
 | `TWILIO_AUTH_TOKEN` | `zeroops-twilio-auth-token` | When phone verification is enabled |
 | `TWILIO_FROM_NUMBER` | `zeroops-twilio-from-number` | When phone verification is enabled |
 | `WORKER_EVENT_TOKEN` | `zeroops-worker-event-token` | Only for an external worker event relay |
+| `DB_SSL_ENABLED` | `zeroops-db-ssl-enabled` | Must remain `true` |
+| `DB_SSL_VERIFY` | `zeroops-db-ssl-verify` | Must remain `true` |
+| `DB_SSL_ROOT_CERT` | `zeroops-db-ssl-root-cert` | Optional CA bundle path when the image system bundle is not used |
+| `WORKER_LEASE_SECONDS` | `zeroops-worker-lease-seconds` | Optional; defaults to `180` |
+| `WORKER_HEARTBEAT_SECONDS` | `zeroops-worker-heartbeat-seconds` | Optional; defaults to `30` and must be shorter than the lease |
+| `WORKER_MAX_ATTEMPTS` | `zeroops-worker-max-attempts` | Optional; defaults to `3` |
 | `GITHUB_CLIENT_ID` | `zeroops-github-client-id` | When GitHub OAuth is enabled |
 | `GITHUB_CLIENT_SECRET` | `zeroops-github-client-secret` | When GitHub OAuth is enabled |
 | `GOOGLE_CLIENT_ID` | `zeroops-google-client-id` | When Google OAuth is enabled |
 | `GOOGLE_CLIENT_SECRET` | `zeroops-google-client-secret` | When Google OAuth is enabled |
 | `OPENAI_API_KEY` | `zeroops-ai-api-key` | When OpenAI review is enabled |
-| `GITHUB_TOKEN` | `zeroops-github-server-token` | Optional fallback |
 | `STRIPE_SECRET_KEY` | `zeroops-stripe-secret-key` | When Stripe billing is enabled |
 | `STRIPE_WEBHOOK_SECRET` | `zeroops-stripe-webhook-secret` | When Stripe billing is enabled |
 
@@ -69,8 +74,16 @@ relay.
 
 The worker no longer stores a decrypted GitHub OAuth token in the deployment
 queue. It decrypts the already encrypted user token only for the active
-release, and the startup migration removes the legacy `github_token` column
-from `deployment_jobs`.
+release. Before queueing, the API resolves the project's saved branch to a
+complete GitHub commit SHA; the worker checks out that immutable revision.
+The startup migration removes the legacy `github_token` column from
+`deployment_jobs`.
+
+Queue claims use renewable database leases. A stale claim is automatically
+requeued only while its deployment is still `queued` and below the retry cap.
+Once a release enters `building`, an expired lease is recorded as a failure
+and requires an explicit retry so potentially billable Azure changes are not
+silently replayed.
 
 Customer application secrets remain separate from control-plane settings:
 

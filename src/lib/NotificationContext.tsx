@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { api, type Notification, type Project, type DashboardStats } from "./api";
 
 export type { Notification };
@@ -38,14 +39,20 @@ function generateId(prefix: string): string {
 }
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isDashboardRoute = pathname.startsWith("/dashboard");
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Derive hasDeployed from actual DB state (true if user has at least one connected project)
-  const hasDeployed = projects.length > 0;
+  const hasDeployed = projects.some(
+    (project) =>
+      project.deployment_count > 0 ||
+      project.last_deployed_at !== null ||
+      project.latest_deployment_status !== null,
+  );
 
   // ── Fetch from API on mount ──
   useEffect(() => {
@@ -80,13 +87,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
     }
 
-    loadData();
+    if (isDashboardRoute) {
+      void loadData();
+    } else {
+      setIsLoading(false);
+    }
     window.addEventListener("zeroops:authenticated", loadData);
     return () => {
       cancelled = true;
       window.removeEventListener("zeroops:authenticated", loadData);
     };
-  }, []);
+  }, [isDashboardRoute]);
 
   // Directly derive unread count
   const unreadCount = notifications.filter((n) => !n.read).length;

@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import {
   AppWindow,
-  ArrowRight,
   BadgeCheck,
   Boxes,
   CheckCircle2,
@@ -12,17 +11,24 @@ import {
   Database,
   HardDrive,
   KeyRound,
+  Loader2,
   MapPin,
   Network,
   Pencil,
+  RotateCcw,
+  ShieldCheck,
 } from "lucide-react";
-import type { InfrastructurePlan as InfrastructurePlanModel, InfrastructurePlanComponent, InfrastructurePlanUpdate } from "@/lib/api";
+import type {
+  InfrastructurePlan as InfrastructurePlanModel,
+  InfrastructurePlanComponent,
+  InfrastructurePlanUpdate,
+} from "@/lib/api";
 
 type Props = {
   plan: InfrastructurePlanModel;
-  onUpdate: (update: InfrastructurePlanUpdate) => Promise<void>;
-  onApprove: (note?: string) => Promise<void>;
-  onRegenerate: () => Promise<void>;
+  onUpdate: (update: InfrastructurePlanUpdate) => Promise<boolean>;
+  onApprove: (note?: string) => Promise<boolean>;
+  onRegenerate: () => Promise<boolean>;
   busy?: boolean;
 };
 
@@ -32,14 +38,6 @@ const regionOptions = [
   { value: "westeurope", label: "West Europe" },
   { value: "uksouth", label: "UK South" },
   { value: "southeastasia", label: "Southeast Asia" },
-];
-
-const deploymentSteps = [
-  "Repository analysis",
-  "Architecture review",
-  "Preflight validation",
-  "Internal preparation",
-  "Deploy and health check",
 ];
 
 function iconFor(component: InfrastructurePlanComponent) {
@@ -52,20 +50,30 @@ function iconFor(component: InfrastructurePlanComponent) {
   return AppWindow;
 }
 
-export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, busy = false }: Props) {
+export function InfrastructurePlan({
+  plan,
+  onUpdate,
+  onApprove,
+  onRegenerate,
+  busy = false,
+}: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [selectedService, setSelectedService] = useState("");
   const [tier, setTier] = useState("");
   const [approvalNote, setApprovalNote] = useState("");
-  const [showCostBreakdown, setShowCostBreakdown] = useState(false);
-  const [explainedComponent, setExplainedComponent] = useState<string | null>(null);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
 
   const application = useMemo(
     () => plan.plan.components.find((component) => component.id === "application"),
     [plan.plan.components],
   );
   const canApprove = application?.service === "Azure App Service";
-  const sourceFindings = plan.plan.assessment.source_findings;
+  const evidence = plan.plan.application_evidence;
+  const sourceFindings = (plan.plan.assessment.source_findings ?? []).filter(
+    (finding) => !/checks? passed successfully/i.test(finding),
+  );
+  const unresolvedQuestions = plan.plan.assessment.unresolved_questions ?? [];
+  const selectedRegionIsKnown = regionOptions.some((option) => option.value === plan.region);
 
   const beginEdit = (component: InfrastructurePlanComponent) => {
     setEditing(component.id);
@@ -74,169 +82,505 @@ export function InfrastructurePlan({ plan, onUpdate, onApprove, onRegenerate, bu
   };
 
   const saveComponent = async (component: InfrastructurePlanComponent) => {
-    await onUpdate({
+    const serviceChanged = selectedService !== component.service;
+    const tierChanged = tier.trim() !== (component.tier || "");
+    if (!serviceChanged && !tierChanged) {
+      setEditing(null);
+      return;
+    }
+
+    const updated = await onUpdate({
       component_id: component.id,
-      service: selectedService === component.service ? undefined : selectedService,
-      tier: tier === component.tier ? undefined : tier,
+      service: serviceChanged ? selectedService : undefined,
+      tier: tierChanged ? tier.trim() : undefined,
     });
-    setEditing(null);
+    if (updated) {
+      setEditing(null);
+    }
   };
 
-  // Extract costs and scores from spec
-  const monthlyCost = plan.cost_estimate?.monthly_estimate ?? plan.plan.cost.monthly_estimate;
-  const costBreakdown = plan.cost_estimate?.breakdown ?? [];
-  const securityScore = plan.security_score ?? plan.plan.assessment.security.value;
-  const performanceScore = plan.performance_score ?? plan.plan.assessment.performance.value;
-  const reliabilityScore = plan.reliability_score ?? plan.plan.assessment.reliability.value;
-  const deployTime = plan.estimated_deploy_time ?? plan.plan.deployment_time.estimate;
-  const scoreLabel = (value: number | null | undefined) => value == null ? "Awaiting validation" : `${value}/100`;
+  const regenerate = async () => {
+    const regenerated = await onRegenerate();
+    if (regenerated) {
+      setConfirmRegenerate(false);
+    }
+  };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 pb-8">
-      <section className="ops-card rounded-2xl p-5 sm:p-7">
+    <div className="space-y-5 pb-2">
+      <section aria-labelledby="plan-heading" className="ops-card rounded-2xl p-5 sm:p-7">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
-            <p className="text-xs font-semibold text-primary">ZeroOps AI Cloud Architect</p>
+            <p className="text-xs font-semibold text-primary">Saved infrastructure proposal</p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Architect Spec</h1>
-              <StatusBadge approved={plan.status === "approved"} />
+              <h2
+                id="plan-heading"
+                className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl"
+              >
+                Azure plan revision {plan.revision}
+              </h2>
+              <StatusBadge status={plan.status} />
             </div>
-            <p className="mt-3 text-sm leading-6 text-foreground-muted">We have translated codebase evidence into a production-ready Azure specification. Infrastructure details run invisibly in the background.</p>
+            <p className="mt-3 text-sm leading-6 text-foreground-muted">
+              This proposal is derived from recorded repository analysis. It is not a live Azure
+              inventory, a price quote, a performance test, or a security certification.
+            </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:w-[360px]">
-            <label className="rounded-xl border border-border bg-background-secondary/55 px-3 py-2.5">
-              <span className="flex items-center gap-1.5 text-xs font-medium text-foreground-muted"><MapPin size={14} /> Region</span>
-              <span className="relative mt-1.5 block">
-                <select
-                  aria-label="Azure deployment region"
-                  value={plan.region}
-                  disabled={busy}
-                  onChange={(event) => void onUpdate({ region: event.target.value })}
-                  className="min-h-8 w-full appearance-none bg-transparent pr-6 text-sm font-semibold text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {regionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-0 top-1 text-foreground-muted" size={16} />
-              </span>
-            </label>
-            <div className="rounded-xl border border-border bg-background-secondary/55 px-3 py-2.5">
-              <p className="text-xs font-medium text-foreground-muted">Cloud</p>
-              <p className="mt-2 text-sm font-semibold text-foreground">{plan.plan.cloud} · {plan.plan.region_label}</p>
-            </div>
-          </div>
+
+          <label className="rounded-xl border border-border bg-background-secondary/55 px-3 py-2.5 lg:w-72">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-foreground-muted">
+              <MapPin size={14} aria-hidden="true" /> Proposed Azure region
+            </span>
+            <span className="relative mt-1.5 block">
+              <select
+                aria-describedby="region-change-note"
+                value={plan.region}
+                disabled={busy}
+                onChange={(event) => void onUpdate({ region: event.target.value })}
+                className="min-h-9 w-full appearance-none bg-transparent pr-7 text-sm font-semibold text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {!selectedRegionIsKnown && <option value={plan.region}>{plan.region}</option>}
+                {regionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-0 top-2 text-foreground-muted"
+                size={16}
+                aria-hidden="true"
+              />
+            </span>
+            <span
+              id="region-change-note"
+              className="mt-1 block text-[11px] leading-4 text-foreground-muted"
+            >
+              A change creates a new revision and requires approval again.
+            </span>
+          </label>
         </div>
       </section>
 
-      <section aria-labelledby="plan-summary-heading" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <h2 id="plan-summary-heading" className="sr-only">Plan summary</h2>
-        {costBreakdown.length > 0 ? <button type="button" onClick={() => setShowCostBreakdown((visible) => !visible)} aria-expanded={showCostBreakdown} className="cursor-pointer text-left"><SummaryItem label="Monthly cost" value={monthlyCost == null ? "Awaiting validation" : `$${monthlyCost}/mo`} detail="View the connected-cost breakdown" highlight={showCostBreakdown} /></button> : <SummaryItem label="Monthly cost" value={monthlyCost == null ? "Awaiting validation" : `$${monthlyCost}/mo`} detail={plan.plan.cost.message} />}
-        <SummaryItem label="Deployment time" value={deployTime || "Awaiting validation"} detail={plan.plan.deployment_time.message} />
-        <SummaryItem label="Security score" value={scoreLabel(securityScore)} detail="Validated only after configuration and policy checks complete." />
-        <SummaryItem label="Performance score" value={scoreLabel(performanceScore)} detail="Requires runtime telemetry from a deployed application." />
-        <SummaryItem label="Reliability score" value={scoreLabel(reliabilityScore)} detail="Requires runtime telemetry and health validation." />
+      <section aria-labelledby="evidence-heading">
+        <h2 id="evidence-heading" className="sr-only">
+          Recorded plan evidence
+        </h2>
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <EvidenceItem label="Cloud target" value={plan.plan.cloud || "Azure"} />
+          <EvidenceItem label="Framework" value={evidence.framework || "Not detected"} />
+          <EvidenceItem label="Runtime" value={evidence.runtime || "Not detected"} />
+          <EvidenceItem
+            label="Package manager"
+            value={evidence.package_manager || "Not detected"}
+          />
+        </dl>
       </section>
 
-      {showCostBreakdown && costBreakdown.length > 0 && (
-        <section className="ops-card rounded-2xl p-5 border border-primary/20 bg-primary/[0.02]">
-          <h3 className="text-sm font-semibold text-foreground mb-3">Cost Breakdown</h3>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {costBreakdown.map((item, idx) => (
-              <div key={idx} className="bg-card p-3 rounded-xl border border-border/60">
-                <p className="text-xs text-foreground-muted">{item.component}</p>
-                <p className="text-sm font-bold text-foreground mt-1">${item.cost_monthly}/mo</p>
-                <p className="text-[10px] text-foreground-muted mt-1">{item.tier}</p>
-              </div>
-            ))}
+      <aside
+        aria-label="Validation boundaries"
+        className="rounded-xl border border-warning/25 bg-warning/10 p-4"
+      >
+        <div className="flex items-start gap-3">
+          <CircleAlert
+            size={18}
+            className="mt-0.5 shrink-0 text-warning"
+            aria-hidden="true"
+          />
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              Cost and runtime outcomes are not estimated here
+            </p>
+            <p className="mt-1 text-xs leading-5 text-foreground-muted">
+              Subscription-specific pricing, deployment duration, performance, and reliability
+              require Azure-side validation or runtime telemetry. No synthetic scores or costs are
+              shown.
+            </p>
           </div>
-        </section>
-      )}
+        </div>
+      </aside>
 
       <section aria-labelledby="resources-heading">
         <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs font-semibold text-primary">Recommended services</p>
-            <h2 id="resources-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">Architecture decisions</h2>
+            <p className="text-xs font-semibold text-primary">Proposed resources</p>
+            <h2
+              id="resources-heading"
+              className="mt-1 text-lg font-semibold tracking-tight text-foreground"
+            >
+              Architecture decisions
+            </h2>
           </div>
-          <p className="max-w-xl text-xs leading-5 text-foreground-muted">Each recommendation is linked to codebase evidence. Deployment remains subject to preflight and Azure validation.</p>
+          <p className="max-w-xl text-xs leading-5 text-foreground-muted">
+            The reason under each resource comes from the saved plan. Azure availability and
+            permissions are validated later by the deployment workflow.
+          </p>
         </div>
 
         <div className="ops-card overflow-hidden rounded-2xl">
           {plan.plan.components.map((component) => {
             const Icon = iconFor(component);
             const isEditing = editing === component.id;
-            const explanation = plan.ai_explanations?.[component.id] || "No custom decision logs found.";
-            const isExplained = explainedComponent === component.id;
-            
+            const serviceChanged = selectedService !== component.service;
+            const tierChanged = tier.trim() !== (component.tier || "");
+            const hasChanges = serviceChanged || tierChanged;
+
             return (
-              <article key={component.id} className="border-b border-border p-4 last:border-b-0 sm:p-5">
+              <article
+                key={component.id}
+                className="border-b border-border p-4 last:border-b-0 sm:p-5"
+              >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 gap-3">
-                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Icon size={18} /></div>
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                      <Icon size={18} aria-hidden="true" />
+                    </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <h3 className="text-sm font-semibold text-foreground">{component.service}</h3>
-                        {component.recommended && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Recommended</span>}
-                        {!component.deployable && <span className="rounded-full bg-background-secondary px-2 py-0.5 text-[10px] font-medium text-foreground-muted">Setup needed</span>}
+                        <h3 className="text-sm font-semibold text-foreground">
+                          {component.service}
+                        </h3>
+                        {component.recommended && (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            Proposed
+                          </span>
+                        )}
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            component.deployable
+                              ? "bg-success/10 text-success"
+                              : "bg-background-secondary text-foreground-muted"
+                          }`}
+                        >
+                          {component.deployable
+                            ? "Supported by current engine"
+                            : "Not deployable here"}
+                        </span>
                       </div>
-                      <p className="mt-1 text-xs font-medium text-primary">{component.category}{component.tier ? ` · ${component.tier}` : ""}</p>
-                      <p className="mt-2 max-w-3xl text-xs leading-5 text-foreground-muted">{component.reason}</p>
-                      
-                      {isExplained && (
-                        <div className="mt-3 p-3 rounded-xl bg-primary/[0.03] border border-primary/20 text-xs text-foreground-muted leading-5">
-                          <strong>Architect Reasoning:</strong> {explanation}
-                        </div>
-                      )}
+                      <p className="mt-1 text-xs font-medium text-primary">
+                        {component.category}
+                        {component.tier ? ` · ${component.tier}` : ""}
+                      </p>
+                      <p className="mt-2 max-w-3xl text-xs leading-5 text-foreground-muted">
+                        {component.reason}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  {!isEditing && (
                     <button
                       type="button"
-                      onClick={() => setExplainedComponent(isExplained ? null : component.id)}
-                      className="ops-secondary px-3 py-1.5 text-xs text-primary bg-primary/5 hover:bg-primary/10 border-none rounded-lg"
+                      disabled={busy}
+                      onClick={() => beginEdit(component)}
+                      className="ops-secondary min-h-11 shrink-0 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Why?
+                      <Pencil size={14} aria-hidden="true" /> Modify
                     </button>
-                    {!isEditing && <button type="button" disabled={busy} onClick={() => beginEdit(component)} className="ops-secondary px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"><Pencil size={14} /> Modify</button>}
-                  </div>
+                  )}
                 </div>
 
-                {isEditing && <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-                  {component.available_services.length > 0 && <label className="block"><span className="mb-1 block text-xs font-medium text-foreground-muted">Service</span><select value={selectedService} onChange={(event) => setSelectedService(event.target.value)} className="min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"><option value={component.service}>{component.service}</option>{component.available_services.filter((service) => service !== component.service).map((service) => <option key={service} value={service}>{service}</option>)}</select></label>}
-                  <label className="block"><span className="mb-1 block text-xs font-medium text-foreground-muted">Pricing tier</span><input value={tier} onChange={(event) => setTier(event.target.value)} className="min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary" /></label>
-                  <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => void saveComponent(component)} className="ops-primary flex-1 px-3 text-xs disabled:opacity-60">Save</button><button type="button" disabled={busy} onClick={() => setEditing(null)} className="ops-secondary px-3 text-xs disabled:opacity-60">Cancel</button></div>
-                </div>}
+                {isEditing && (
+                  <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-foreground-muted">
+                        Service
+                      </span>
+                      <select
+                        value={selectedService}
+                        disabled={busy || component.available_services.length === 0}
+                        onChange={(event) => setSelectedService(event.target.value)}
+                        className="min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value={component.service}>{component.service}</option>
+                        {component.available_services
+                          .filter((service) => service !== component.service)
+                          .map((service) => (
+                            <option key={service} value={service}>
+                              {service}
+                            </option>
+                          ))}
+                      </select>
+                      {component.available_services.length === 0 && (
+                        <span className="mt-1 block text-[11px] leading-4 text-foreground-muted">
+                          No alternative service is configured for this resource.
+                        </span>
+                      )}
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-foreground-muted">
+                        Proposed tier
+                      </span>
+                      <input
+                        value={tier}
+                        disabled={busy}
+                        onChange={(event) => setTier(event.target.value)}
+                        className="min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <span className="mt-1 block text-[11px] leading-4 text-foreground-muted">
+                        Availability and pricing are validated against Azure later.
+                      </span>
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || !hasChanges || !tier.trim()}
+                        onClick={() => void saveComponent(component)}
+                        className="ops-primary min-h-11 flex-1 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setEditing(null)}
+                        className="ops-secondary min-h-11 px-3 text-xs disabled:opacity-60"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </article>
             );
           })}
         </div>
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+      <section className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
         <article className="ops-card rounded-2xl p-5">
-          <div className="flex items-center gap-2"><BadgeCheck size={18} className="text-primary" /><h2 className="text-base font-semibold text-foreground">What happens next</h2></div>
-          <ol className="mt-5 space-y-3">
-            {deploymentSteps.map((step, index) => {
-              const complete = index === 0 || (index === 1 && plan.status === "approved");
-              return <li key={step} className="flex items-center gap-3"><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${complete ? "bg-primary text-white" : "bg-background-secondary text-foreground-muted"}`}>{complete ? <CheckCircle2 size={14} /> : index + 1}</span><span className={`text-xs ${complete ? "font-medium text-foreground" : "text-foreground-muted"}`}>{step}</span>{index < deploymentSteps.length - 1 && <ArrowRight size={13} className="ml-auto text-foreground-muted/55" />}</li>;
-            })}
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={18} className="text-primary" aria-hidden="true" />
+            <h2 className="text-base font-semibold text-foreground">Execution boundary</h2>
+          </div>
+          <ol className="mt-5 space-y-4 text-xs leading-5 text-foreground-muted">
+            <WorkflowStep
+              number={1}
+              title="Review this revision"
+              detail="Confirm the proposed service, region, tier text, and recorded source findings."
+            />
+            <WorkflowStep
+              number={2}
+              title="Approve explicitly"
+              detail="Approval applies only to this revision. Any edit returns the plan to draft."
+            />
+            <WorkflowStep
+              number={3}
+              title="Start the deployment"
+              detail="The deployment endpoint reruns prerequisites before it can create or update resources."
+            />
+            <WorkflowStep
+              number={4}
+              title="Inspect the recorded outcome"
+              detail="Use persisted deployment logs and the verified release URL to determine what actually happened."
+            />
           </ol>
         </article>
 
         <article className="ops-card rounded-2xl p-5">
-          <div className="flex items-center gap-2"><CircleAlert size={18} className="text-warning" /><h2 className="text-base font-semibold text-foreground">Review and approval</h2></div>
-          <p className="mt-3 text-xs leading-5 text-foreground-muted">{plan.plan.assessment.readiness_message}</p>
-          {sourceFindings.length > 0 && <details className="mt-4 rounded-xl border border-warning/20 bg-warning/10 p-3"><summary className="cursor-pointer text-xs font-semibold text-foreground">{sourceFindings.length} source finding{sourceFindings.length === 1 ? "" : "s"} to review</summary><ul className="mt-3 space-y-2 text-xs leading-5 text-foreground-muted">{sourceFindings.map((finding) => <li key={finding} className="flex gap-2"><span aria-hidden="true">•</span><span>{finding}</span></li>)}</ul></details>}
-          {plan.status !== "approved" ? <div className="mt-5"><label className="block"><span className="mb-1.5 block text-xs font-medium text-foreground">Approval note <span className="font-normal text-foreground-muted">(optional)</span></span><textarea value={approvalNote} onChange={(event) => setApprovalNote(event.target.value)} maxLength={500} placeholder="Add any deployment constraints." className="min-h-24 w-full rounded-xl border border-border bg-background p-3 text-sm leading-5 text-foreground outline-none placeholder:text-foreground-muted focus:border-primary" /></label>{!canApprove && <p className="mt-2 text-xs leading-5 text-warning">Select Azure App Service before this workspace can approve the plan.</p>}<div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between"><button type="button" disabled={busy} onClick={() => void onRegenerate()} className="min-h-11 px-2 text-left text-xs font-semibold text-primary disabled:opacity-50">Regenerate from analysis</button><button type="button" disabled={busy || !canApprove} onClick={() => void onApprove(approvalNote)} className="ops-primary px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 size={16} /> Approve plan</button></div></div> : <div className="mt-5 rounded-xl border border-success/25 bg-success/10 p-4"><div className="flex items-center gap-2 text-success"><CheckCircle2 size={17} /><p className="text-sm font-semibold">Plan approved</p></div><p className="mt-1.5 text-xs leading-5 text-foreground-muted">Deployment will use revision {plan.revision}. Editing it creates a new plan for your approval.</p></div>}
+          <div className="flex items-center gap-2">
+            <BadgeCheck size={18} className="text-primary" aria-hidden="true" />
+            <h2 className="text-base font-semibold text-foreground">Review and approval</h2>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-foreground-muted">
+            This workspace currently executes Azure App Service application plans. Other services
+            can be recorded for review but are not deployable by the current engine.
+          </p>
+
+          {(sourceFindings.length > 0 || unresolvedQuestions.length > 0) && (
+            <details className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-3">
+              <summary className="flex min-h-11 cursor-pointer items-center text-xs font-semibold text-foreground">
+                Review recorded analysis notes
+              </summary>
+              <div className="mt-3 space-y-4">
+                {sourceFindings.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">
+                      Automated source findings
+                    </p>
+                    <ul className="mt-2 list-disc space-y-2 pl-5 text-xs leading-5 text-foreground-muted">
+                      {sourceFindings.map((finding) => (
+                        <li key={finding}>{finding}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {unresolvedQuestions.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Open questions</p>
+                    <ul className="mt-2 list-disc space-y-2 pl-5 text-xs leading-5 text-foreground-muted">
+                      {unresolvedQuestions.map((question) => (
+                        <li key={question}>{question}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-[11px] leading-4 text-foreground-muted">
+                  Automated findings require human verification before a production release.
+                </p>
+              </div>
+            </details>
+          )}
+
+          {plan.status === "draft" ? (
+            <div className="mt-5">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground">
+                  Approval note{" "}
+                  <span className="font-normal text-foreground-muted">(optional)</span>
+                </span>
+                <textarea
+                  value={approvalNote}
+                  onChange={(event) => setApprovalNote(event.target.value)}
+                  maxLength={500}
+                  placeholder="Record constraints or review context for this revision."
+                  className="min-h-24 w-full rounded-xl border border-border bg-background p-3 text-sm leading-5 text-foreground outline-none placeholder:text-foreground-muted focus:border-primary focus:ring-2 focus:ring-primary/15"
+                />
+                <span className="mt-1 block text-right text-[11px] text-foreground-muted">
+                  {approvalNote.length}/500
+                </span>
+              </label>
+
+              {!canApprove && (
+                <p className="mt-2 text-xs leading-5 text-warning">
+                  Select Azure App Service for the application before approving this plan.
+                </p>
+              )}
+
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                {confirmRegenerate ? (
+                  <div
+                    role="group"
+                    aria-label="Confirm plan regeneration"
+                    className="rounded-xl border border-warning/25 bg-warning/10 p-3"
+                  >
+                    <p className="max-w-sm text-xs leading-5 text-foreground">
+                      Regenerating replaces manual edits with a new proposal from the latest saved
+                      analysis.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void regenerate()}
+                        className="ops-secondary min-h-11 px-3 text-xs disabled:opacity-50"
+                      >
+                        <RotateCcw size={14} aria-hidden="true" />
+                        Confirm regenerate
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setConfirmRegenerate(false)}
+                        className="min-h-11 px-3 text-xs font-semibold text-foreground-muted hover:text-foreground disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmRegenerate(true)}
+                    className="min-h-11 w-fit px-1 text-left text-xs font-semibold text-primary disabled:opacity-50"
+                  >
+                    Regenerate from saved analysis
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={busy || !canApprove}
+                  onClick={() => void onApprove(approvalNote)}
+                  className="ops-primary min-h-11 shrink-0 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                  )}
+                  Approve revision {plan.revision}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-xl border border-success/25 bg-success/10 p-4">
+              <div className="flex items-center gap-2 text-success">
+                <CheckCircle2 size={17} aria-hidden="true" />
+                <p className="text-sm font-semibold">
+                  {plan.status === "approved"
+                    ? "This revision is approved"
+                    : "This revision has entered the deployment workflow"}
+                </p>
+              </div>
+              <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
+                {plan.approval_note
+                  ? `Recorded note: ${plan.approval_note}`
+                  : `Approval is recorded for revision ${plan.revision}.`}
+              </p>
+            </div>
+          )}
         </article>
       </section>
     </div>
   );
 }
 
-function StatusBadge({ approved }: { approved: boolean }) {
-  return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${approved ? "border-success/25 bg-success/10 text-success" : "border-primary/20 bg-primary/10 text-primary"}`}>{approved ? <CheckCircle2 size={13} /> : <Pencil size={13} />}{approved ? "Approved" : "Review needed"}</span>;
+function StatusBadge({ status }: { status: InfrastructurePlanModel["status"] }) {
+  const styles = {
+    draft: "border-primary/20 bg-primary/10 text-primary",
+    approved: "border-success/25 bg-success/10 text-success",
+    provisioning: "border-warning/25 bg-warning/10 text-warning",
+    deployed: "border-success/25 bg-success/10 text-success",
+  } as const;
+  const labels = {
+    draft: "Review required",
+    approved: "Approved",
+    provisioning: "Deployment in progress",
+    deployed: "Deployed",
+  } as const;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${styles[status]}`}
+    >
+      {status === "draft" ? (
+        <Pencil size={13} aria-hidden="true" />
+      ) : (
+        <CheckCircle2 size={13} aria-hidden="true" />
+      )}
+      {labels[status]}
+    </span>
+  );
 }
 
-function SummaryItem({ label, value, detail, highlight = false }: { label: string; value: string; detail: string; highlight?: boolean }) {
-  return <article className={`rounded-xl border px-4 py-3.5 transition ${highlight ? "border-primary/60 bg-primary/[0.04]" : "border-border bg-card"}`}><p className="text-xs font-medium text-foreground-muted">{label}</p><p className="mt-1.5 text-sm font-semibold text-foreground">{value}</p><p className="mt-1.5 text-xs leading-4 text-foreground-muted">{detail}</p></article>;
+function EvidenceItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3.5">
+      <dt className="text-xs font-medium text-foreground-muted">{label}</dt>
+      <dd className="mt-1.5 break-words text-sm font-semibold text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function WorkflowStep({
+  number,
+  title,
+  detail,
+}: {
+  number: number;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <li className="flex gap-3">
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+        {number}
+      </span>
+      <div>
+        <p className="font-semibold text-foreground">{title}</p>
+        <p className="mt-0.5">{detail}</p>
+      </div>
+    </li>
+  );
 }

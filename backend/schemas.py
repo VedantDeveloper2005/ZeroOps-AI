@@ -290,7 +290,7 @@ class ProjectResponse(BaseModel):
 class DeploymentCreate(BaseModel):
     project_id: uuid.UUID
     branch: str = "main"
-    environment: str = "production"
+    environment: Literal["production"] = "production"
     target_provider: str = "auto"
 
 class DeploymentResponse(BaseModel):
@@ -527,7 +527,7 @@ class FailureAnalysisResponse(BaseModel):
     severity: str
     recommended_fix: str
     step_by_step_resolution: List[str] = []
-    confidence: Optional[int] = 95
+    confidence: Optional[int] = 0
     impact: Optional[str] = None
     created_at: Optional[str] = None
 
@@ -554,10 +554,10 @@ class DashboardStats(BaseModel):
 # ──────────────────────────────────────────────
 
 class UserSettingsResponse(BaseModel):
-    predictive_scaling: bool = True
-    auto_rollback: bool = True
-    ai_threat_mitigation: bool = True
-    auto_oom_restart: bool = True
+    predictive_scaling: bool = False
+    auto_rollback: bool = False
+    ai_threat_mitigation: bool = False
+    auto_oom_restart: bool = False
     slack_notifications: bool = False
     email_alerts: bool = True
     theme: str = "dark"

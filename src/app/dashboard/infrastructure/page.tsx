@@ -1,31 +1,79 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, FolderGit2, Loader2, Rocket, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  FolderGit2,
+  Loader2,
+  MessageSquareText,
+  Rocket,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import { DecisionIntelligencePanel } from "@/components/dashboard/DecisionIntelligencePanel";
 import { InfrastructurePlan as InfrastructurePlanView } from "@/components/dashboard/InfrastructurePlan";
-import { api, getErrorMessage, type DecisionAccuracy, type DigitalTwinSimulation, type InfrastructurePlan, type InfrastructurePlanUpdate, type KnowledgeGraph } from "@/lib/api";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
+import { PageHeader } from "@/components/ui/PageHeader";
+import {
+  api,
+  getErrorMessage,
+  type DigitalTwinSimulation,
+  type InfrastructurePlan,
+  type InfrastructurePlanUpdate,
+} from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
+type PlanAction = "generate" | "update" | "approve" | "deploy" | null;
+
 export default function InfrastructurePage() {
-  return <Suspense fallback={<InfrastructurePlanLoading />}><InfrastructureWorkspace /></Suspense>;
+  return (
+    <Suspense fallback={<InfrastructurePlanLoading />}>
+      <InfrastructureWorkspace />
+    </Suspense>
+  );
 }
 
 function InfrastructureWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { projects, isLoading: projectsLoading, addToast, refreshProjects, refreshStats } = useNotifications();
+  const {
+    projects,
+    isLoading: projectsLoading,
+    addToast,
+    refreshProjects,
+    refreshStats,
+  } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [plan, setPlan] = useState<InfrastructurePlan | null>(null);
+  const [preflight, setPreflight] = useState<DigitalTwinSimulation | null>(null);
   const [loadingPlan, setLoadingPlan] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [intelligenceBusy, setIntelligenceBusy] = useState(false);
+  const [planAction, setPlanAction] = useState<PlanAction>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
   const [planMissing, setPlanMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
-  const [simulation, setSimulation] = useState<DigitalTwinSimulation | null>(null);
-  const [accuracy, setAccuracy] = useState<DecisionAccuracy | null>(null);
+  const requestId = useRef(0);
+  const planContext = useRef<{ projectId: string; revision: number | null }>({
+    projectId: "",
+    revision: null,
+  });
+
+  useEffect(() => {
+    planContext.current = {
+      projectId: selectedProjectId,
+      revision: plan?.revision ?? null,
+    };
+  }, [plan?.revision, selectedProjectId]);
 
   useEffect(() => {
     const requestedProject = searchParams.get("project");
@@ -33,250 +81,495 @@ function InfrastructureWorkspace() {
       setSelectedProjectId(requestedProject);
       return;
     }
-    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
+    if (!selectedProjectId && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
+    }
   }, [projects, searchParams, selectedProjectId]);
-
-  const loadIntelligence = useCallback(async (projectId: string) => {
-    if (!projectId) return;
-    const [graphResult, simulationResult, accuracyResult] = await Promise.allSettled([
-      api.getKnowledgeGraph(projectId),
-      api.getLatestDigitalTwin(projectId),
-      api.getDecisionAccuracy(projectId),
-    ]);
-    setGraph(graphResult.status === "fulfilled" ? graphResult.value : null);
-    setSimulation(simulationResult.status === "fulfilled" ? simulationResult.value : null);
-    setAccuracy(accuracyResult.status === "fulfilled" ? accuracyResult.value : null);
-  }, []);
 
   const loadPlan = useCallback(async (projectId: string) => {
     if (!projectId) return;
+    const currentRequest = ++requestId.current;
     setLoadingPlan(true);
     setError(null);
-    setGraph(null);
-    setSimulation(null);
-    setAccuracy(null);
+    setPlan(null);
+    setPreflight(null);
+    setPlanMissing(false);
+
     try {
       const nextPlan = await api.getInfrastructurePlan(projectId);
+      if (currentRequest !== requestId.current) return;
       setPlan(nextPlan);
-      setPlanMissing(false);
-      await loadIntelligence(projectId);
+
+      try {
+        const latestPreflight = await api.getLatestDigitalTwin(projectId);
+        if (currentRequest === requestId.current) {
+          setPreflight(latestPreflight);
+        }
+      } catch {
+        // A plan can legitimately have no preflight result for its current revision.
+      }
     } catch (err) {
-      setPlan(null);
+      if (currentRequest !== requestId.current) return;
       if (err instanceof Error && err.message.includes("No infrastructure plan")) {
         setPlanMissing(true);
       } else {
-        setPlanMissing(false);
-        setError(getErrorMessage(err, "We couldn't load this architecture plan."));
+        setError(getErrorMessage(err, "We couldn't load this infrastructure plan."));
       }
     } finally {
-      setLoadingPlan(false);
+      if (currentRequest === requestId.current) {
+        setLoadingPlan(false);
+      }
     }
-  }, [loadIntelligence]);
+  }, []);
 
   useEffect(() => {
     void loadPlan(selectedProjectId);
   }, [loadPlan, selectedProjectId]);
 
   const generatePlan = async () => {
-    if (!selectedProjectId) return;
-    setBusy(true);
+    if (!selectedProjectId) return false;
+    setPlanAction("generate");
     setError(null);
     try {
       const nextPlan = await api.generateInfrastructurePlan(selectedProjectId);
       setPlan(nextPlan);
       setPlanMissing(false);
-      await loadIntelligence(selectedProjectId);
-      addToast("Architecture plan generated from the latest repository analysis.", "success");
+      setPreflight(null);
+      addToast("A new plan revision was generated from the latest saved analysis.", "success");
+      return true;
     } catch (err) {
       setError(getErrorMessage(err, "We couldn't generate an infrastructure plan."));
+      return false;
     } finally {
-      setBusy(false);
+      setPlanAction(null);
     }
   };
 
   const updatePlan = async (update: InfrastructurePlanUpdate) => {
-    if (!selectedProjectId) return;
-    setBusy(true);
+    if (!selectedProjectId) return false;
+    setPlanAction("update");
     setError(null);
     try {
       const nextPlan = await api.updateInfrastructurePlan(selectedProjectId, update);
       setPlan(nextPlan);
-      await loadIntelligence(selectedProjectId);
-      addToast("Architecture plan updated. Review it again before deployment.", "success");
+      setPreflight(null);
+      addToast("Plan updated. The new revision requires review and approval.", "success");
+      return true;
     } catch (err) {
-      setError(getErrorMessage(err, "We couldn't update that architecture setting."));
+      setError(getErrorMessage(err, "We couldn't update that plan setting."));
+      return false;
     } finally {
-      setBusy(false);
+      setPlanAction(null);
     }
   };
 
   const approvePlan = async (note?: string) => {
-    if (!selectedProjectId) return;
-    setBusy(true);
+    if (!selectedProjectId) return false;
+    setPlanAction("approve");
     setError(null);
     try {
       const nextPlan = await api.approveInfrastructurePlan(selectedProjectId, note);
       setPlan(nextPlan);
-      await loadIntelligence(selectedProjectId);
-      addToast("Architecture plan approved. You can now start the deployment workflow.", "success");
+      try {
+        setPreflight(await api.getLatestDigitalTwin(selectedProjectId));
+      } catch {
+        setPreflight(null);
+      }
+      addToast(
+        "Plan approved. Deployment prerequisites and runtime validation still apply.",
+        "success",
+      );
+      return true;
     } catch (err) {
       setError(getErrorMessage(err, "We couldn't approve this plan."));
+      return false;
     } finally {
-      setBusy(false);
+      setPlanAction(null);
     }
   };
 
-  const runSimulation = async () => {
+  const runPreflight = async () => {
     if (!selectedProjectId) return;
-    setIntelligenceBusy(true);
+    const checkedProjectId = selectedProjectId;
+    const checkedRevision = plan?.revision ?? null;
+    setPreflightBusy(true);
     setError(null);
     try {
-      const nextSimulation = await api.simulateDigitalTwin(selectedProjectId);
-      setSimulation(nextSimulation);
-      const [nextGraph, nextAccuracy] = await Promise.allSettled([
-        api.getKnowledgeGraph(selectedProjectId),
-        api.getDecisionAccuracy(selectedProjectId),
-      ]);
-      if (nextGraph.status === "fulfilled") setGraph(nextGraph.value);
-      if (nextAccuracy.status === "fulfilled") setAccuracy(nextAccuracy.value);
+      const result = await api.simulateDigitalTwin(selectedProjectId);
+      if (
+        planContext.current.projectId !== checkedProjectId ||
+        planContext.current.revision !== checkedRevision
+      ) {
+        addToast(
+          "The plan changed while checks were running. Run them again for the current revision.",
+          "warning",
+        );
+        return;
+      }
+      setPreflight(result);
       addToast(
-        nextSimulation.status === "blocked"
-          ? "Preflight found blocking checks. No infrastructure change was made."
-          : "Digital-twin preflight completed.",
-        nextSimulation.status === "blocked" ? "warning" : "success",
+        result.status === "blocked"
+          ? "Policy checks found blockers. No Azure resources were changed."
+          : "Policy checks completed. No Azure resources were changed.",
+        result.status === "blocked" ? "warning" : "success",
       );
     } catch (err) {
-      setError(getErrorMessage(err, "We couldn't run the digital-twin preflight."));
+      setError(getErrorMessage(err, "We couldn't run the policy checks."));
     } finally {
-      setIntelligenceBusy(false);
+      setPreflightBusy(false);
     }
   };
 
   const startDeployment = async () => {
     const project = projects.find((item) => item.id === selectedProjectId);
     if (!project) return;
-    setBusy(true);
+    setPlanAction("deploy");
     setError(null);
     try {
-      const result = await api.startDeployment({ project_id: project.id, branch: project.branch, environment: "production" });
+      const result = await api.startDeployment({
+        project_id: project.id,
+        branch: project.branch,
+        environment: "production",
+      });
       await Promise.all([refreshProjects(), refreshStats()]);
       addToast("Deployment workflow started.", "success");
-      router.push(`/dashboard/deployments?id=${result.deployment_id}&repo=${encodeURIComponent(project.full_name)}`);
+      router.push(
+        `/dashboard/deployments?id=${result.deployment_id}&repo=${encodeURIComponent(project.full_name)}`,
+      );
     } catch (err) {
       setError(getErrorMessage(err, "We couldn't start this deployment."));
     } finally {
-      setBusy(false);
+      setPlanAction(null);
     }
   };
 
+  const selectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    const nextSearchParams = new URLSearchParams(searchParams.toString());
+    nextSearchParams.set("project", projectId);
+    router.replace(`/dashboard/architect?${nextSearchParams.toString()}`, { scroll: false });
+  };
+
   if (projectsLoading) {
-    return <div className="flex min-h-[50vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"><Loader2 className="animate-spin text-primary" size={18} /> Loading applications…</div>;
+    return <InfrastructurePlanLoading />;
   }
 
   if (projects.length === 0) {
-    return <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border border-dashed border-border bg-card/60 px-6 py-16 text-center"><FolderGit2 size={38} className="text-primary" /><h1 className="mt-5 text-xl font-bold text-foreground">Start with a repository</h1><p className="mt-2 text-sm leading-6 text-foreground-muted">Connect GitHub or upload a ZIP so ZeroOps can analyze your application and propose an architecture from real source evidence.</p><button onClick={() => router.push("/dashboard/repositories")} className="ops-primary mt-6 px-5"><ArrowRight size={16} /> Connect application</button></div>;
+    return (
+      <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border border-dashed border-border bg-card px-6 py-16 text-center">
+        <FolderGit2 size={38} className="text-primary" aria-hidden="true" />
+        <h1 className="mt-5 text-xl font-bold text-foreground">Start with a repository</h1>
+        <p className="mt-2 text-sm leading-6 text-foreground-muted">
+          Connect GitHub or upload a ZIP so ZeroOps can record source evidence before proposing an
+          infrastructure plan.
+        </p>
+        <Link href="/dashboard/repositories" className="ops-primary mt-6 min-h-11 px-5">
+          Connect application <ArrowRight size={16} aria-hidden="true" />
+        </Link>
+      </div>
+    );
   }
 
-  return <div className="space-y-7">
-    <div className="mx-auto flex max-w-7xl flex-col gap-3 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
-      <div><p className="text-xs font-semibold text-primary">Architecture workspace</p><p className="mt-1 text-sm text-foreground-muted">Choose the application you want to review.</p></div>
-      <label className="block sm:w-80"><span className="mb-1.5 block text-xs font-medium text-foreground-muted">Application</span><select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm font-semibold text-foreground outline-none focus:border-primary">
-        {projects.map((project) => <option key={project.id} value={project.id}>{project.full_name}</option>)}
-      </select></label>
-    </div>
+  const busy = planAction !== null;
 
-    {error && <div role="alert" className="mx-auto max-w-7xl rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-foreground">{error}</div>}
+  return (
+    <div className="mx-auto max-w-7xl space-y-6">
+      <PageHeader
+        eyebrow="AI Architect"
+        title="Review an Azure deployment plan"
+        description="Generate a saved proposal from repository analysis, edit its supported settings, approve one revision, and then start the existing deployment workflow."
+        actions={
+          <fieldset
+            disabled={busy || preflightBusy}
+            className="w-full disabled:cursor-not-allowed disabled:opacity-60 sm:w-80"
+          >
+            <ProjectSelector
+              projects={projects}
+              value={selectedProjectId}
+              onChange={selectProject}
+              label="Application"
+              className="w-full"
+            />
+          </fieldset>
+        }
+      />
 
-    {loadingPlan ? <div className="flex min-h-[45vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"><Loader2 className="animate-spin text-primary" size={18} /> Loading architecture decisions…</div> : plan ? <>
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px] mx-auto max-w-7xl">
-        <div className="space-y-6">
-          <InfrastructurePlanView plan={plan} onUpdate={updatePlan} onApprove={approvePlan} onRegenerate={generatePlan} busy={busy} />
-          <DecisionIntelligencePanel graph={graph} simulation={simulation} accuracy={accuracy} loading={busy || intelligenceBusy} onRunSimulation={runSimulation} />
+      {selectedProjectId && <ProjectTabs projectId={selectedProjectId} />}
+
+      {error && (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p>{error}</p>
+          <button
+            type="button"
+            disabled={loadingPlan || busy || preflightBusy}
+            onClick={() => void loadPlan(selectedProjectId)}
+            className="min-h-11 shrink-0 self-start px-2 text-sm font-semibold text-danger disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto"
+          >
+            Reload plan
+          </button>
         </div>
-        <div className="relative">
-          <div className="sticky top-6">
-            <ArchitectChatPanel projectId={selectedProjectId} onPlanUpdated={(newPlan) => setPlan(newPlan)} />
+      )}
+
+      {loadingPlan ? (
+        <InfrastructurePlanLoading label="Loading saved plan…" />
+      ) : plan ? (
+        <>
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="min-w-0 space-y-6">
+              <InfrastructurePlanView
+                plan={plan}
+                onUpdate={updatePlan}
+                onApprove={approvePlan}
+                onRegenerate={generatePlan}
+                busy={busy || preflightBusy}
+              />
+              <DecisionIntelligencePanel
+                preflight={preflight}
+                loading={preflightBusy}
+                onRunPreflight={runPreflight}
+              />
+            </div>
+            <div className="min-w-0 xl:relative">
+              <div className="xl:sticky xl:top-24">
+                <ArchitectChatPanel
+                  projectId={selectedProjectId}
+                  onPlanUpdated={(nextPlan) => {
+                    setPlan(nextPlan);
+                    setPreflight(null);
+                    addToast(
+                      "Architect chat created a new draft revision. Review it before approval.",
+                      "success",
+                    );
+                  }}
+                />
+              </div>
+            </div>
           </div>
+
+          {plan.status === "approved" && (
+            <div className="flex flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <CheckCircle2 size={16} className="text-success" aria-hidden="true" />
+                  Revision {plan.revision} is approved
+                </p>
+                <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                  Starting deployment reruns prerequisites. Provisioning and the runtime health
+                  check can still fail and will be recorded in deployment logs.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy || preflightBusy}
+                onClick={() => void startDeployment()}
+                className="ops-primary min-h-11 shrink-0 px-5 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {planAction === "deploy" ? (
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Rocket size={16} aria-hidden="true" />
+                )}
+                {planAction === "deploy" ? "Starting deployment" : "Start deployment"}
+              </button>
+            </div>
+          )}
+        </>
+      ) : planMissing ? (
+        <div className="mx-auto max-w-2xl rounded-3xl border border-border bg-card p-8 text-center shadow-sm">
+          <Sparkles size={30} className="mx-auto text-primary" aria-hidden="true" />
+          <h2 className="mt-4 text-xl font-bold text-foreground">
+            Generate a plan from saved analysis
+          </h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-foreground-muted">
+            The proposal uses recorded framework, runtime, dependency, and configuration-key
+            evidence. It does not infer live Azure state, pricing, or runtime readiness.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void generatePlan()}
+            className="ops-primary mt-6 min-h-11 px-5 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {planAction === "generate" ? (
+              <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Sparkles size={16} aria-hidden="true" />
+            )}
+            {planAction === "generate" ? "Generating plan" : "Generate plan"}
+          </button>
         </div>
-      </div>
-      {plan.status === "approved" && <div className="mx-auto flex max-w-7xl flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-foreground"><Sparkles size={16} className="text-success" /> Ready when you are</p><p className="mt-1 text-xs leading-5 text-foreground-muted">This approved plan will be checked again before the deployment workflow begins.</p></div><button disabled={busy} onClick={() => void startDeployment()} className="ops-primary shrink-0 px-5 disabled:opacity-60"><Rocket size={16} /> Start deployment</button></div>}
-    </> : planMissing ? <div className="mx-auto max-w-2xl rounded-3xl border border-border bg-card p-8 text-center shadow-sm"><Sparkles size={30} className="mx-auto text-primary" /><h1 className="mt-4 text-xl font-bold text-foreground">Create an AI infrastructure plan</h1><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-foreground-muted">We&apos;ll use the application&apos;s recorded analysis to recommend an Azure architecture. Implementation details and credentials stay protected in the deployment engine.</p><button disabled={busy} onClick={() => void generatePlan()} className="ops-primary mt-6 px-5 disabled:opacity-60"><Sparkles size={16} /> Generate plan</button></div> : null}
-  </div>;
+      ) : null}
+    </div>
+  );
 }
 
-function ArchitectChatPanel({ projectId, onPlanUpdated }: { projectId: string; onPlanUpdated: (plan: InfrastructurePlan) => void }) {
-  const [messages, setMessages] = useState<Array<{ sender: "user" | "architect"; text: string }>>([
-    { sender: "architect", text: "Hello! I am your Senior AI Cloud Architect. Ask me about this Azure spec, or request modifications like 'reduce cost' or 'add Redis'." }
-  ]);
+type ChatMessage = {
+  id: string;
+  sender: "user" | "architect" | "status";
+  text: string;
+};
+
+const initialChatMessage: ChatMessage = {
+  id: "architect-introduction",
+  sender: "architect",
+  text: "Ask about this saved proposal or request a supported plan change. A change creates a new draft revision; it never starts a deployment.",
+};
+
+function ArchitectChatPanel({
+  projectId,
+  onPlanUpdated,
+}: {
+  projectId: string;
+  onPlanUpdated: (plan: InfrastructurePlan) => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([initialChatMessage]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const messageCounter = useRef(0);
+  const activeProjectId = useRef(projectId);
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || busy) return;
-    
-    const userMsg = input.trim();
+  useEffect(() => {
+    activeProjectId.current = projectId;
+    setMessages([initialChatMessage]);
     setInput("");
-    setMessages(prev => [...prev, { sender: "user", text: userMsg }]);
+    setBusy(false);
+    messageCounter.current = 0;
+  }, [projectId]);
+
+  const nextMessageId = () => {
+    messageCounter.current += 1;
+    return `${projectId}-architect-message-${messageCounter.current}`;
+  };
+
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!input.trim() || busy) return;
+
+    const userMessage = input.trim();
+    setInput("");
+    setMessages((current) => [
+      ...current,
+      { id: nextMessageId(), sender: "user", text: userMessage },
+    ]);
     setBusy(true);
 
     try {
-      const response = await api.architectChat(userMsg, projectId);
-      setMessages(prev => [...prev, { sender: "architect", text: response.reply }]);
+      const response = await api.architectChat(userMessage, projectId);
+      if (activeProjectId.current !== projectId) return;
+      setMessages((current) => [
+        ...current,
+        { id: nextMessageId(), sender: "architect", text: response.reply },
+      ]);
       if (response.plan_updated && response.plan) {
         onPlanUpdated(response.plan);
       }
-    } catch {
-      setMessages(prev => [...prev, { sender: "architect", text: "I encountered an error trying to process that request. Please check my connectivity." }]);
+    } catch (err) {
+      if (activeProjectId.current !== projectId) return;
+      setMessages((current) => [
+        ...current,
+        {
+          id: nextMessageId(),
+          sender: "status",
+          text: `${getErrorMessage(err, "The architect request failed.")} Review the plan and try again.`,
+        },
+      ]);
     } finally {
-      setBusy(false);
+      if (activeProjectId.current === projectId) {
+        setBusy(false);
+      }
     }
   };
 
   return (
-    <div className="ops-card rounded-2xl p-5 h-[600px] flex flex-col border border-border bg-card">
-      <div className="flex items-center gap-2 border-b border-border pb-3 mb-3">
-        <Sparkles size={16} className="text-primary" />
-        <h3 className="font-semibold text-foreground text-sm">AI Cloud Architect</h3>
+    <section
+      aria-labelledby="architect-chat-heading"
+      className="ops-card flex h-[32rem] min-h-[28rem] flex-col rounded-2xl border border-border bg-card p-4 sm:p-5"
+    >
+      <div className="mb-3 border-b border-border pb-3">
+        <div className="flex items-center gap-2">
+          <MessageSquareText size={17} className="text-primary" aria-hidden="true" />
+          <h2 id="architect-chat-heading" className="text-sm font-semibold text-foreground">
+            Plan assistant
+          </h2>
+        </div>
+        <p id="architect-chat-note" className="mt-1.5 text-[11px] leading-4 text-foreground-muted">
+          Replies may be AI-generated. Verify explanations and review every plan change. This panel
+          does not provide a persisted chat history.
+        </p>
       </div>
-      
-      <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-2xl p-3 leading-5 ${msg.sender === "user" ? "bg-primary text-white" : "bg-background-secondary/60 text-foreground-muted"}`}>
-              {msg.text}
+
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label="Plan assistant conversation"
+        className="flex-1 space-y-3 overflow-y-auto pr-1 text-xs"
+      >
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[90%] rounded-2xl p-3 leading-5 ${
+                message.sender === "user"
+                  ? "bg-primary text-white"
+                  : message.sender === "status"
+                    ? "border border-danger/25 bg-danger/10 text-foreground"
+                    : "bg-background-secondary/60 text-foreground-muted"
+              }`}
+            >
+              {message.text}
             </div>
           </div>
         ))}
         {busy && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-2xl p-3 bg-background-secondary/60 text-foreground-muted flex items-center gap-1.5">
-              <Loader2 className="animate-spin text-primary" size={12} /> Thinking…
+            <div className="flex max-w-[90%] items-center gap-1.5 rounded-2xl bg-background-secondary/60 p-3 text-foreground-muted">
+              <Loader2 className="animate-spin text-primary" size={12} aria-hidden="true" />
+              Reviewing the saved plan…
             </div>
           </div>
         )}
       </div>
 
       <form onSubmit={sendMessage} className="mt-3 flex gap-2">
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="Ask or command architect..."
-          disabled={busy}
-          className="flex-1 min-h-10 px-3 bg-background border border-border rounded-xl text-xs outline-none focus:border-primary disabled:opacity-60"
-        />
+        <label className="min-w-0 flex-1">
+          <span className="sr-only">Ask the plan assistant</span>
+          <input
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Ask about this plan…"
+            disabled={busy}
+            aria-describedby="architect-chat-note"
+            className="min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-foreground-muted focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
         <button
           type="submit"
           disabled={busy || !input.trim()}
-          className="ops-primary min-h-10 px-4 rounded-xl text-xs font-semibold disabled:opacity-60"
+          aria-label="Send message"
+          className="ops-primary min-h-11 min-w-11 px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Send
+          <Send size={15} aria-hidden="true" />
+          <span className="hidden sm:inline">Send</span>
         </button>
       </form>
-    </div>
+    </section>
   );
 }
 
-function InfrastructurePlanLoading() {
-  return <div className="flex min-h-[50vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"><Loader2 className="animate-spin text-primary" size={18} /> Preparing architecture workspace…</div>;
+function InfrastructurePlanLoading({ label = "Preparing architecture workspace…" }: { label?: string }) {
+  return (
+    <div
+      role="status"
+      className="flex min-h-[50vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"
+    >
+      <Loader2 className="animate-spin text-primary" size={18} aria-hidden="true" />
+      {label}
+    </div>
+  );
 }

@@ -29,7 +29,7 @@ elif DATABASE_URL.startswith("postgres://"):
 # Configure SSL connection arguments for Azure or production PostgreSQL
 connect_args = {}
 if DATABASE_URL and config.DB_SSL_ENABLED:
-    ctx = ssl.create_default_context()
+    ctx = ssl.create_default_context(cafile=config.DB_SSL_ROOT_CERT or None)
     if not config.DB_SSL_VERIFY and not config.IS_PRODUCTION:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -169,6 +169,8 @@ async def init_db():
                 logger.error(f"Auto-creation of database 'zeroops' failed: {create_err}")
                 
         logger.error(f"PostgreSQL Database startup validation failed: {e}")
+        if config.IS_PRODUCTION:
+            raise RuntimeError("Production database initialization failed.") from e
         logger.warning("FastAPI backend starting without database-backed features.")
         database_available = False
         return False
@@ -241,7 +243,9 @@ async def run_migrations():
         "ALTER TABLE ai_analyses ALTER COLUMN project_id DROP NOT NULL",
 
         # Failure Analysis extra fields
-        "ALTER TABLE failure_analyses ADD COLUMN IF NOT EXISTS confidence INTEGER DEFAULT 95",
+        "ALTER TABLE failure_analyses ADD COLUMN IF NOT EXISTS confidence INTEGER DEFAULT 0",
+        "ALTER TABLE failure_analyses ALTER COLUMN confidence SET DEFAULT 0",
+        "UPDATE failure_analyses SET confidence = 0 WHERE confidence = 95",
         "ALTER TABLE failure_analyses ADD COLUMN IF NOT EXISTS impact TEXT",
 
         # AI Analysis pricing breakdown
@@ -363,15 +367,17 @@ async def run_migrations():
         "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS live_url TEXT",
         "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS failure_reason TEXT",
         "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS worker_id TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS lease_token TEXT",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP",
+        "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
         "ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+        "CREATE INDEX IF NOT EXISTS ix_deployment_jobs_lease ON deployment_jobs(status, lease_expires_at)",
     ]
 
-    try:
-        async with async_engine.begin() as conn:
-            for stmt in migration_statements:
-                await conn.execute(text(stmt))
-        logger.info("Schema migrations completed successfully (GitHub OAuth columns, AI analysis fields, and indexes).")
-    except Exception as e:
-        logger.warning(f"Schema migration encountered an issue (may be non-critical): {e}")
+    async with async_engine.begin() as conn:
+        for stmt in migration_statements:
+            await conn.execute(text(stmt))
+    logger.info("Schema migrations completed successfully (GitHub OAuth columns, AI analysis fields, and indexes).")
 

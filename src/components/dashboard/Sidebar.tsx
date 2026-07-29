@@ -2,237 +2,194 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "@/lib/utils";
 import {
   Activity,
-  BarChart3,
-  Brain,
+  Bot,
+  Boxes,
   ChevronLeft,
   ChevronRight,
-  DollarSign,
-  FileText,
-  Gauge,
+  FolderKanban,
   LayoutDashboard,
-  LogOut,
-  Network,
-  ReceiptText,
-  Rocket,
+  ListChecks,
+  Plus,
   Settings,
-  ShieldCheck,
+  X,
 } from "lucide-react";
-import { useAuth } from "@/lib/AuthContext";
+import { BrandMark } from "@/components/BrandMark";
+import { cn } from "@/lib/utils";
 
-type NavItem = {
-  name: string;
-  icon: React.ElementType;
-  href: string;
-  activePaths: string[];
-};
-
-type NavSection = {
-  label: string;
-  items: NavItem[];
-};
-
-const navSections: NavSection[] = [
-  {
-    label: "WORKSPACE",
-    items: [
-      { name: "Home", icon: LayoutDashboard, href: "/dashboard", activePaths: ["/dashboard"] },
-      { name: "New application", icon: Rocket, href: "/dashboard/repositories", activePaths: ["/dashboard/repositories"] },
-      { name: "Deployments", icon: Activity, href: "/dashboard/deployments", activePaths: ["/dashboard/deployments"] },
-    ],
-  },
-  {
-    label: "OPERATE",
-    items: [
-      { name: "Monitoring", icon: BarChart3, href: "/dashboard/monitoring", activePaths: ["/dashboard/monitoring"] },
-      { name: "Incidents", icon: Activity, href: "/dashboard/incidents", activePaths: ["/dashboard/incidents"] },
-      { name: "Logs", icon: FileText, href: "/dashboard/logs", activePaths: ["/dashboard/logs"] },
-      { name: "Architecture plan", icon: Network, href: "/dashboard/infrastructure", activePaths: ["/dashboard/infrastructure"] },
-      { name: "Autoscaling", icon: Gauge, href: "/dashboard/autoscaling", activePaths: ["/dashboard/autoscaling"] },
-    ],
-  },
-  {
-    label: "OPTIMIZE",
-    items: [
-      { name: "AI analysis", icon: Brain, href: "/dashboard/ai-analysis", activePaths: ["/dashboard/ai-analysis"] },
-      { name: "Security", icon: ShieldCheck, href: "/dashboard/security", activePaths: ["/dashboard/security"] },
-      { name: "Cost optimization", icon: DollarSign, href: "/dashboard/cost-optimization", activePaths: ["/dashboard/cost-optimization"] },
-    ],
-  },
-  {
-    label: "ACCOUNT",
-    items: [
-      { name: "Settings", icon: Settings, href: "/dashboard/settings", activePaths: ["/dashboard/settings"] },
-      { name: "Plan & billing", icon: ReceiptText, href: "/dashboard/billing", activePaths: ["/dashboard/billing"] },
-    ],
-  },
-];
-
-interface SidebarProps {
+type SidebarProps = {
   collapsed: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
   onToggle: () => void;
-}
+};
 
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+const navigation = [
+  {
+    label: "Overview",
+    href: "/dashboard",
+    icon: LayoutDashboard,
+    matches: (pathname: string) => pathname === "/dashboard",
+  },
+  {
+    label: "Projects",
+    href: "/dashboard/projects",
+    icon: FolderKanban,
+    matches: (pathname: string) =>
+      pathname.startsWith("/dashboard/projects") ||
+      pathname.startsWith("/dashboard/repositories") ||
+      pathname.startsWith("/dashboard/apps/") ||
+      pathname.startsWith("/dashboard/ai-analysis") ||
+      pathname.startsWith("/dashboard/infrastructure") ||
+      pathname.startsWith("/dashboard/security") ||
+      pathname.startsWith("/dashboard/logs") ||
+      pathname.startsWith("/dashboard/incidents") ||
+      pathname.startsWith("/dashboard/cost-optimization") ||
+      pathname.startsWith("/dashboard/autoscaling"),
+  },
+  {
+    label: "Deployments",
+    href: "/dashboard/deployments",
+    icon: Boxes,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/deployments"),
+  },
+  {
+    label: "Monitoring",
+    href: "/dashboard/monitoring",
+    icon: Activity,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/monitoring"),
+  },
+  {
+    label: "AI Architect",
+    href: "/dashboard/architect",
+    icon: Bot,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/architect"),
+  },
+  {
+    label: "Activity",
+    href: "/dashboard/activity",
+    icon: ListChecks,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/activity"),
+  },
+  {
+    label: "Settings",
+    href: "/dashboard/settings",
+    icon: Settings,
+    matches: (pathname: string) =>
+      pathname.startsWith("/dashboard/settings") ||
+      pathname.startsWith("/dashboard/profile") ||
+      pathname.startsWith("/dashboard/billing"),
+  },
+] as const;
+
+export function Sidebar({
+  collapsed,
+  mobileOpen,
+  onMobileClose,
+  onToggle,
+}: SidebarProps) {
   const pathname = usePathname();
-  const { user, logout } = useAuth();
-
-  const firstName = user?.firstName || user?.first_name || "";
-  const lastName = user?.lastName || user?.last_name || "";
-
-  const initials = firstName && lastName
-    ? `${firstName[0].toUpperCase()}${lastName[0].toUpperCase()}`
-    : firstName
-      ? firstName[0].toUpperCase()
-      : user?.email
-        ? user.email[0].toUpperCase()
-        : "U";
-
-  const fullName = firstName && lastName
-    ? `${firstName} ${lastName}`
-    : firstName
-      ? firstName
-      : user?.email
-        ? user.email.split("@")[0]
-        : "User";
-
-  const isActive = (activePaths: string[]) => {
-    return activePaths.some(path => {
-      if (path === "/dashboard") return pathname === "/dashboard";
-      return pathname.startsWith(path);
-    });
-  };
 
   return (
-    <motion.aside
-      animate={{ width: collapsed ? 72 : 244 }}
-      transition={{ duration: 0.2, ease: "easeOut" }}
-      className="h-full border-r border-border bg-card flex flex-col overflow-hidden flex-shrink-0 shadow-[8px_0_24px_rgba(15,23,42,0.025)]"
+    <aside
+      aria-label="Application navigation"
+      className={cn(
+        "fixed inset-y-0 left-0 z-40 flex w-[280px] shrink-0 -translate-x-full flex-col border-r border-border bg-sidebar shadow-xl transition-[transform,width] duration-200 ease-out lg:sticky lg:top-0 lg:h-dvh lg:translate-x-0 lg:shadow-none",
+        mobileOpen && "translate-x-0",
+        collapsed ? "lg:w-[76px]" : "lg:w-[244px]",
+      )}
     >
-      {/* Logo */}
-      <div className="h-16 flex items-center px-4 border-b border-border gap-3">
-        <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5L12 2Z" stroke="white" strokeWidth="1.5" fill="none" />
-            <path d="M12 8L16 10.5V15.5L12 18L8 15.5V10.5L12 8Z" stroke="white" strokeWidth="1.5" fill="rgba(255,255,255,0.2)" />
-          </svg>
-        </div>
-        <AnimatePresence>
-          {!collapsed && (
-            <motion.span
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              className="text-lg font-bold tracking-tight text-foreground"
-            >
-              ZEROOPS
-            </motion.span>
-          )}
-        </AnimatePresence>
+      <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-4">
+        <BrandMark href="/dashboard" compact={collapsed} />
+        <button
+          type="button"
+          onClick={onMobileClose}
+          aria-label="Close navigation"
+          className="grid min-h-11 min-w-11 place-items-center rounded-lg text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground lg:hidden"
+        >
+          <X size={19} />
+        </button>
       </div>
 
-      {/* Navigation */}
-      <nav aria-label="Workspace navigation" className="flex-1 overflow-y-auto py-4 px-3 no-scrollbar">
-        {navSections.map((section) => (
-          <div key={section.label} className="mb-4">
-            <AnimatePresence>
-              {!collapsed && (
-                <motion.p
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="text-[10px] font-semibold text-foreground-muted tracking-widest px-3 mb-2"
-                >
-                  {section.label}
-                </motion.p>
-              )}
-            </AnimatePresence>
-            {section.items.map((item) => {
-              const active = isActive(item.activePaths);
-              const Icon = item.icon;
-              return (
+      <div className="px-3 pb-2 pt-4">
+        <Link
+          href="/dashboard/repositories"
+          className={cn(
+            "flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover",
+            collapsed && "lg:px-0",
+          )}
+          title={collapsed ? "New project" : undefined}
+        >
+          <Plus size={17} />
+          <span className={cn(collapsed && "lg:sr-only")}>New project</span>
+        </Link>
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-3">
+        <p
+          className={cn(
+            "mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle",
+            collapsed && "lg:sr-only",
+          )}
+        >
+          Workspace
+        </p>
+        <ul className="space-y-1">
+          {navigation.map((item) => {
+            const Icon = item.icon;
+            const active = item.matches(pathname);
+            return (
+              <li key={item.href}>
                 <Link
-                  key={item.href}
                   href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  title={collapsed ? item.label : undefined}
                   className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-xl mb-0.5 transition-all duration-200 group relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background-secondary",
+                    "group relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
                     active
                       ? "bg-primary-subtle text-primary"
-                      : "text-foreground-muted hover:text-foreground hover:bg-card",
+                      : "text-foreground-muted hover:bg-surface-raised hover:text-foreground",
+                    collapsed && "lg:justify-center lg:px-0",
                   )}
                 >
                   {active && (
-                    <motion.div
-                      layoutId="activeNav"
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-primary rounded-r-full"
-                      transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary"
                     />
                   )}
-                  <Icon size={20} className="flex-shrink-0" />
-                  <AnimatePresence>
-                    {!collapsed && (
-                      <motion.span
-                        initial={{ opacity: 0, x: -5 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -5 }}
-                        className="text-sm font-medium whitespace-nowrap"
-                      >
-                        {item.name}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
+                  <Icon size={18} strokeWidth={1.8} className="shrink-0" />
+                  <span className={cn("truncate", collapsed && "lg:sr-only")}>{item.label}</span>
                 </Link>
-              );
-            })}
-          </div>
-        ))}
+              </li>
+            );
+          })}
+        </ul>
       </nav>
 
-      {/* Actions */}
-      <div className="border-t border-border p-3 flex flex-col gap-2">
-        <button
-          onClick={logout}
-          aria-label="Sign out"
-          title="Sign Out"
-          className="min-h-11 w-full flex items-center justify-center p-2 rounded-lg hover:bg-background-secondary transition-colors text-danger hover:text-danger-hover"
+      <div className="border-t border-border p-3">
+        <div
+          className={cn(
+            "rounded-lg border border-border bg-surface-subtle px-3 py-3",
+            collapsed && "lg:hidden",
+          )}
         >
-          <LogOut size={18} className="flex-shrink-0" />
-          {!collapsed && <span className="text-xs font-semibold ml-2">Sign Out</span>}
-        </button>
+          <p className="text-xs font-semibold text-foreground">Approval stays with you</p>
+          <p className="mt-1 text-[11px] leading-4 text-foreground-muted">
+            Code and cloud changes remain reviewable before execution.
+          </p>
+        </div>
         <button
+          type="button"
           onClick={onToggle}
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-          className="min-h-11 w-full flex items-center justify-center p-2 rounded-lg hover:bg-background-secondary transition-colors text-foreground-muted hover:text-foreground"
+          className="mt-2 hidden min-h-11 w-full items-center justify-center gap-2 rounded-lg text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground lg:flex"
         >
-          {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          {collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
+          {!collapsed && <span>Collapse</span>}
         </button>
       </div>
-
-      {/* User profile */}
-      <Link href="/dashboard/profile" className="border-t border-border p-3 block hover:bg-background-secondary/60 transition-colors">
-        <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
-          <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary flex-shrink-0 relative">
-            {initials}
-            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-success border-2 border-background-secondary" />
-          </div>
-          <AnimatePresence>
-            {!collapsed && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <p className="text-sm font-medium text-foreground truncate">{fullName}</p>
-                <p className="text-[10px] text-foreground-muted">{user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : "Starter"}</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </Link>
-    </motion.aside>
+    </aside>
   );
 }

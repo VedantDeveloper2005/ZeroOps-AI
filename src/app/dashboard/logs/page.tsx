@@ -1,71 +1,377 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, Search } from "lucide-react";
-import { api, type Deployment, type DeploymentLog } from "@/lib/api";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { FileText, Loader2, RefreshCw, Search } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import {
+  api,
+  getErrorMessage,
+  type Deployment,
+  type DeploymentDetail,
+  type DeploymentLog,
+} from "@/lib/api";
+import { createReconnectingWebSocket } from "@/lib/runtime-config";
 
-const levels = ["info", "warning", "error", "debug"] as const;
-const levelColor: Record<string, string> = {
-  info: "bg-primary/10 text-primary", warning: "bg-warning/10 text-warning", error: "bg-danger/10 text-danger", debug: "bg-foreground-muted/10 text-foreground-muted",
-};
+type LevelFilter = "info" | "warning" | "error" | "debug";
+type StreamState = "idle" | "connecting" | "connected" | "reconnecting" | "complete" | "unavailable";
+
+const filters: LevelFilter[] = ["info", "warning", "error", "debug"];
+const activeStatuses = new Set<Deployment["status"]>(["queued", "building", "deploying"]);
+
+function normalizeLevel(level: string): LevelFilter {
+  const normalized = level.toLowerCase();
+  if (normalized === "warn" || normalized === "warning") return "warning";
+  if (normalized === "error") return "error";
+  if (normalized === "debug") return "debug";
+  return "info";
+}
+
+function logKey(log: DeploymentLog) {
+  return `${log.line_number}:${log.timestamp ?? ""}:${log.message}`;
+}
+
+function formatDeployment(deployment: Deployment) {
+  const started = deployment.started_at
+    ? new Date(deployment.started_at).toLocaleString()
+    : "time not recorded";
+  return `${deployment.branch || "default branch"} · ${deployment.status} · ${started}`;
+}
 
 export default function LogsPage() {
-  const { projects } = useNotifications();
-  const [selectedProject, setSelectedProject] = useState("");
+  return (
+    <Suspense fallback={<LogsLoading />}>
+      <LogsWorkspace />
+    </Suspense>
+  );
+}
+
+function LogsWorkspace() {
+  const searchParams = useSearchParams();
+  const { projects, isLoading: projectsLoading } = useNotifications();
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedDeploymentId, setSelectedDeploymentId] = useState("");
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [detail, setDetail] = useState<DeploymentDetail | null>(null);
   const [logs, setLogs] = useState<DeploymentLog[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [activeLevels, setActiveLevels] = useState<Set<string>>(new Set(levels));
-
-  useEffect(() => { if (projects.length && !selectedProject) setSelectedProject(projects[0].id); }, [projects, selectedProject]);
+  const [activeLevels, setActiveLevels] = useState<Set<LevelFilter>>(new Set(filters));
+  const [streamState, setStreamState] = useState<StreamState>("idle");
+  const shouldStream = detail ? activeStatuses.has(detail.status) : false;
 
   useEffect(() => {
-    if (!selectedProject) return;
-    setLoading(true);
-    api.getDeployments(100)
-      .then((items) => setDeployments(items.filter((item) => item.project_id === selectedProject)))
-      .catch(() => setDeployments([]))
-      .finally(() => setLoading(false));
-  }, [selectedProject]);
+    const requestedProject = searchParams.get("project");
+    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
+      setSelectedProjectId(requestedProject);
+      return;
+    }
+    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
+  }, [projects, searchParams, selectedProjectId]);
 
-  const latest = deployments[0];
-  const latestDeploymentId = latest?.id;
+  const loadDeployments = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setLoadingHistory(true);
+    setError(null);
+    try {
+      const projectDeployments = (await api.getDeployments(100)).filter(
+        (deployment) => deployment.project_id === projectId,
+      );
+      setDeployments(projectDeployments);
+      setSelectedDeploymentId((current) => {
+        const requested = searchParams.get("deployment");
+        if (requested && projectDeployments.some((deployment) => deployment.id === requested)) {
+          return requested;
+        }
+        if (projectDeployments.some((deployment) => deployment.id === current)) return current;
+        return projectDeployments[0]?.id ?? "";
+      });
+    } catch (requestError) {
+      setDeployments([]);
+      setSelectedDeploymentId("");
+      setError(getErrorMessage(requestError, "Deployment history could not be loaded."));
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [searchParams]);
+
   useEffect(() => {
-    if (!latestDeploymentId) { setLogs([]); return; }
-    setLoading(true);
-    api.getDeployment(latestDeploymentId)
-      .then((detail) => setLogs(detail.logs || []))
-      .catch(() => setLogs([]))
-      .finally(() => setLoading(false));
-  }, [latestDeploymentId]);
+    void loadDeployments(selectedProjectId);
+  }, [loadDeployments, selectedProjectId]);
 
-  const filtered = useMemo(() => logs.filter((log) => {
-    const level = log.level.toLowerCase();
-    return activeLevels.has(level) && (!search || log.message.toLowerCase().includes(search.toLowerCase()));
-  }), [logs, search, activeLevels]);
+  const loadDetail = useCallback(async (deploymentId: string) => {
+    if (!deploymentId) {
+      setDetail(null);
+      setLogs([]);
+      setStreamState("idle");
+      return;
+    }
+    setLoadingDetail(true);
+    setError(null);
+    try {
+      const nextDetail = await api.getDeployment(deploymentId);
+      setDetail(nextDetail);
+      setLogs(nextDetail.logs ?? []);
+      setStreamState(activeStatuses.has(nextDetail.status) ? "connecting" : "complete");
+    } catch (requestError) {
+      setDetail(null);
+      setLogs([]);
+      setStreamState("unavailable");
+      setError(getErrorMessage(requestError, "Deployment logs could not be loaded."));
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, []);
 
-  const toggleLevel = (level: string) => setActiveLevels((current) => {
-    const next = new Set(current);
-    if (next.has(level)) next.delete(level);
-    else next.add(level);
-    return next;
-  });
+  useEffect(() => {
+    void loadDetail(selectedDeploymentId);
+  }, [loadDetail, selectedDeploymentId]);
 
-  return <div className="flex h-full flex-col space-y-4">
-    <div className="flex flex-wrap items-center gap-3">
-      <label className="flex max-w-md flex-1 items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 shadow-sm"><Search size={16} className="text-foreground-muted" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search recorded logs" className="w-full border-none bg-transparent text-xs font-semibold text-foreground outline-none placeholder:text-foreground-muted" /></label>
-      <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="cursor-pointer rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-sm outline-none focus:ring-1 focus:ring-primary">{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
-      <div className="flex gap-1.5 rounded-lg border border-border/50 bg-background-secondary p-0.5">{levels.map((level) => <button key={level} onClick={() => toggleLevel(level)} className={`cursor-pointer rounded-md px-3 py-1.5 text-[10px] font-bold uppercase transition ${activeLevels.has(level) ? `${levelColor[level]} border border-border/40 shadow-sm` : "text-foreground-muted hover:text-foreground"}`}>{level}</button>)}</div>
-    </div>
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-      <div className="border-b border-border bg-background-secondary px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{latest ? `Latest deployment · ${filtered.length} recorded entries` : "No deployment selected"}</div>
-      <div className="max-h-[calc(100vh-320px)] overflow-y-auto bg-background-secondary/40 p-4 font-mono text-[11px] leading-7">
-        {loading ? <div className="flex items-center gap-2 text-foreground-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" />Loading recorded logs…</div> : filtered.map((log) => { const level = log.level.toLowerCase(); return <div key={`${log.line_number}-${log.timestamp}`} className="flex gap-3 rounded px-2 py-0.5 hover:bg-card/40"><span className="w-24 shrink-0 font-bold text-foreground-muted">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}</span><span className={`w-16 shrink-0 rounded py-0.5 text-center text-[9px] font-bold ${levelColor[level] || levelColor.info}`}>{level}</span><span className={level === "error" ? "text-danger" : level === "warning" ? "text-warning" : "text-foreground"}>{log.message}</span></div>; })}
-        {!loading && !filtered.length && <p className="text-foreground-muted">No recorded log entries match this view. Logs appear after a deployment starts.</p>}
+  useEffect(() => {
+    if (!selectedDeploymentId || !shouldStream) return;
+
+    let active = true;
+    const dispose = createReconnectingWebSocket(`/ws/deployments/${selectedDeploymentId}`, {
+      onOpen: () => {
+        if (active) setStreamState("connected");
+      },
+      onMessage: (event) => {
+        if (!active) return;
+        try {
+          const data = JSON.parse(event.data) as Record<string, unknown>;
+          if (data.type === "log" && typeof data.text === "string") {
+            const nextLog: DeploymentLog = {
+              line_number: typeof data.line_number === "number" ? data.line_number : 0,
+              level:
+                normalizeLevel(typeof data.lineType === "string" ? data.lineType : "info") === "warning"
+                  ? "WARN"
+                  : normalizeLevel(typeof data.lineType === "string" ? data.lineType : "info").toUpperCase() as DeploymentLog["level"],
+              message: data.text,
+              timestamp: typeof data.timestamp === "string" ? data.timestamp : null,
+            };
+            setLogs((current) => {
+              const key = logKey(nextLog);
+              return current.some((log) => logKey(log) === key) ? current : [...current, nextLog];
+            });
+          }
+          if (data.type === "status" && typeof data.status === "string") {
+            const nextStatus = data.status as Deployment["status"];
+            setDetail((current) => current ? { ...current, status: nextStatus } : current);
+            if (!activeStatuses.has(nextStatus)) {
+              setStreamState("complete");
+              void loadDetail(selectedDeploymentId);
+            }
+          }
+        } catch {
+          setStreamState("reconnecting");
+        }
+      },
+      onError: () => {
+        if (active) setStreamState("reconnecting");
+      },
+      onClose: () => {
+        if (active) setStreamState("unavailable");
+      },
+    });
+
+    return () => {
+      active = false;
+      dispose();
+    };
+  }, [loadDetail, selectedDeploymentId, shouldStream]);
+
+  const filteredLogs = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return logs.filter((log) => {
+      const level = normalizeLevel(log.level);
+      return activeLevels.has(level) && (!term || log.message.toLowerCase().includes(term));
+    });
+  }, [activeLevels, logs, search]);
+
+  const toggleLevel = (level: LevelFilter) => {
+    setActiveLevels((current) => {
+      const next = new Set(current);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  };
+
+  if (projectsLoading) return <LogsLoading />;
+
+  if (projects.length === 0) {
+    return (
+      <StatePanel
+        title="No deployment logs"
+        description="Connect a project and start a deployment before reviewing build and runtime output."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
+    );
+  }
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const busy = loadingHistory || loadingDetail;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Diagnostics"
+        title="Deployment logs"
+        description="Persisted worker output for a specific deployment. Active deployments stream new database-backed entries; completed deployments show their saved history."
+        actions={
+          <button
+            type="button"
+            onClick={() => void loadDetail(selectedDeploymentId)}
+            disabled={busy || !selectedDeploymentId}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm hover:bg-surface-raised disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={busy ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        }
+      />
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <ProjectSelector projects={projects} value={selectedProjectId} onChange={setSelectedProjectId} />
+        <label>
+          <span className="mb-1.5 block text-xs font-medium text-foreground-muted">Deployment</span>
+          <select
+            value={selectedDeploymentId}
+            onChange={(event) => setSelectedDeploymentId(event.target.value)}
+            disabled={deployments.length === 0}
+            className="min-h-11 w-full rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60"
+          >
+            {deployments.length === 0 ? (
+              <option value="">No deployments recorded</option>
+            ) : (
+              deployments.map((deployment) => (
+                <option key={deployment.id} value={deployment.id}>
+                  {formatDeployment(deployment)}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
       </div>
-    </motion.div>
-  </div>;
+
+      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+
+      {error ? (
+        <StatePanel
+          variant="error"
+          title="Logs are unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadDetail(selectedDeploymentId) }}
+        />
+      ) : busy ? (
+        <LogsLoading compact />
+      ) : deployments.length === 0 ? (
+        <StatePanel
+          title="No deployments recorded"
+          description="Logs are stored against deployment records. Start a deployment to create the first log stream."
+          action={{ label: "Open deployments", href: "/dashboard/deployments" }}
+        />
+      ) : (
+        <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
+            <label className="flex min-h-11 flex-1 items-center gap-2 rounded-lg border border-border bg-surface-subtle px-3">
+              <Search size={15} className="text-foreground-muted" />
+              <span className="sr-only">Search deployment logs</span>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search saved log messages"
+                className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-foreground-subtle"
+              />
+            </label>
+            <div className="flex flex-wrap gap-1.5" aria-label="Log level filters">
+              {filters.map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  aria-pressed={activeLevels.has(level)}
+                  onClick={() => toggleLevel(level)}
+                  className={`min-h-10 rounded-lg border px-3 text-[10px] font-semibold uppercase tracking-wide ${
+                    activeLevels.has(level)
+                      ? "border-primary/25 bg-primary-subtle text-primary"
+                      : "border-border bg-card text-foreground-muted"
+                  }`}
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-subtle px-4 py-3 text-[11px] text-foreground-muted">
+            <span>{filteredLogs.length} of {logs.length} recorded entries</span>
+            <span>
+              {streamState === "connected"
+                ? "Live connection active"
+                : streamState === "connecting" || streamState === "reconnecting"
+                  ? "Reconnecting to active deployment…"
+                  : streamState === "unavailable"
+                    ? "Live connection unavailable; saved logs remain visible"
+                    : "Saved deployment history"}
+            </span>
+          </div>
+
+          <div className="max-h-[560px] min-h-64 overflow-auto bg-[hsl(222_47%_7%)] p-3 font-mono text-[11px] leading-6 text-[hsl(210_40%_92%)] sm:p-4">
+            {filteredLogs.length === 0 ? (
+              <div className="flex min-h-56 flex-col items-center justify-center text-center text-[hsl(215_18%_68%)]">
+                <FileText size={24} />
+                <p className="mt-3">No saved entries match this view.</p>
+              </div>
+            ) : (
+              filteredLogs.map((log, index) => {
+                const level = normalizeLevel(log.level);
+                return (
+                  <div
+                    key={`${logKey(log)}:${index}`}
+                    className="grid gap-x-3 rounded px-2 py-0.5 hover:bg-white/5 sm:grid-cols-[86px_64px_1fr]"
+                  >
+                    <span className="text-[hsl(215_14%_58%)]">
+                      {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}
+                    </span>
+                    <span
+                      className={
+                        level === "error"
+                          ? "text-[hsl(0_84%_68%)]"
+                          : level === "warning"
+                            ? "text-[hsl(38_92%_61%)]"
+                            : "text-[hsl(199_89%_63%)]"
+                      }
+                    >
+                      {level.toUpperCase()}
+                    </span>
+                    <span className="break-words">{log.message}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function LogsLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm font-medium text-foreground-muted ${
+        compact ? "min-h-52" : "min-h-[55vh]"
+      }`}
+    >
+      <Loader2 size={18} className="animate-spin text-primary" />
+      Loading deployment logs…
+    </div>
+  );
 }

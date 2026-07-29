@@ -4,7 +4,6 @@ import "./globals.css";
 import { NotificationProvider } from "@/lib/NotificationContext";
 import { AuthProvider } from "@/lib/AuthContext";
 import { ToastContainer } from "@/components/ui/ToastContainer";
-import { DeviceGate } from "@/components/DeviceGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,21 +16,33 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ZeroOps — Ship without the platform overhead",
+  applicationName: "ZeroOps AI",
+  title: {
+    default: "ZeroOps AI — Review before you deploy",
+    template: "%s | ZeroOps AI",
+  },
   description:
-    "Connect a repository or upload your code. ZeroOps prepares and runs your application while you stay in control.",
+    "Import a GitHub repository or ZIP, review deterministic deployment evidence, approve an Azure App Service plan, and deploy through a dedicated worker.",
   keywords: [
-    "application deployment",
-    "repository deployment",
-    "cloud operations",
-    "production readiness",
+    "Azure App Service deployment",
+    "repository analysis",
+    "approval-based deployment",
+    "Azure deployment worker",
   ],
   openGraph: {
-    title: "ZeroOps — Bring your code. Keep the control.",
+    title: "ZeroOps AI — Review before you deploy",
     description:
-      "Bring your code. Keep the control. Leave the platform work to ZeroOps.",
+      "A review-first path from GitHub or ZIP source to an approved Azure App Service deployment.",
+    siteName: "ZeroOps AI",
     type: "website",
   },
+  twitter: {
+    card: "summary",
+    title: "ZeroOps AI — Review before you deploy",
+    description:
+      "Import source, inspect repository evidence, approve the App Service plan, and deploy through a dedicated worker.",
+  },
+  category: "developer tools",
 };
 
 export default function RootLayout({
@@ -42,16 +53,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      data-scroll-behavior="smooth"
       className={`${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="min-h-screen bg-background text-foreground antialiased">
         <NotificationProvider>
           <AuthProvider>
-            <DeviceGate>
-              <a href="#main-content" className="skip-link">Skip to main content</a>
-              {children}
-              <ToastContainer />
-            </DeviceGate>
+            <a href="#main-content" className="skip-link">
+              Skip to main content
+            </a>
+            {children}
+            <ToastContainer />
           </AuthProvider>
         </NotificationProvider>
       </body>

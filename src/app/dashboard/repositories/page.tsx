@@ -1,42 +1,70 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, FileArchive, FolderGit2, GitBranch, Loader2, Search, ShieldCheck, Sparkles, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  ChevronDown,
+  FileArchive,
+  GitBranch,
+  Loader2,
+  Search,
+  ShieldCheck,
+  Upload,
+  X,
+} from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
 import { useAuth } from "@/lib/AuthContext";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, getErrorMessage, type GitHubRepoItem, type InfrastructurePlan } from "@/lib/api";
+import {
+  api,
+  getErrorMessage,
+  type GitHubRepoItem,
+  type InfrastructurePlan,
+} from "@/lib/api";
 
 type AppReview = {
   framework: string | null;
   applicationType: string | null;
   explanation: string | null;
   environmentVariables: string[];
-  estimatedBuildTime: string | null;
 };
 
-const asString = (value: unknown) => typeof value === "string" && value.trim() ? value : null;
-const asStrings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+const asString = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim() : null;
+
+const asStrings = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      )
+    : [];
 
 const toReview = (data: Record<string, unknown>): AppReview => ({
   framework: asString(data.framework),
   applicationType: asString(data.application_type),
   explanation: asString(data.explanation),
   environmentVariables: asStrings(data.environment_variables),
-  estimatedBuildTime: asString(data.estimated_build_time),
 });
 
 const sourceDate = (value: string) => {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Recently updated" : `Updated ${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  if (Number.isNaN(date.getTime())) return "Update date unavailable";
+  return `Updated ${date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })}`;
 };
 
 export default function RepositoriesPage() {
   const router = useRouter();
-  const inputRef = useRef<HTMLInputElement>(null);
   const { user, loginWithGitHub } = useAuth();
   const { addToast, refreshProjects, refreshStats, projects } = useNotifications();
+  const latestRepoRequest = useRef(0);
   const [repos, setRepos] = useState<GitHubRepoItem[]>([]);
   const [repoSearch, setRepoSearch] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepoItem | null>(null);
@@ -44,6 +72,7 @@ export default function RepositoriesPage() {
   const [branches, setBranches] = useState<string[]>(["main"]);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [infrastructurePlan, setInfrastructurePlan] = useState<InfrastructurePlan | null>(null);
@@ -55,53 +84,115 @@ export default function RepositoriesPage() {
 
   const githubConnected = user?.github_connected === true;
 
-  const loadRepos = useCallback(async (query = "") => {
-    if (!githubConnected) return;
-    setLoadingRepos(true);
-    try {
-      const result = await api.getGitHubRepos({ page: 1, per_page: 50, sort: "updated", q: query || undefined });
-      setRepos(result.repos);
-    } catch (err) {
-      setError(getErrorMessage(err, "We couldn't load your repositories. Please try again."));
-    } finally {
-      setLoadingRepos(false);
-    }
-  }, [githubConnected]);
+  const loadRepos = useCallback(
+    async (query = "") => {
+      if (!githubConnected) return;
+      const requestId = latestRepoRequest.current + 1;
+      latestRepoRequest.current = requestId;
+      setLoadingRepos(true);
+      setError(null);
+      try {
+        const result = await api.getGitHubRepos({
+          page: 1,
+          per_page: 50,
+          sort: "updated",
+          q: query || undefined,
+        });
+        if (latestRepoRequest.current === requestId) {
+          setRepos(result.repos);
+        }
+      } catch (repoError) {
+        if (latestRepoRequest.current === requestId) {
+          setError(
+            getErrorMessage(repoError, "Repositories could not be loaded. Try again."),
+          );
+        }
+      } finally {
+        if (latestRepoRequest.current === requestId) {
+          setLoadingRepos(false);
+        }
+      }
+    },
+    [githubConnected],
+  );
 
   useEffect(() => {
-    if (!githubConnected) return;
-    const timer = window.setTimeout(() => loadRepos(repoSearch), 250);
+    if (!githubConnected) {
+      setRepos([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadRepos(repoSearch.trim());
+    }, 250);
     return () => window.clearTimeout(timer);
   }, [githubConnected, loadRepos, repoSearch]);
 
   useEffect(() => {
     if (!selectedRepo) return;
+    let cancelled = false;
     setLoadingBranches(true);
-    api.getRepoBranches(selectedRepo.full_name)
+    setBranchError(null);
+
+    void api
+      .getRepoBranches(selectedRepo.full_name)
       .then((result) => {
-        const available = result.branches.length ? result.branches : [selectedRepo.default_branch || "main"];
+        if (cancelled) return;
+        const available =
+          result.branches.length > 0
+            ? result.branches
+            : [selectedRepo.default_branch || "main"];
+        const defaultBranch = selectedRepo.default_branch || available[0];
         setBranches(available);
-        setBranch(available.includes(selectedRepo.default_branch) ? selectedRepo.default_branch : available[0]);
+        setBranch(available.includes(defaultBranch) ? defaultBranch : available[0]);
       })
-      .catch(() => {
+      .catch((loadError) => {
+        if (cancelled) return;
         const fallback = selectedRepo.default_branch || "main";
         setBranches([fallback]);
         setBranch(fallback);
+        setBranchError(
+          getErrorMessage(
+            loadError,
+            `The branch list could not be loaded. ${fallback} is selected from repository metadata.`,
+          ),
+        );
       })
-      .finally(() => setLoadingBranches(false));
+      .finally(() => {
+        if (!cancelled) setLoadingBranches(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRepo]);
 
   const resetReview = () => {
     setReview(null);
+    setProjectId(null);
+    setInfrastructurePlan(null);
     setError(null);
   };
 
   const chooseRepository = (repo: GitHubRepoItem) => {
     setSelectedRepo(repo);
-    setProjectId(null);
-    setInfrastructurePlan(null);
     setUploadFile(null);
     setSourceName(repo.full_name);
+    resetReview();
+  };
+
+  const chooseUpload = (file: File | null) => {
+    if (!file) {
+      setUploadFile(null);
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setUploadFile(null);
+      setError("Only ZIP archives can be uploaded.");
+      return;
+    }
+    setUploadFile(file);
+    setSelectedRepo(null);
+    setSourceName(file.name);
     resetReview();
   };
 
@@ -110,25 +201,31 @@ export default function RepositoriesPage() {
     setIsReviewing(true);
     setError(null);
     try {
-      const existingProject = projects.find((project) => project.full_name === selectedRepo.full_name && project.branch === branch);
-      const project = existingProject || await api.createProject({
-        name: selectedRepo.name,
-        full_name: selectedRepo.full_name,
-        repo_url: selectedRepo.html_url,
-        framework: "Unknown",
-        language: selectedRepo.language || "Unknown",
-        branch,
-        region: "eastus",
-      });
-      const result = await api.analyzeRepo(selectedRepo.full_name, branch);
-      setReview(toReview(result));
+      const existingProject = projects.find(
+        (project) =>
+          project.full_name === selectedRepo.full_name && project.branch === branch,
+      );
+      const project =
+        existingProject ||
+        (await api.createProject({
+          name: selectedRepo.name,
+          full_name: selectedRepo.full_name,
+          repo_url: selectedRepo.html_url,
+          language: selectedRepo.language || undefined,
+          branch,
+        }));
+
+      const analysis = await api.analyzeRepo(selectedRepo.full_name, branch);
       const plan = await api.generateInfrastructurePlan(project.id);
+      setReview(toReview(analysis));
       setProjectId(project.id);
       setInfrastructurePlan(plan);
       await Promise.all([refreshProjects(), refreshStats()]);
-      addToast("Your architecture plan is ready to review.", "success");
-    } catch (err) {
-      setError(getErrorMessage(err, "We couldn't review this repository. Please try again."));
+      addToast("A proposed infrastructure plan was generated.", "success");
+    } catch (reviewError) {
+      setError(
+        getErrorMessage(reviewError, "The selected repository could not be reviewed."),
+      );
     } finally {
       setIsReviewing(false);
     }
@@ -140,17 +237,18 @@ export default function RepositoriesPage() {
     setError(null);
     try {
       const result = await api.uploadCode(uploadFile);
+      const plan = await api.generateInfrastructurePlan(result.project.id);
       setProjectId(result.project.id);
       setSourceName(uploadFile.name);
-      setSelectedRepo(null);
       setBranch(result.project.branch || "uploaded");
       setReview(toReview(result.analysis));
-      const plan = await api.generateInfrastructurePlan(result.project.id);
       setInfrastructurePlan(plan);
       await Promise.all([refreshProjects(), refreshStats()]);
-      addToast("Your architecture plan is ready to review.", "success");
-    } catch (err) {
-      setError(getErrorMessage(err, "We couldn't process that ZIP file. Check it and try again."));
+      addToast("A proposed infrastructure plan was generated.", "success");
+    } catch (uploadError) {
+      setError(
+        getErrorMessage(uploadError, "The ZIP archive could not be processed. Check it and try again."),
+      );
     } finally {
       setIsUploading(false);
     }
@@ -158,37 +256,400 @@ export default function RepositoriesPage() {
 
   const openInfrastructurePlan = () => {
     if (!projectId || !infrastructurePlan) {
-      setError("The architecture plan is still being prepared. Please try again.");
+      setError("The infrastructure plan response is unavailable. Generate the review again.");
       return;
     }
     router.push(`/dashboard/infrastructure?project=${projectId}`);
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-7 pb-10">
-      <section className="text-center"><span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold tracking-wide text-primary"><Sparkles size={12} /> NEW APPLICATION</span><h1 className="mt-4 text-3xl font-bold tracking-tight text-foreground">Start with your code.</h1><p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-foreground-muted">Choose a source. We&apos;ll prepare the application in the background and only bring you the choices that need your attention.</p></section>
+    <div className="mx-auto max-w-5xl pb-10">
+      <PageHeader
+        eyebrow="New project"
+        title="Import application source"
+        description="Choose a GitHub repository and branch, or upload a ZIP. ZeroOps will inspect the selected source and generate a plan for your review."
+      />
 
-      {error && <div className="flex flex-col gap-3 rounded-2xl border border-warning/25 bg-warning/10 p-4 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between"><span>{error}</span>{error.startsWith("Connect a hosting") && <button onClick={() => router.push("/dashboard/settings")} className="shrink-0 rounded-lg bg-card px-3 py-2 text-xs font-bold text-foreground transition hover:bg-card-hover">Open advanced setup</button>}</div>}
+      {error && (
+        <div
+          role="alert"
+          className="mb-5 flex items-start justify-between gap-3 rounded-xl border border-danger/25 bg-danger-subtle p-4 text-sm leading-5 text-danger"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss error"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors hover:bg-card"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
-      {!review && <>
-        <section className="grid gap-4 md:grid-cols-2">
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-border bg-card p-6 shadow-sm"><div className="grid h-11 w-11 place-items-center rounded-xl bg-foreground text-background"><GitBranch size={21} /></div><h2 className="mt-5 text-lg font-bold text-foreground">Connect GitHub</h2><p className="mt-1.5 text-sm leading-6 text-foreground-muted">Pick a repository and branch without leaving your workspace.</p>{githubConnected ? <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-success"><CheckCircle2 size={15} /> Connected as @{user?.github_username || "GitHub"}</div> : <button onClick={loginWithGitHub} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-white transition hover:bg-primary-hover"><GitBranch size={15} /> Connect GitHub</button>}</motion.div>
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }} className="rounded-2xl border border-border bg-card p-6 shadow-sm"><div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary"><FileArchive size={21} /></div><h2 className="mt-5 text-lg font-bold text-foreground">Upload a ZIP</h2><p className="mt-1.5 text-sm leading-6 text-foreground-muted">Use a ZIP file when the code isn&apos;t in GitHub yet.</p><input ref={inputRef} type="file" accept=".zip,application/zip,application/x-zip-compressed" className="hidden" onChange={(event) => { setUploadFile(event.target.files?.[0] || null); resetReview(); }} /><div className="mt-5 flex flex-wrap items-center gap-2"><button onClick={() => inputRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl border border-border bg-background-secondary px-4 py-2.5 text-xs font-bold text-foreground transition hover:bg-card-hover"><Upload size={15} /> Choose ZIP</button>{uploadFile && <button onClick={uploadCode} disabled={isUploading} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-white transition hover:bg-primary-hover disabled:opacity-60">{isUploading ? <Loader2 size={15} className="animate-spin" /> : <ArrowRight size={15} />} Review {uploadFile.name}</button>}</div></motion.div>
+      {!review ? (
+        <div className="space-y-5">
+          <section aria-label="Source options" className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary-subtle text-primary">
+                <GitBranch size={20} aria-hidden="true" />
+              </div>
+              <h2 className="mt-4 text-base font-semibold text-foreground">GitHub repository</h2>
+              <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
+                Select one repository and a branch available to the connected GitHub account.
+              </p>
+              {githubConnected ? (
+                <p className="mt-4 flex items-center gap-2 text-xs font-medium text-success">
+                  <CheckCircle2 size={15} aria-hidden="true" />
+                  Connected{user?.github_username ? ` as @${user.github_username}` : ""}
+                </p>
+              ) : (
+                <button type="button" onClick={loginWithGitHub} className="ops-primary mt-4">
+                  Connect GitHub
+                </button>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-surface-subtle text-foreground">
+                <FileArchive size={20} aria-hidden="true" />
+              </div>
+              <h2 className="mt-4 text-base font-semibold text-foreground">ZIP archive</h2>
+              <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
+                Upload a source archive. The backend enforces the configured upload size limit and safe extraction checks.
+              </p>
+              <input
+                id="source-zip"
+                type="file"
+                accept=".zip,application/zip,application/x-zip-compressed"
+                className="sr-only"
+                onChange={(event) => chooseUpload(event.target.files?.[0] || null)}
+              />
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <label htmlFor="source-zip" className="ops-secondary">
+                  <Upload size={15} aria-hidden="true" />
+                  Choose ZIP
+                </label>
+                {uploadFile && (
+                  <button
+                    type="button"
+                    onClick={() => void uploadCode()}
+                    disabled={isUploading}
+                    className="ops-primary min-w-0 flex-1 disabled:opacity-60"
+                  >
+                    {isUploading ? (
+                      <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <ArrowRight size={15} aria-hidden="true" />
+                    )}
+                    <span className="truncate">
+                      {isUploading ? "Processing archive…" : `Review ${uploadFile.name}`}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {githubConnected && (
+            <section
+              aria-labelledby="repository-list-heading"
+              className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5"
+            >
+              <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 id="repository-list-heading" className="text-base font-semibold text-foreground">
+                    Choose a repository
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                    Only the repository selected here is submitted for this review.
+                  </p>
+                </div>
+                <label className="relative block w-full sm:w-72">
+                  <span className="sr-only">Search repositories</span>
+                  <Search
+                    size={15}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-foreground-subtle"
+                    aria-hidden="true"
+                  />
+                  <input
+                    type="search"
+                    value={repoSearch}
+                    onChange={(event) => setRepoSearch(event.target.value)}
+                    placeholder="Search repositories"
+                    className="min-h-11 w-full rounded-lg border border-border bg-background-secondary pl-9 pr-3 text-base text-foreground outline-none transition-colors focus:border-primary sm:text-sm"
+                  />
+                </label>
+              </div>
+
+              {loadingRepos ? (
+                <div role="status" className="flex min-h-44 items-center justify-center">
+                  <Loader2 size={20} className="animate-spin text-primary" aria-hidden="true" />
+                  <span className="ml-2 text-xs text-foreground-muted">Loading repositories…</span>
+                </div>
+              ) : repos.length === 0 ? (
+                <StatePanel
+                  compact
+                  title="No repositories found"
+                  description={
+                    repoSearch
+                      ? "No repository matched the current search."
+                      : "The connected GitHub account returned no repositories."
+                  }
+                />
+              ) : (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {repos.map((repo) => {
+                    const selected = selectedRepo?.id === repo.id;
+                    return (
+                      <button
+                        key={repo.id}
+                        type="button"
+                        onClick={() => chooseRepository(repo)}
+                        aria-pressed={selected}
+                        className={`min-h-28 rounded-lg border p-4 text-left transition-colors ${
+                          selected
+                            ? "border-primary bg-primary-subtle"
+                            : "border-border hover:border-border-hover hover:bg-surface-subtle"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="min-w-0 break-words text-sm font-semibold text-foreground">
+                            {repo.name}
+                          </span>
+                          {selected && (
+                            <CheckCircle2
+                              size={16}
+                              className="shrink-0 text-primary"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </div>
+                        <p className="mt-1 break-all text-xs text-foreground-muted">
+                          {repo.full_name}
+                        </p>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-foreground-subtle">
+                          <span>{repo.language || "Language not reported"}</span>
+                          <span>{sourceDate(repo.updated_at)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {selectedRepo && (
+                <div className="mt-5 rounded-lg border border-border bg-background-secondary p-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="break-all text-xs font-semibold text-foreground">
+                        {selectedRepo.full_name}
+                      </p>
+                      <p className="mt-1 text-xs text-foreground-muted">
+                        Review will use the branch selected below.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <div>
+                        <label htmlFor="repository-branch" className="text-xs font-medium text-foreground">
+                          Branch
+                        </label>
+                        <div className="relative mt-1.5">
+                          <select
+                            id="repository-branch"
+                            value={branch}
+                            onChange={(event) => setBranch(event.target.value)}
+                            disabled={loadingBranches}
+                            className="min-h-11 min-w-40 appearance-none rounded-lg border border-border bg-card py-2 pl-3 pr-9 text-sm font-medium text-foreground outline-none focus:border-primary disabled:opacity-60"
+                          >
+                            {branches.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown
+                            size={14}
+                            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-foreground-muted"
+                            aria-hidden="true"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void inspectRepository()}
+                        disabled={isReviewing || loadingBranches}
+                        className="ops-primary disabled:opacity-60"
+                      >
+                        {isReviewing ? (
+                          <>
+                            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                            Reviewing…
+                          </>
+                        ) : (
+                          <>
+                            Review source
+                            <ArrowRight size={15} aria-hidden="true" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  {branchError && (
+                    <p role="status" className="mt-3 text-xs leading-5 text-warning">
+                      {branchError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      ) : (
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-7">
+          <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success-subtle px-2.5 py-1 text-[10px] font-semibold text-success">
+                <CheckCircle2 size={12} aria-hidden="true" />
+                Plan generated
+              </span>
+              <h1 className="mt-3 break-words text-xl font-semibold text-foreground">
+                {sourceName || "Imported source"}
+              </h1>
+              <p className="mt-1 text-sm leading-6 text-foreground-muted">
+                Repository evidence and a proposed infrastructure plan are ready for review.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setReview(null);
+                setProjectId(null);
+                setInfrastructurePlan(null);
+                setError(null);
+              }}
+              className="ops-secondary shrink-0"
+            >
+              <ArrowLeft size={15} aria-hidden="true" />
+              Change source
+            </button>
+          </div>
+
+          <dl className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <ReviewFact label="Application type" value={review.applicationType || "Not identified"} />
+            <ReviewFact label="Framework" value={review.framework || "Not identified"} />
+            <ReviewFact
+              label="Target cloud"
+              value={infrastructurePlan?.plan.cloud || "Not reported"}
+            />
+            <ReviewFact
+              label="Region"
+              value={infrastructurePlan?.plan.region_label || infrastructurePlan?.region || "Not reported"}
+            />
+          </dl>
+
+          {review.explanation && (
+            <div className="mt-4 rounded-lg border border-primary/20 bg-primary-subtle p-4">
+              <h2 className="text-xs font-semibold text-primary">Analysis summary</h2>
+              <p className="mt-1.5 text-sm leading-6 text-foreground-muted">
+                {review.explanation}
+              </p>
+              <p className="mt-2 text-[11px] leading-5 text-foreground-subtle">
+                Confirm this generated summary against the source and plan before approval.
+              </p>
+            </div>
+          )}
+
+          <div className="mt-4 rounded-lg border border-border bg-surface-subtle p-4">
+            <h2 className="text-xs font-semibold text-foreground">
+              Environment variable names
+            </h2>
+            {review.environmentVariables.length > 0 ? (
+              <>
+                <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                  Values are not shown here. Add required values through project settings.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {review.environmentVariables.map((variable) => (
+                    <code
+                      key={variable}
+                      className="rounded-md border border-border bg-card px-2 py-1 text-[11px] text-foreground"
+                    >
+                      {variable}
+                    </code>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                No environment variable names were found in the analysis response.
+              </p>
+            )}
+          </div>
+
+          {infrastructurePlan && (
+            <div className="mt-4 rounded-lg border border-border p-4">
+              <h2 className="text-xs font-semibold text-foreground">
+                Proposed infrastructure components
+              </h2>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {infrastructurePlan.plan.components.length > 0 ? (
+                  infrastructurePlan.plan.components.slice(0, 8).map((component) => (
+                    <span
+                      key={component.id}
+                      className="rounded-md border border-border bg-surface-subtle px-2.5 py-1.5 text-xs font-medium text-foreground"
+                    >
+                      {component.service}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-foreground-muted">
+                    No components were returned.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 flex flex-col gap-4 rounded-xl border border-success/25 bg-success-subtle p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex gap-3">
+              <ShieldCheck
+                size={20}
+                className="mt-0.5 shrink-0 text-success"
+                aria-hidden="true"
+              />
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">
+                  Approval is required before deployment
+                </h2>
+                <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                  Review resource choices, unresolved questions, and cost-validation status in the plan.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={openInfrastructurePlan}
+              disabled={!infrastructurePlan}
+              className="ops-primary shrink-0 disabled:opacity-60"
+            >
+              Review infrastructure plan
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
+          </div>
         </section>
+      )}
+    </div>
+  );
+}
 
-        {githubConnected && <section className="rounded-2xl border border-border bg-card p-5 shadow-sm"><div className="flex flex-col gap-3 border-b border-border/60 pb-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-base font-bold text-foreground">Choose a repository</h2><p className="mt-0.5 text-xs text-foreground-muted">Only the repository you select is used for this application.</p></div><label className="flex w-full items-center gap-2 rounded-lg border border-border bg-background-secondary px-3 py-2 sm:w-64"><Search size={14} className="text-foreground-muted" /><input value={repoSearch} onChange={(event) => setRepoSearch(event.target.value)} placeholder="Find a repository" className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-foreground-muted" /></label></div>
-          {loadingRepos ? <div className="flex h-40 items-center justify-center"><Loader2 size={20} className="animate-spin text-primary" /></div> : repos.length === 0 ? <div className="py-10 text-center"><FolderGit2 size={28} className="mx-auto text-foreground-muted/40" /><p className="mt-3 text-sm text-foreground-muted">No repositories found.</p></div> : <div className="mt-4 grid gap-2 sm:grid-cols-2">{repos.map((repo) => <button key={repo.id} onClick={() => chooseRepository(repo)} className={`rounded-xl border p-4 text-left transition ${selectedRepo?.id === repo.id ? "border-primary bg-primary/5" : "border-border hover:border-border-hover hover:bg-card-hover/40"}`}><div className="flex items-center justify-between gap-3"><span className="truncate text-sm font-bold text-foreground">{repo.name}</span>{selectedRepo?.id === repo.id && <CheckCircle2 size={16} className="shrink-0 text-primary" />}</div><p className="mt-1 truncate text-xs text-foreground-muted">{repo.full_name}</p><div className="mt-3 flex items-center justify-between text-[10px] font-medium text-foreground-muted"><span>{repo.language || "Code repository"}</span><span>{sourceDate(repo.updated_at)}</span></div></button>)}</div>}
-          {selectedRepo && <div className="mt-5 flex flex-col gap-3 rounded-xl bg-background-secondary p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold text-foreground">{selectedRepo.full_name}</p><p className="mt-0.5 text-[11px] text-foreground-muted">You can change this before review.</p></div><div className="flex items-center gap-2">{loadingBranches ? <Loader2 size={15} className="animate-spin text-primary" /> : <div className="relative"><select value={branch} onChange={(event) => setBranch(event.target.value)} className="appearance-none rounded-lg border border-border bg-card py-2 pl-3 pr-8 text-xs font-semibold text-foreground outline-none">{branches.map((option) => <option key={option}>{option}</option>)}</select><ChevronDown size={13} className="pointer-events-none absolute right-2.5 top-2.5 text-foreground-muted" /></div>}<button onClick={inspectRepository} disabled={isReviewing || loadingBranches} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-white transition hover:bg-primary-hover disabled:opacity-60">{isReviewing ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />} Review app</button></div></div>}
-        </section>}
-      </>}
-
-      {review && <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-7"><div className="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-start sm:justify-between"><div><span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-[10px] font-bold text-success"><CheckCircle2 size={12} /> ARCHITECTURE READY</span><h2 className="mt-3 text-xl font-bold text-foreground">{sourceName}</h2><p className="mt-1 text-sm text-foreground-muted">We&apos;ve translated the repository evidence into an Azure architecture. Implementation details stay in the background.</p></div><button onClick={() => { setReview(null); setInfrastructurePlan(null); setError(null); }} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-foreground-muted transition hover:bg-card-hover"><ArrowLeft size={14} /> Change source</button></div>
-        <div className="mt-6 grid gap-4 md:grid-cols-3"><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Application</p><p className="mt-2 text-sm font-bold text-foreground">{review.applicationType || "Application detected"}</p></div><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Framework</p><p className="mt-2 text-sm font-bold text-foreground">{review.framework || "Detected during setup"}</p></div><div className="rounded-xl bg-background-secondary p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-foreground-muted">Preparation</p><p className="mt-2 text-sm font-bold text-foreground">{review.estimatedBuildTime || "Ready to launch"}</p></div></div>
-        {review.explanation && <div className="mt-4 rounded-xl border border-primary/15 bg-primary/[0.04] p-4"><p className="text-xs font-bold text-primary">What we&apos;ll handle</p><p className="mt-1.5 text-sm leading-6 text-foreground-muted">{review.explanation}</p></div>}
-        <div className="mt-4 rounded-xl border border-border bg-background-secondary/60 p-4"><p className="text-xs font-bold text-foreground">Configuration</p>{review.environmentVariables.length > 0 ? <><p className="mt-1 text-xs text-foreground-muted">Add these values after launch if your application requires them.</p><div className="mt-3 flex flex-wrap gap-2">{review.environmentVariables.map((variable) => <span key={variable} className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11px] text-foreground-muted">{variable}</span>)}</div></> : <p className="mt-1 text-xs text-foreground-muted">No configuration values were detected.</p>}</div>
-        {infrastructurePlan && <div className="mt-4 rounded-xl border border-primary/20 bg-primary/[0.04] p-4"><p className="text-[10px] font-bold uppercase tracking-wide text-primary">AI infrastructure plan</p><div className="mt-3 flex flex-wrap gap-2">{infrastructurePlan.plan.components.slice(0, 6).map((component) => <span key={component.id} className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-foreground">{component.service}</span>)}</div><p className="mt-3 text-xs leading-5 text-foreground-muted">Review resource choices, cost-validation status, and approval controls before deployment.</p></div>}
-        <div className="mt-6 flex flex-col gap-4 rounded-xl border border-success/20 bg-success/[0.04] p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldCheck size={20} className="mt-0.5 shrink-0 text-success" /><div><p className="text-sm font-bold text-foreground">You approve the architecture before launch.</p><p className="mt-1 text-xs leading-5 text-foreground-muted">Review cloud decisions now. ZeroOps will only start the deployment workflow after you approve the plan.</p></div></div><button onClick={openInfrastructurePlan} disabled={!infrastructurePlan} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:opacity-60"><ArrowRight size={16} /> Review architecture plan</button></div>
-      </motion.section>}
+function ReviewFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-subtle p-4">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-foreground-muted">
+        {label}
+      </dt>
+      <dd className="mt-2 break-words text-sm font-semibold text-foreground">{value}</dd>
     </div>
   );
 }

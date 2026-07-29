@@ -1,19 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
-import { Circle, Eye, EyeOff, ArrowRight, Mail, Loader2, Smartphone } from "lucide-react";
 import Link from "next/link";
-import { isEmailVerificationPending, isPhoneVerificationPending, useAuth } from "@/lib/AuthContext";
-import { getErrorMessage } from "@/lib/api";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  Loader2,
+  MailCheck,
+} from "lucide-react";
+import { BrandMark } from "@/components/BrandMark";
+import { isEmailVerificationPending, useAuth } from "@/lib/AuthContext";
+import { api, getErrorMessage } from "@/lib/api";
+
+const PENDING_EMAIL_KEY = "zeroops.pendingVerificationEmail";
 
 export default function SignupPage() {
-  const { signup, verifyEmail, verifyPhone, resendVerification, resendPhoneVerification, loginWithGitHub, loginWithGoogle } = useAuth();
-  const router = useRouter();
+  const { signup, loginWithGitHub, loginWithGoogle } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
-  const [isGitHubRedirecting, setIsGitHubRedirecting] = useState(false);
-  const [isGoogleRedirecting, setIsGoogleRedirecting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [oauthProvider, setOauthProvider] = useState<"github" | "google" | null>(null);
+  const [checkEmail, setCheckEmail] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -21,573 +32,365 @@ export default function SignupPage() {
     phoneNumber: "",
     password: "",
   });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  
-  // Verification states
-  const [verifyStep, setVerifyStep] = useState<"none" | "email" | "phone">("none");
-  const [otpCode, setOtpCode] = useState("");
-  const [phoneHint, setPhoneHint] = useState("");
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [isResending, setIsResending] = useState(false);
-  const [resendSuccess, setResendSuccess] = useState(false);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+  const updateField = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = event.target;
+    setFormData((current) => ({ ...current, [name]: value }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const rememberPendingEmail = (address: string) => {
+    try {
+      sessionStorage.setItem(PENDING_EMAIL_KEY, address);
+    } catch {
+      // The verification page also accepts the email manually.
+    }
+  };
+
+  const submitSignup = async (event: React.FormEvent) => {
+    event.preventDefault();
     setIsSubmitting(true);
     setError(null);
+    setNotice(null);
     try {
-      const res = await signup(
-        formData.firstName,
-        formData.lastName,
-        formData.email,
-        formData.phoneNumber,
-        formData.password
+      const result = await signup(
+        formData.firstName.trim(),
+        formData.lastName.trim(),
+        formData.email.trim(),
+        formData.phoneNumber.trim(),
+        formData.password,
       );
-      if (isEmailVerificationPending(res)) {
-        setVerifyStep("email");
-        setOtpCode("");
+      if (isEmailVerificationPending(result)) {
+        setFormData((current) => ({
+          ...current,
+          email: result.email,
+          password: "",
+        }));
+        rememberPendingEmail(result.email);
+        setCheckEmail(true);
       }
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, "Failed to create account"));
+    } catch (signupError) {
+      setError(getErrorMessage(signupError, "The account could not be created."));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleVerifyEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsVerifying(true);
-    setError(null);
-    setResendSuccess(false);
-    try {
-      const result = await verifyEmail(formData.email, otpCode);
-      if (isPhoneVerificationPending(result)) {
-        setPhoneHint(result.phone_hint);
-        setVerifyStep("phone");
-        setOtpCode("");
-      } else {
-        router.replace("/login?verified=true");
-      }
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, "Invalid or expired verification code"));
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleVerifyPhone = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsVerifying(true);
-    setError(null);
-    setResendSuccess(false);
-    try {
-      await verifyPhone(otpCode);
-      router.replace("/login?verified=true");
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, "Invalid or expired phone verification code"));
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleResendEmailOtp = async () => {
+  const resendVerificationLink = async () => {
     setIsResending(true);
     setError(null);
-    setResendSuccess(false);
+    setNotice(null);
     try {
-      await resendVerification(formData.email);
-      setResendSuccess(true);
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, "Failed to resend email code"));
+      await api.resendVerification(formData.email.trim());
+      setNotice(
+        "If this address can be verified, a new verification link has been sent.",
+      );
+    } catch (resendError) {
+      setError(
+        getErrorMessage(resendError, "A new verification link could not be requested."),
+      );
     } finally {
       setIsResending(false);
     }
-  };
-
-  const handleResendPhoneOtp = async () => {
-    setIsResending(true);
-    setError(null);
-    setResendSuccess(false);
-    try {
-      const res = await resendPhoneVerification();
-      setPhoneHint(res.phone_hint);
-      setResendSuccess(true);
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, "Failed to resend phone code"));
-    } finally {
-      setIsResending(false);
-    }
-  };
-
-  // Stagger container animation for left column content
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.15,
-        delayChildren: 0.2,
-      },
-    },
-  };
-
-  // Fade in and slide up animation for children
-  const itemVariants = {
-    hidden: { opacity: 0, y: 10 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.5, ease: "easeOut" as const },
-    },
   };
 
   return (
-    <main id="main-content" className="dark flex min-h-screen w-full bg-background selection:bg-primary/30 p-2 transition-all duration-500 lg:h-screen lg:overflow-hidden lg:p-4 text-foreground">
-      {/* Left Column (Hero & Video Background) */}
-      <div className="w-[52%] hidden lg:flex relative flex-col items-center justify-end pb-32 px-12 rounded-3xl overflow-hidden shadow-2xl h-full border border-border/10 dark">
-        {/* Background Video */}
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover"
-        >
-          <source
-            src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260506_081238_406ed0e3-5d83-436e-a512-0bbff7ec5b95.mp4"
-            type="video/mp4"
-          />
-        </video>
+    <main
+      id="main-content"
+      className="min-h-dvh bg-background lg:grid lg:grid-cols-[minmax(320px,0.8fr)_minmax(520px,1.2fr)]"
+    >
+      <AuthAside />
 
-        {/* Staggered Animations Content Overlay */}
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="relative z-10 w-full max-w-xs space-y-8 text-left"
-        >
-          {/* Brand/Logo */}
-          <motion.div variants={itemVariants} className="flex items-center gap-2.5">
-            <Circle className="fill-white text-white w-6 h-6" />
-            <span className="text-xl font-semibold tracking-tight text-white">
-              ZeroOps
-            </span>
-          </motion.div>
+      <div className="flex min-h-dvh items-center justify-center px-4 py-10 sm:px-8 lg:px-12">
+        <div className="w-full max-w-lg">
+          <div className="mb-8 lg:hidden">
+            <BrandMark />
+          </div>
 
-          {/* Heading Block */}
-          <motion.div variants={itemVariants} className="space-y-2">
-            <h1 className="text-4xl font-medium tracking-tight whitespace-nowrap text-white">
-              Join ZeroOps
-            </h1>
-            <p className="text-white/60 text-sm leading-relaxed px-4">
-              Follow these 3 quick phases to activate your space.
+          <div className="mb-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">
+              Account setup
             </p>
-          </motion.div>
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-foreground">
+              {checkEmail ? "Check your email" : "Create your account"}
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-foreground-muted">
+              {checkEmail
+                ? `Open the single-use verification link sent to ${formData.email}.`
+                : "Create a local account, or continue through a configured identity provider."}
+            </p>
+          </div>
 
-          {/* Steps list */}
-          <motion.div variants={itemVariants} className="space-y-4">
-            <StepItem number={1} text="Register your identity" active />
-            <StepItem number={2} text="Configure your studio" />
-            <StepItem number={3} text="Finalize your profile" />
-          </motion.div>
-        </motion.div>
-      </div>
-
-      {/* Right Column (Sign Up Form) */}
-      <div className="flex-1 flex flex-col items-center justify-center py-12 lg:py-6 px-4 sm:px-12 lg:px-16 xl:px-24 overflow-y-auto lg:overflow-hidden relative">
-
-        {/* Sign Up Form Content */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
-          className="w-full max-w-xl space-y-8 lg:space-y-6 sm:space-y-10"
-        >
-          {verifyStep !== "none" ? (
-            <div className="flex flex-col items-center justify-center text-center space-y-6 py-6 w-full">
-              <div className="h-16 w-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-                {verifyStep === "email" ? (
-                  <Mail className="h-8 w-8 animate-bounce" />
-                ) : (
-                  <Smartphone className="h-8 w-8 animate-bounce" />
-                )}
-              </div>
-              
-              <div className="space-y-2">
-                <h2 className="text-3xl font-medium tracking-tight text-white">
-                  {verifyStep === "email" ? "Verify your email" : "Verify your phone"}
-                </h2>
-                <p className="text-slate-400 text-sm max-w-sm mx-auto leading-relaxed">
-                  {verifyStep === "email" ? (
-                    <>We sent a verification code to <span className="font-semibold text-white">{formData.email}</span>. Please enter the code below.</>
-                  ) : (
-                    <>We sent a verification code to <span className="font-semibold text-white">{phoneHint}</span>. Please enter the code below.</>
-                  )}
-                </p>
-              </div>
-
-              {error && (
-                <div role="alert" aria-live="assertive" className="w-full p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium text-left">
-                  {error}
-                </div>
-              )}
-
-              {resendSuccess && (
-                <div className="w-full p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-xl text-xs font-medium text-left">
-                  A new verification code has been sent.
-                </div>
-              )}
-
-              <form onSubmit={verifyStep === "email" ? handleVerifyEmail : handleVerifyPhone} className="w-full space-y-4 text-left">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-2" htmlFor="verification-otp-code">Verification code</label>
-                  <input
-                    id="verification-otp-code"
-                    type="text"
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    placeholder="123456"
-                    required
-                    autoFocus
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-center font-mono text-lg tracking-[0.3em] text-white placeholder:tracking-normal placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
-                  />
-                </div>
-                
-                <button
-                  type="submit"
-                  disabled={isVerifying || otpCode.length !== 6}
-                  className="w-full flex min-h-12 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isVerifying ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>Verify and Continue <ArrowRight className="h-4 w-4" /></>
-                  )}
-                </button>
-              </form>
-
-              <div className="flex flex-col gap-3 w-full pt-2">
-                <button
-                  type="button"
-                  disabled={isResending}
-                  onClick={verifyStep === "email" ? handleResendEmailOtp : handleResendPhoneOtp}
-                  className="text-xs font-semibold text-primary hover:underline disabled:opacity-60"
-                >
-                  {isResending ? "Sending..." : "Resend code"}
-                </button>
-                
-                <button
-                  type="button"
-                  onClick={() => { setVerifyStep("none"); setError(null); setResendSuccess(false); }}
-                  className="text-xs font-semibold text-slate-400 hover:text-white transition"
-                >
-                  Cancel and Edit Details
-                </button>
-              </div>
+          {error && (
+            <div
+              role="alert"
+              className="mb-4 rounded-lg border border-danger/25 bg-danger-subtle p-3 text-sm leading-5 text-danger"
+            >
+              {error}
             </div>
+          )}
+          {notice && (
+            <div
+              role="status"
+              className="mb-4 flex gap-2 rounded-lg border border-success/25 bg-success-subtle p-3 text-sm leading-5 text-foreground"
+            >
+              <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+              <span>{notice}</span>
+            </div>
+          )}
+
+          {checkEmail ? (
+            <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+              <MailCheck size={26} className="text-primary" aria-hidden="true" />
+              <h2 className="mt-3 text-sm font-semibold text-foreground">
+                Verify before signing in
+              </h2>
+              <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
+                The verification link expires and can only be used once. Phone verification follows
+                only when a phone number was provided and the backend requires that step.
+              </p>
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => void resendVerificationLink()}
+                  disabled={isResending}
+                  className="ops-primary flex-1 disabled:opacity-60"
+                >
+                  {isResending && (
+                    <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                  )}
+                  Request new link
+                </button>
+                <Link href="/login" className="ops-secondary flex-1">
+                  Go to sign in
+                </Link>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCheckEmail(false);
+                  setError(null);
+                  setNotice(null);
+                }}
+                className="mt-4 min-h-11 text-sm font-medium text-primary hover:underline"
+              >
+                Edit account details
+              </button>
+            </section>
           ) : (
             <>
-              {/* Header */}
-              <div className="space-y-2 text-left w-full">
-                <h2 className="text-3xl font-medium tracking-tight text-foreground">
-                  Create New Profile
-                </h2>
-                <p className="text-foreground-muted text-sm">
-                  Input your basic details to begin the journey.
-                </p>
-              </div>
-
-              {/* Social login buttons */}
-              <div className="grid grid-cols-2 gap-4 w-full">
-                <SocialButton
-                  icon={ChromeIcon}
-                  label={isGoogleRedirecting ? "Redirecting..." : "Google"}
-                  disabled={isGoogleRedirecting}
-                  loading={isGoogleRedirecting}
-                  onClick={() => {
-                    setIsGoogleRedirecting(true);
-                    loginWithGoogle();
-                  }}
-                />
+              <div className="grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => {
-                    setIsGitHubRedirecting(true);
+                    setOauthProvider("google");
+                    loginWithGoogle();
+                  }}
+                  disabled={oauthProvider !== null}
+                  className="ops-secondary w-full disabled:opacity-60"
+                >
+                  {oauthProvider === "google" && (
+                    <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                  )}
+                  Continue with Google
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOauthProvider("github");
                     loginWithGitHub();
                   }}
-                  disabled={isGitHubRedirecting}
-                  className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
+                  disabled={oauthProvider !== null}
+                  className="ops-secondary w-full disabled:opacity-60"
                 >
-                  {isGitHubRedirecting ? (
-                    <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <GithubIcon size={18} />
+                  {oauthProvider === "github" && (
+                    <Loader2 size={15} className="animate-spin" aria-hidden="true" />
                   )}
-                  <span className="text-sm">{isGitHubRedirecting ? "Redirecting..." : "GitHub"}</span>
+                  Continue with GitHub
                 </button>
               </div>
+              <p className="mt-2 text-center text-[11px] leading-5 text-foreground-muted">
+                Provider sign-up is available only when its backend credentials are configured.
+              </p>
 
-              {/* Divider */}
-              <div className="relative w-full flex py-2 items-center justify-center">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border/40"></div>
-                </div>
-                <span className="relative z-10 bg-background px-4 text-xs font-medium text-foreground-muted uppercase tracking-widest">
-                  Or
+              <div className="my-6 flex items-center gap-3" aria-hidden="true">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-[11px] font-medium uppercase tracking-wide text-foreground-subtle">
+                  or
                 </span>
+                <span className="h-px flex-1 bg-border" />
               </div>
 
-              {/* Form */}
-              <form onSubmit={handleSubmit} className="space-y-4 w-full text-left">
-                {error && (
-                  <div role="alert" aria-live="assertive" className="p-3 bg-danger/10 border border-danger/25 text-danger rounded-xl text-xs font-medium">
-                    {error}
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-4">
-                  <InputGroup
-                    label="First Name"
-                    placeholder="John"
-                    type="text"
+              <form onSubmit={submitSignup} className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field
+                    id="signup-first-name"
+                    label="First name"
                     name="firstName"
-                    value={formData.firstName}
-                    onChange={handleInputChange}
-                    autoComplete="given-name"
-                    required
-                  />
-                  <InputGroup
-                    label="Last Name"
-                    placeholder="Doe"
                     type="text"
+                    autoComplete="given-name"
+                    value={formData.firstName}
+                    onChange={updateField}
+                  />
+                  <Field
+                    id="signup-last-name"
+                    label="Last name"
                     name="lastName"
-                    value={formData.lastName}
-                    onChange={handleInputChange}
+                    type="text"
                     autoComplete="family-name"
-                    required
+                    value={formData.lastName}
+                    onChange={updateField}
                   />
                 </div>
-
-                <InputGroup
-                  label="Email"
-                  placeholder="name@company.com"
-                  type="email"
+                <Field
+                  id="signup-email"
+                  label="Email address"
                   name="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
+                  type="email"
                   autoComplete="email"
+                  value={formData.email}
+                  onChange={updateField}
                   required
                 />
-
-                <InputGroup
-                  label="Mobile number"
-                  placeholder="+14155552671"
-                  type="tel"
+                <Field
+                  id="signup-phone"
+                  label="Phone number (optional)"
                   name="phoneNumber"
-                  value={formData.phoneNumber}
-                  onChange={handleInputChange}
+                  type="tel"
                   autoComplete="tel"
                   inputMode="tel"
                   pattern="\+[1-9][0-9]{7,14}"
-                  helperText="Use international format. We will send a one-time verification code after email confirmation."
-                  required
+                  value={formData.phoneNumber}
+                  onChange={updateField}
+                  helper="If provided, use international format such as +14155552671."
                 />
-
-                <InputGroup
+                <Field
+                  id="signup-password"
                   label="Password"
-                  placeholder="••••••••"
-                  type={showPassword ? "text" : "password"}
                   name="password"
-                  value={formData.password}
-                  onChange={handleInputChange}
+                  type={showPassword ? "text" : "password"}
                   autoComplete="new-password"
                   minLength={12}
+                  maxLength={128}
+                  value={formData.password}
+                  onChange={updateField}
                   required
-                  helperText="Use 12+ characters with uppercase, lowercase, a number, and a symbol."
-                  rightElement={
+                  helper="Use at least 12 characters with uppercase, lowercase, a number, and a symbol."
+                  trailing={
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowPassword((visible) => !visible)}
                       aria-label={showPassword ? "Hide password" : "Show password"}
                       aria-pressed={showPassword}
-                      className="text-foreground-muted hover:text-foreground p-1 transition-colors focus:outline-none"
+                      className="grid h-10 w-10 place-items-center rounded-md text-foreground-muted transition-colors hover:bg-surface-subtle hover:text-foreground"
                     >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {showPassword ? (
+                        <EyeOff size={17} aria-hidden="true" />
+                      ) : (
+                        <Eye size={17} aria-hidden="true" />
+                      )}
                     </button>
                   }
                 />
 
-                {/* Submit Button */}
+                <p className="text-xs leading-5 text-foreground-muted">
+                  By creating an account, you agree to the{" "}
+                  <Link href="/terms" className="font-medium text-primary hover:underline">
+                    Terms
+                  </Link>{" "}
+                  and acknowledge the{" "}
+                  <Link href="/privacy" className="font-medium text-primary hover:underline">
+                    Privacy Policy
+                  </Link>
+                  .
+                </p>
+
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full h-14 bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl active:scale-[0.98] mt-4 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 glow-blue shadow-lg shadow-primary/20"
+                  className="ops-primary w-full disabled:opacity-60"
                 >
                   {isSubmitting ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <>
+                      <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                      Creating account…
+                    </>
                   ) : (
                     <>
-                      <span>Create Account</span>
-                      <ArrowRight size={16} />
+                      Create account
+                      <ArrowRight size={16} aria-hidden="true" />
                     </>
                   )}
                 </button>
               </form>
 
-              {/* Footer Link */}
-              <p className="text-sm text-foreground-muted text-center w-full">
-                Member of the team?{" "}
-                <Link
-                  href="/login"
-                  className="text-foreground font-medium hover:underline hover:text-primary transition-all"
-                >
-                  Log in
+              <p className="mt-7 text-center text-sm text-foreground-muted">
+                Already have an account?{" "}
+                <Link href="/login" className="font-semibold text-primary hover:underline">
+                  Sign in
                 </Link>
               </p>
             </>
           )}
-        </motion.div>
+        </div>
       </div>
     </main>
   );
 }
 
-// 1. StepItem Component
-function StepItem({
-  number,
-  text,
-  active = false,
-}: {
-  number: number;
-  text: string;
-  active?: boolean;
-}) {
+function AuthAside() {
   return (
-    <div
-      className={`flex items-center gap-4 px-4 py-3 rounded-2xl transition-all duration-300 w-full border ${
-        active
-          ? "bg-white text-black border-white shadow-lg"
-          : "bg-brand-gray text-white border-transparent"
-      }`}
-    >
-      <div
-        className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${
-          active ? "bg-black text-white" : "bg-white/10 text-white/40"
-        }`}
-      >
-        {number}
+    <aside className="relative hidden overflow-hidden border-r border-border bg-sidebar p-10 lg:flex lg:flex-col lg:justify-between xl:p-14">
+      <div className="pointer-events-none absolute inset-0 ops-page-grid opacity-55" aria-hidden="true" />
+      <BrandMark className="relative z-10 w-fit" />
+      <div className="relative z-10 max-w-md">
+        <p className="ops-kicker">Review-first deployment</p>
+        <h2 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-foreground xl:text-5xl">
+          Start from source evidence.
+        </h2>
+        <p className="mt-5 text-sm leading-6 text-foreground-muted">
+          Connect a GitHub repository or upload a ZIP, then inspect and approve the proposed
+          Azure App Service plan before deployment.
+        </p>
+        <div className="mt-8 rounded-xl border border-border bg-card/80 p-4 text-xs leading-5 text-foreground-muted shadow-sm">
+          ZeroOps does not deploy until the infrastructure plan is approved.
+        </div>
       </div>
-      <span className="text-sm font-medium tracking-wide">{text}</span>
-    </div>
+      <p className="relative z-10 text-xs text-foreground-subtle">
+        Local signup requires working email delivery; optional phone verification depends on backend configuration.
+      </p>
+    </aside>
   );
 }
 
-// 2. SocialButton Component
-function SocialButton({
-  icon: Icon,
-  label,
-  onClick,
-  disabled,
-  loading,
-}: {
-  icon: React.ComponentType<{ size?: number }>;
+type FieldProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  id: string;
   label: string;
-  onClick?: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex items-center justify-center gap-2.5 h-12 bg-card hover:bg-card-hover border border-border/80 text-foreground font-medium rounded-xl transition-all duration-200 w-full cursor-pointer focus:ring-2 focus:ring-primary/25 disabled:opacity-60"
-    >
-      {loading ? (
-        <div className="w-4 h-4 border-2 border-foreground-muted border-t-transparent rounded-full animate-spin" />
-      ) : (
-        <Icon size={18} />
-      )}
-      <span className="text-sm">{label}</span>
-    </button>
-  );
-}
+  helper?: string;
+  trailing?: React.ReactNode;
+};
 
-// Custom SVGs for Chrome/Google and GitHub (since brand icons aren't in this lucide version)
-function ChromeIcon({ size = 18 }: { size?: number }) {
+function Field({ id, label, helper, trailing, ...props }: FieldProps) {
+  const helperId = helper ? `${id}-helper` : undefined;
   return (
-    <svg
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <circle cx="12" cy="12" r="4" />
-      <line x1="21.17" y1="8" x2="12" y2="8" />
-      <line x1="3.95" y1="6.06" x2="8.54" y2="14" />
-      <line x1="10.88" y1="21.94" x2="15.46" y2="14" />
-    </svg>
-  );
-}
-
-function GithubIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill="currentColor"
-    >
-      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
-    </svg>
-  );
-}
-
-// 3. InputGroup Component
-interface InputGroupProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  label: string;
-  helperText?: string;
-  rightElement?: React.ReactNode;
-}
-
-function InputGroup({
-  label,
-  helperText,
-  rightElement,
-  ...props
-}: InputGroupProps) {
-  const inputId = props.id || props.name;
-  return (
-    <div className="flex flex-col gap-2 w-full">
-      <label htmlFor={inputId} className="text-sm font-medium text-foreground">{label}</label>
-      <div className="relative w-full">
+    <div>
+      <label htmlFor={id} className="text-sm font-medium text-foreground">
+        {label}
+      </label>
+      <div className="relative mt-2">
         <input
           {...props}
-          id={inputId}
-          className="w-full bg-brand-gray border border-border/40 rounded-xl h-11 px-4 text-foreground placeholder:text-foreground-muted/40 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all duration-200"
+          id={id}
+          aria-describedby={helperId}
+          className={`min-h-12 w-full rounded-lg border border-border bg-card px-3 text-base text-foreground outline-none transition-colors placeholder:text-foreground-subtle focus:border-primary sm:text-sm ${
+            trailing ? "pr-12" : ""
+          }`}
         />
-        {rightElement && (
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
-            {rightElement}
-          </div>
-        )}
+        {trailing && <div className="absolute right-1 top-1/2 -translate-y-1/2">{trailing}</div>}
       </div>
-      {helperText && (
-        <p className="text-[11px] text-foreground-muted">{helperText}</p>
+      {helper && (
+        <p id={helperId} className="mt-1.5 text-xs leading-5 text-foreground-muted">
+          {helper}
+        </p>
       )}
     </div>
   );

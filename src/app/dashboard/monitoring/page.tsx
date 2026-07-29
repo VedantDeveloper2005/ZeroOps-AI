@@ -1,117 +1,239 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { Activity, AlertTriangle, Loader2, Wifi } from "lucide-react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Activity, Clock3, Gauge, Loader2, RefreshCw, Server } from "lucide-react";
+import { MetricCard } from "@/components/ui/MetricCard";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, type TelemetryMetric } from "@/lib/api";
+import { api, getErrorMessage, type TelemetryMetric } from "@/lib/api";
+
+function hasRecordedTelemetry(metrics: TelemetryMetric | null) {
+  if (!metrics) return false;
+  return (
+    metrics.cpu.length > 0 ||
+    metrics.memory.length > 0 ||
+    metrics.response_time !== "No data" ||
+    metrics.error_rate !== "No data" ||
+    metrics.uptime !== "No data"
+  );
+}
+
+function latestValue(samples: { time: string; value: number }[]) {
+  const latest = samples.at(-1);
+  return latest ? `${latest.value.toFixed(1)}%` : "Not recorded";
+}
 
 export default function MonitoringPage() {
+  return (
+    <Suspense fallback={<MonitoringLoading />}>
+      <MonitoringWorkspace />
+    </Suspense>
+  );
+}
+
+function MonitoringWorkspace() {
+  const searchParams = useSearchParams();
   const { projects, isLoading: projectsLoading } = useNotifications();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [metrics, setMetrics] = useState<TelemetryMetric | null>(null);
-  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (projects.length > 0 && !selectedProjectId) {
+    const requestedProject = searchParams.get("project");
+    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
+      setSelectedProjectId(requestedProject);
+      return;
+    }
+    if (!selectedProjectId && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, searchParams, selectedProjectId]);
+
+  const loadMetrics = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setMetrics(await api.getProjectMetrics(projectId));
+    } catch (requestError) {
+      setMetrics(null);
+      setError(getErrorMessage(requestError, "Runtime metrics could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!selectedProjectId) return;
-    async function loadTelemetry() {
-      setMetricsLoading(true);
-      try {
-        const data = await api.getProjectMetrics(selectedProjectId);
-        setMetrics(data);
-      } catch {
-        setMetrics(null);
-      } finally {
-        setMetricsLoading(false);
-      }
-    }
-    loadTelemetry();
-  }, [selectedProjectId]);
+    void loadMetrics(selectedProjectId);
+  }, [loadMetrics, selectedProjectId]);
 
-  if (projectsLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-foreground-muted text-sm font-medium">Loading monitoring overview...</p>
-      </div>
-    );
-  }
+  const sampleRows = useMemo(() => {
+    const times = new Set([
+      ...(metrics?.cpu.map((sample) => sample.time) ?? []),
+      ...(metrics?.memory.map((sample) => sample.time) ?? []),
+    ]);
+    return Array.from(times)
+      .map((time) => ({
+        time,
+        cpu: metrics?.cpu.find((sample) => sample.time === time)?.value,
+        memory: metrics?.memory.find((sample) => sample.time === time)?.value,
+      }))
+      .slice(-8)
+      .reverse();
+  }, [metrics]);
+
+  if (projectsLoading) return <MonitoringLoading />;
 
   if (projects.length === 0) {
     return (
-      <div className="bg-card border border-border rounded-2xl p-10 text-center space-y-3">
-        <AlertTriangle className="w-10 h-10 mx-auto text-foreground-muted/40" />
-        <h3 className="text-sm font-bold text-foreground">No applications to monitor</h3>
-        <p className="text-xs text-foreground-muted">Deploy an application to unlock health metrics.</p>
-      </div>
+      <StatePanel
+        title="No projects to monitor"
+        description="Connect a repository or upload an application before reviewing deployment telemetry."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
     );
   }
 
-  const errVal = metrics?.error_rate && metrics.error_rate !== "No data" ? parseFloat(metrics.error_rate) : null;
-  const healthStatus = errVal == null
-    ? { label: "No data", color: "text-foreground-muted" }
-    : errVal > 5
-      ? { label: "Critical", color: "text-danger" }
-      : errVal > 1
-        ? { label: "Warning", color: "text-warning" }
-        : { label: "Healthy", color: "text-success" };
-
-  const cards = [
-    { label: "Application Health", value: healthStatus.label, color: healthStatus.color, icon: Activity },
-    { label: "Response Time", value: metrics?.response_time || "—", color: "text-primary", icon: Activity },
-    { label: "Availability", value: metrics?.uptime || "—", color: "text-success", icon: Wifi },
-    { label: "Requests", value: metrics?.request_count ? metrics.request_count.toLocaleString() : "—", color: "text-info", icon: Activity },
-    { label: "Errors", value: metrics?.error_rate || "—", color: "text-warning", icon: AlertTriangle },
-  ];
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const recorded = hasRecordedTelemetry(metrics);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-card border border-border rounded-xl p-4 shadow-sm">
-        <div>
-          <h2 className="text-sm font-bold text-foreground">Application Health</h2>
-          <p className="text-[10px] text-foreground-muted">Plain-language monitoring signals.</p>
-        </div>
-        <select
-          value={selectedProjectId}
-          onChange={(event) => setSelectedProjectId(event.target.value)}
-          className="bg-background-secondary border border-border text-xs rounded-lg px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold max-w-[240px]"
-        >
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.full_name}</option>
-          ))}
-        </select>
-      </div>
+      <PageHeader
+        eyebrow="Operations"
+        title="Runtime monitoring"
+        description="Recorded deployment metrics for your selected project. Values update only when the backend receives a new telemetry sample."
+        actions={
+          <button
+            type="button"
+            onClick={() => void loadMetrics(selectedProjectId)}
+            disabled={loading || !selectedProjectId}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-surface-raised disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        }
+      />
 
-      {metricsLoading ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3 bg-card border border-border rounded-xl shadow-sm">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <p className="text-xs text-foreground-muted">Loading health data...</p>
-        </div>
+      <ProjectSelector
+        projects={projects}
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        className="block max-w-sm"
+      />
+
+      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+
+      {error ? (
+        <StatePanel
+          variant="error"
+          title="Monitoring data is unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadMetrics(selectedProjectId) }}
+        />
+      ) : loading ? (
+        <MonitoringLoading compact />
+      ) : !recorded ? (
+        <StatePanel
+          variant="disconnected"
+          title="No runtime telemetry has been recorded"
+          description="A deployment record may exist, but ZeroOps has not received CPU, memory, request, latency, or error samples for this project. No health claim is made without those signals."
+        />
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          {cards.map((card, index) => (
-            <motion.div
-              key={card.label}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.04 }}
-              className="bg-card border border-border rounded-xl p-5 shadow-sm text-center"
-            >
-              <card.icon size={20} className={`${card.color} mx-auto mb-2`} />
-              <p className={`text-xl font-bold ${card.color}`}>{card.value}</p>
-              <p className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold mt-0.5">
-                {card.label}
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Runtime state"
+              value={metrics?.uptime ?? "Not recorded"}
+              supportingText="Latest deployment state reported with telemetry"
+              icon={Server}
+              tone="info"
+            />
+            <MetricCard
+              label="Response time"
+              value={metrics?.response_time ?? "Not recorded"}
+              supportingText="Average across recorded samples"
+              icon={Clock3}
+            />
+            <MetricCard
+              label="Request volume"
+              value={(metrics?.request_count ?? 0).toLocaleString()}
+              supportingText="Total requests across recorded samples"
+              icon={Activity}
+            />
+            <MetricCard
+              label="Error rate"
+              value={metrics?.error_rate ?? "Not recorded"}
+              supportingText="Average across recorded samples"
+              icon={Gauge}
+              tone={metrics?.error_rate === "No data" ? "neutral" : "warning"}
+            />
+          </div>
+
+          <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="border-b border-border px-4 py-4 sm:px-5">
+              <h2 className="text-sm font-semibold text-foreground">Recent resource samples</h2>
+              <p className="mt-1 text-xs text-foreground-muted">
+                Latest CPU and memory values stored for this project. Times are reported by the backend.
               </p>
-            </motion.div>
-          ))}
-        </div>
+            </div>
+            <div className="grid gap-3 border-b border-border bg-surface-subtle p-4 sm:grid-cols-2 sm:p-5">
+              <MetricCard label="Latest CPU" value={latestValue(metrics?.cpu ?? [])} icon={Gauge} />
+              <MetricCard label="Latest memory" value={latestValue(metrics?.memory ?? [])} icon={Server} />
+            </div>
+            {sampleRows.length === 0 ? (
+              <p className="px-5 py-8 text-center text-xs text-foreground-muted">
+                No CPU or memory samples are stored.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] text-left text-xs">
+                  <thead className="bg-surface-subtle text-foreground-muted">
+                    <tr>
+                      <th scope="col" className="px-5 py-3 font-medium">Recorded time</th>
+                      <th scope="col" className="px-5 py-3 font-medium">CPU</th>
+                      <th scope="col" className="px-5 py-3 font-medium">Memory</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {sampleRows.map((row) => (
+                      <tr key={row.time}>
+                        <td className="px-5 py-3 font-mono text-foreground">{row.time}</td>
+                        <td className="px-5 py-3 tabular-nums text-foreground-muted">
+                          {row.cpu == null ? "Not recorded" : `${row.cpu.toFixed(1)}%`}
+                        </td>
+                        <td className="px-5 py-3 tabular-nums text-foreground-muted">
+                          {row.memory == null ? "Not recorded" : `${row.memory.toFixed(1)}%`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
       )}
+    </div>
+  );
+}
+
+function MonitoringLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm font-medium text-foreground-muted ${
+        compact ? "min-h-52" : "min-h-[55vh]"
+      }`}
+    >
+      <Loader2 size={18} className="animate-spin text-primary" />
+      Loading recorded telemetry…
     </div>
   );
 }

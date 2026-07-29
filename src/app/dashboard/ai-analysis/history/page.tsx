@@ -1,418 +1,233 @@
 "use client";
 
-import { motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Brain,
-  Calendar,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Cpu,
-  Database,
-  HardDrive,
-  Loader2,
-  Shield,
-} from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { GaugeChart } from "@/components/ui/GaugeChart";
+import Link from "next/link";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { ChevronDown, ChevronUp, Clock3, Loader2 } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api, type AIAnalysis } from "@/lib/api";
+import { api, getErrorMessage, type AIAnalysis } from "@/lib/api";
+
+function formatTimestamp(value: string | null) {
+  if (!value) return "Time not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time not recorded";
+  return date.toLocaleString();
+}
 
 export default function AIAnalysisHistoryPage() {
-  const router = useRouter();
-  const { projects } = useNotifications();
+  return (
+    <Suspense fallback={<HistoryLoading />}>
+      <AnalysisHistory />
+    </Suspense>
+  );
+}
+
+function AnalysisHistory() {
+  const searchParams = useSearchParams();
+  const { projects, isLoading: projectsLoading } = useNotifications();
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [analyses, setAnalyses] = useState<AIAnalysis[]>([]);
-  const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Default to first project
   useEffect(() => {
-    if (projects.length > 0 && !selectedProject) {
-      setSelectedProject(projects[0].id);
+    const requestedProject = searchParams.get("project");
+    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
+      setSelectedProjectId(requestedProject);
+      return;
     }
-  }, [projects, selectedProject]);
+    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
+  }, [projects, searchParams, selectedProjectId]);
 
-  // Fetch history when project changes
-  useEffect(() => {
-    if (!selectedProject) return;
+  const loadHistory = useCallback(async (projectId: string) => {
+    if (!projectId) return;
     setLoading(true);
-    api
-      .getAIAnalysisHistory(selectedProject)
-      .then((data) => setAnalyses(data))
-      .catch(() => setAnalyses([]))
-      .finally(() => setLoading(false));
-  }, [selectedProject]);
+    setError(null);
+    try {
+      setAnalyses(await api.getAIAnalysisHistory(projectId));
+    } catch (requestError) {
+      setAnalyses([]);
+      setError(getErrorMessage(requestError, "Saved analysis history could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const formatDate = (iso: string | null) => {
-    if (!iso) return "Unknown";
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  useEffect(() => {
+    void loadHistory(selectedProjectId);
+  }, [loadHistory, selectedProjectId]);
 
-  const riskColor = (score: number) => {
-    if (score <= 20) return "text-success";
-    if (score <= 50) return "text-warning";
-    return "text-error";
-  };
+  if (projectsLoading) return <HistoryLoading />;
 
-  const riskLabel = (score: number) => {
-    if (score <= 20) return "Low Risk";
-    if (score <= 50) return "Medium Risk";
-    return "High Risk";
-  };
+  if (projects.length === 0) {
+    return (
+      <StatePanel
+        title="No analysis history"
+        description="Connect a project before running repository analysis."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
+    );
+  }
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push("/dashboard/ai-analysis")}
-            className="flex items-center gap-1.5 text-sm text-foreground-muted hover:text-foreground transition-colors cursor-pointer"
+      <PageHeader
+        eyebrow="Repository analysis"
+        title="Saved analysis history"
+        description="Chronological source-analysis records. Values shown here are saved analyzer output, not runtime measurements or independently verified security findings."
+        actions={
+          <Link
+            href={`/dashboard/ai-analysis?project=${selectedProjectId}`}
+            className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm hover:bg-surface-raised"
           >
-            <ArrowLeft size={16} />
-            Back
-          </button>
-          <div className="h-5 w-px bg-border" />
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-subtle border border-primary/20">
-              <Clock size={18} className="text-primary" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-foreground">
-                Scan History
-              </h1>
-              <p className="text-[11px] text-foreground-muted">
-                Chronological AI analysis timeline
-              </p>
-            </div>
-          </div>
-        </div>
+            Back to latest result
+          </Link>
+        }
+      />
 
-        {projects.length > 0 && (
-          <select
-            value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
-            className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-primary cursor-pointer shadow-sm"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.full_name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <ProjectSelector
+        projects={projects}
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        className="block max-w-sm"
+      />
 
-      {/* Content */}
-      {loading ? (
-        <div className="flex items-center justify-center min-h-[300px]">
-          <Loader2 className="animate-spin text-primary" size={24} />
-        </div>
+      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+
+      {error ? (
+        <StatePanel
+          variant="error"
+          title="Analysis history is unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadHistory(selectedProjectId) }}
+        />
+      ) : loading ? (
+        <HistoryLoading compact />
       ) : analyses.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center justify-center min-h-[400px] bg-card border border-border rounded-xl p-12 shadow-sm"
-        >
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary-subtle border border-primary/20 mb-4">
-            <Brain size={32} className="text-primary" />
-          </div>
-          <h3 className="text-lg font-bold text-foreground mb-2">
-            No Analyses Yet
-          </h3>
-          <p className="text-sm text-foreground-muted text-center max-w-md">
-            Run an AI analysis on your project from the{" "}
-            <button
-              onClick={() => router.push("/dashboard/ai-analysis")}
-              className="text-primary hover:underline cursor-pointer"
-            >
-              AI Analysis page
-            </button>{" "}
-            to see results here.
-          </p>
-        </motion.div>
+        <StatePanel
+          title="No saved analyses"
+          description="Run repository analysis to create the first durable result."
+          action={{ label: "Open repository analysis", href: `/dashboard/ai-analysis?project=${selectedProjectId}` }}
+        />
       ) : (
-        <div className="space-y-4">
-          {/* Summary bar */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="grid grid-cols-2 sm:grid-cols-4 gap-3"
-          >
-            {[
-              {
-                label: "Total Scans",
-                value: analyses.length,
-                icon: Brain,
-                color: "text-primary",
-              },
-              {
-                label: "Latest Framework",
-                value: analyses[0]?.framework || "—",
-                icon: Cpu,
-                color: "text-accent",
-              },
-              {
-                label: "Latest Risk",
-                value: `${analyses[0]?.risk_score ?? 0}/100`,
-                icon: Shield,
-                color: riskColor(analyses[0]?.risk_score ?? 0),
-              },
-              {
-                label: "Latest Confidence",
-                value: `${analyses[0]?.confidence ?? 0}%`,
-                icon: Database,
-                color: "text-success",
-              },
-            ].map((stat, i) => (
-              <motion.div
-                key={stat.label}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
-                className="bg-card border border-border rounded-xl p-4 shadow-sm"
-              >
-                <stat.icon size={18} className={`mb-2 ${stat.color}`} />
-                <p className="text-xl font-bold text-foreground">
-                  {stat.value}
-                </p>
-                <p className="text-[10px] text-foreground-muted uppercase tracking-wider font-bold mt-0.5">
-                  {stat.label}
-                </p>
-              </motion.div>
-            ))}
-          </motion.div>
-
-          {/* Timeline */}
-          <div className="relative">
-            {/* Timeline line */}
-            <div className="absolute left-6 top-0 bottom-0 w-px bg-border hidden sm:block" />
-
-            {analyses.map((a, index) => {
-              const isExpanded = expandedId === a.id;
-              return (
-                <motion.div
-                  key={a.id}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                  className="relative sm:pl-14 mb-4"
+        <section className="space-y-3" aria-label="Saved repository analyses">
+          {analyses.map((analysis, index) => {
+            const expanded = expandedId === analysis.id;
+            return (
+              <article key={analysis.id} className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setExpandedId(expanded ? null : analysis.id)}
+                  aria-expanded={expanded}
+                  className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-subtle sm:px-5"
                 >
-                  {/* Timeline dot */}
-                  <div className="absolute left-4 top-5 hidden sm:flex h-5 w-5 items-center justify-center rounded-full bg-primary border-2 border-card z-10">
-                    <div className="h-2 w-2 rounded-full bg-white" />
-                  </div>
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary-subtle text-primary">
+                    <Clock3 size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">
+                        {analysis.framework || analysis.language || "Repository analysis"}
+                      </span>
+                      {index === 0 && (
+                        <span className="rounded-full border border-primary/20 bg-primary-subtle px-2 py-0.5 text-[10px] font-semibold text-primary">
+                          Latest
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-1 block text-[11px] text-foreground-muted">
+                      {formatTimestamp(analysis.created_at)}
+                    </span>
+                  </span>
+                  {expanded ? (
+                    <ChevronUp size={16} className="text-foreground-muted" />
+                  ) : (
+                    <ChevronDown size={16} className="text-foreground-muted" />
+                  )}
+                </button>
 
-                  <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                    {/* Header row — always visible */}
-                    <button
-                      onClick={() =>
-                        setExpandedId(isExpanded ? null : a.id)
-                      }
-                      className="w-full flex items-center gap-4 p-4 hover:bg-card-hover transition-colors text-left cursor-pointer"
-                    >
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary-subtle border border-primary/20">
-                        <Brain size={18} className="text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-foreground text-sm">
-                            {a.framework}{" "}
-                            {a.framework_version
-                              ? `v${a.framework_version}`
-                              : ""}
-                          </span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background-secondary border border-border/60 text-foreground-muted">
-                            {a.language}
-                          </span>
-                          {index === 0 && (
-                            <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary tracking-wider">
-                              Latest
-                            </span>
-                          )}
+                {expanded && (
+                  <div className="space-y-5 border-t border-border px-4 py-5 sm:px-5">
+                    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      {[
+                        ["Framework", [analysis.framework, analysis.framework_version].filter(Boolean).join(" ")],
+                        ["Language / runtime", analysis.runtime || analysis.language],
+                        ["Package manager", analysis.package_manager],
+                        ["Detected port", analysis.port],
+                        ["CPU recommendation", analysis.cpu_recommendation],
+                        ["Memory recommendation", analysis.memory_recommendation],
+                        ["Storage recommendation", analysis.storage_recommendation],
+                        ["Deployment strategy", analysis.deployment_strategy],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-border bg-surface-subtle p-3">
+                          <dt className="text-[11px] font-medium text-foreground-muted">{label}</dt>
+                          <dd className="mt-1 break-words font-mono text-xs text-foreground">
+                            {value?.trim() || "Not recorded"}
+                          </dd>
                         </div>
-                        <div className="flex items-center gap-3 mt-1 text-[11px] text-foreground-muted">
-                          <span className="flex items-center gap-1">
-                            <Calendar size={11} />
-                            {formatDate(a.created_at)}
-                          </span>
-                          <span className={`font-semibold ${riskColor(a.risk_score)}`}>
-                            {riskLabel(a.risk_score)} ({a.risk_score}/100)
-                          </span>
-                          <span className="text-success font-semibold">
-                            {a.confidence}% confidence
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="hidden md:flex items-center gap-2 text-[10px] text-foreground-muted">
-                          <span className="bg-background-secondary px-2 py-0.5 rounded border border-border/60 font-mono">
-                            {a.cpu_recommendation || "—"}
-                          </span>
-                          <span className="bg-background-secondary px-2 py-0.5 rounded border border-border/60 font-mono">
-                            {a.memory_recommendation || "—"}
-                          </span>
-                        </div>
-                        {isExpanded ? (
-                          <ChevronUp
-                            size={16}
-                            className="text-foreground-muted"
-                          />
+                      ))}
+                    </dl>
+
+                    <div className="grid gap-5 lg:grid-cols-2">
+                      <div>
+                        <h2 className="text-xs font-semibold text-foreground">Detected dependencies</h2>
+                        {analysis.dependencies.length > 0 ? (
+                          <ul className="mt-2 flex flex-wrap gap-2">
+                            {analysis.dependencies.map((dependency) => (
+                              <li key={dependency} className="rounded-md border border-border bg-surface-subtle px-2 py-1 font-mono text-[11px] text-foreground">
+                                {dependency}
+                              </li>
+                            ))}
+                          </ul>
                         ) : (
-                          <ChevronDown
-                            size={16}
-                            className="text-foreground-muted"
-                          />
+                          <p className="mt-2 text-xs text-foreground-muted">None recorded.</p>
                         )}
                       </div>
-                    </button>
-
-                    {/* Expanded details */}
-                    {isExpanded && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="border-t border-border p-5 space-y-5"
-                      >
-                        {/* Resource cards */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          {[
-                            {
-                              icon: Cpu,
-                              label: "CPU",
-                              value: a.cpu_recommendation || "200m",
-                            },
-                            {
-                              icon: HardDrive,
-                              label: "Memory",
-                              value: a.memory_recommendation || "256Mi",
-                            },
-                            {
-                              icon: Database,
-                              label: "Storage",
-                              value: a.storage_recommendation || "1Gi",
-                            },
-                          ].map((r) => (
-                            <div
-                              key={r.label}
-                              className="bg-background-secondary/50 border border-border/40 rounded-lg p-3 text-center"
-                            >
-                              <r.icon
-                                size={16}
-                                className="mx-auto mb-1 text-primary"
-                              />
-                              <p className="text-lg font-bold text-foreground">
-                                {r.value}
-                              </p>
-                              <p className="text-[10px] text-foreground-muted">
-                                {r.label}
-                              </p>
-                            </div>
-                          ))}
-                          <div className="bg-background-secondary/50 border border-border/40 rounded-lg p-3 flex flex-col items-center justify-center">
-                            <GaugeChart
-                              value={a.risk_score}
-                              label="Risk"
-                              size={60}
-                              color="hsl(142, 60%, 40%)"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Build details */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                          {[
-                            {
-                              label: "Runtime",
-                              value: a.runtime || "—",
-                            },
-                            {
-                              label: "Package Manager",
-                              value: a.package_manager || "—",
-                            },
-                            {
-                              label: "Deploy Target",
-                              value: a.deployment_strategy || "—",
-                            },
-                            {
-                              label: "Docker",
-                              value: a.docker_support
-                                ? "Yes"
-                                : "No",
-                            },
-                          ].map((d) => (
-                            <div
-                              key={d.label}
-                              className="bg-background-secondary/40 p-2.5 rounded border border-border/40"
-                            >
-                              <p className="text-[9px] uppercase font-bold text-foreground-muted">
-                                {d.label}
-                              </p>
-                              <p className="mt-0.5 font-semibold text-foreground font-mono text-[11px]">
-                                {d.value}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Dependencies */}
-                        {a.dependencies && a.dependencies.length > 0 && (
-                          <div>
-                            <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider mb-2">
-                              Dependencies
-                            </h4>
-                            <div className="flex flex-wrap gap-1.5">
-                              {a.dependencies.map((dep) => (
-                                <span
-                                  key={dep}
-                                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-background-secondary border border-border/60 text-foreground"
-                                >
-                                  {dep}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
+                      <div>
+                        <h2 className="text-xs font-semibold text-foreground">Analyzer warnings</h2>
+                        {analysis.vulnerabilities.length > 0 ? (
+                          <ul className="mt-2 space-y-2">
+                            {analysis.vulnerabilities.map((warning, warningIndex) => (
+                              <li key={`${warning}-${warningIndex}`} className="rounded-lg border border-warning/25 bg-warning-subtle px-3 py-2 text-xs leading-5 text-foreground">
+                                {warning}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-xs text-foreground-muted">
+                            None recorded. This is not a clean bill of security.
+                          </p>
                         )}
-
-                        {/* Vulnerabilities */}
-                        {a.vulnerabilities &&
-                          a.vulnerabilities.length > 0 && (
-                            <div>
-                              <h4 className="text-xs font-bold text-foreground-muted uppercase tracking-wider mb-2">
-                                Security Recommendations
-                              </h4>
-                              <div className="space-y-1.5">
-                                {a.vulnerabilities.map((v) => (
-                                  <div
-                                    key={v}
-                                    className="rounded-lg border border-warning/20 bg-warning/5 p-2.5 text-[11px] text-foreground-muted"
-                                  >
-                                    {v}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                      </motion.div>
-                    )}
+                      </div>
+                    </div>
                   </div>
-                </motion.div>
-              );
-            })}
-          </div>
-        </div>
+                )}
+              </article>
+            );
+          })}
+        </section>
       )}
+    </div>
+  );
+}
+
+function HistoryLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm font-medium text-foreground-muted ${
+        compact ? "min-h-52" : "min-h-[55vh]"
+      }`}
+    >
+      <Loader2 size={18} className="animate-spin text-primary" />
+      Loading saved analysis history…
     </div>
   );
 }

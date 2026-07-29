@@ -1,247 +1,196 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Check, CreditCard, ExternalLink, Loader2, TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { api, type BillingOperation, type UserProfile } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { CreditCard, ExternalLink, Loader2, ReceiptText } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { api, getErrorMessage, type BillingOperation } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
 
 const formatMoney = (amountCents: number, currency: string) => {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-  }).format(amountCents / 100);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.toUpperCase(),
+    }).format(amountCents / 100);
+  } catch {
+    return `${(amountCents / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  }
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "Not recorded";
+const formatDate = (value: string | null) => {
+  if (!value) return "Date unavailable";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 };
+
+const operationLabel = (value: string) =>
+  value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 const statusClass = (status: string) => {
   switch (status) {
     case "paid":
-      return "bg-success/15 text-success border-success/25";
+      return "border-success/25 bg-success-subtle text-success";
     case "consumed":
-      return "bg-primary/15 text-primary border-primary/25";
+      return "border-primary/25 bg-primary-subtle text-primary";
     case "pending_payment":
-      return "bg-warning/15 text-warning border-warning/25";
+      return "border-warning/25 bg-warning-subtle text-warning";
     default:
-      return "bg-muted text-foreground-muted border-border";
+      return "border-border bg-surface-subtle text-foreground-muted";
   }
 };
 
 export default function BillingPage() {
   const { addToast } = useNotifications();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [operations, setOperations] = useState<BillingOperation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [checkoutOperationId, setCheckoutOperationId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function loadBilling() {
-      setIsLoading(true);
-      try {
-        const [profileRes, opsRes] = await Promise.allSettled([
-          api.getProfile(),
-          api.getBillingOperations(),
-        ]);
-        if (profileRes.status === "fulfilled") setProfile(profileRes.value);
-        if (opsRes.status === "fulfilled") setOperations(opsRes.value);
-      } catch (err) {
-        console.error("Failed to load billing data:", err);
-      } finally {
-        setIsLoading(false);
-      }
+  const loadOperations = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      setOperations(await api.getBillingOperations());
+    } catch (loadError) {
+      setError(getErrorMessage(loadError, "Billing operations could not be loaded. Try again."));
+    } finally {
+      setIsLoading(false);
     }
-    loadBilling();
   }, []);
 
-  const fullName = profile?.first_name
-    ? `${profile.first_name} ${profile.last_name || ""}`.trim()
-    : profile?.email || "Account holder";
-
-  const planName = profile?.plan && profile.plan !== "starter"
-    ? `${profile.plan.charAt(0).toUpperCase()}${profile.plan.slice(1)} Plan`
-    : "Plan managed in billing";
-
-  const totals = useMemo(() => {
-    const pending = operations.filter((op) => op.status === "pending_payment");
-    const paid = operations.filter((op) => op.status === "paid");
-    const consumed = operations.filter((op) => op.status === "consumed");
-    return { pending, paid, consumed };
-  }, [operations]);
-
-  const usageStats = [
-    { name: "Deployment Records", value: String(profile?.total_deployments ?? 0), detail: "Stored in backend" },
-    { name: "Active Deployments", value: String(profile?.active_deployments ?? 0), detail: "Currently running" },
-    { name: "Paid changes", value: String(totals.paid.length + totals.consumed.length), detail: "Approved operations" },
-    { name: "Pending Payments", value: String(totals.pending.length), detail: "Awaiting checkout" },
-  ];
+  useEffect(() => {
+    void loadOperations();
+  }, [loadOperations]);
 
   const continueCheckout = async (operation: BillingOperation) => {
     setCheckoutOperationId(operation.id);
     try {
       const updated = await api.createBillingCheckout(operation.id);
-      setOperations((prev) => prev.map((item) => item.id === operation.id ? { ...item, ...updated } : item));
-      if (updated.checkout_url) {
-        window.location.assign(updated.checkout_url);
+      setOperations((current) =>
+        current.map((item) => (item.id === operation.id ? { ...item, ...updated } : item)),
+      );
+      if (!updated.checkout_url) {
+        addToast("The configured payment provider did not return a checkout link.", "warning");
         return;
       }
-      addToast("Checkout is not available for the current payment provider.", "warning");
-    } catch (err) {
-      console.error("Failed to create checkout session:", err);
-      addToast("Could not start checkout.", "error");
+
+      window.location.assign(updated.checkout_url);
+    } catch (checkoutError) {
+      addToast(getErrorMessage(checkoutError, "Checkout could not be started."), "error");
     } finally {
       setCheckoutOperationId(null);
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <Loader2 className="animate-spin text-primary" size={24} />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-card border border-border rounded-xl p-6 relative overflow-hidden shadow-sm"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
+    <div className="mx-auto max-w-5xl">
+      <PageHeader
+        eyebrow="Account"
+        title="Billing operations"
+        description="A record of on-demand paid operations returned by the configured payment backend. This is not a subscription or invoice view."
+      />
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <span className="text-[10px] px-2.5 py-1 rounded-full bg-primary/10 text-primary font-bold tracking-wide uppercase">
-                  Current Subscription
-                </span>
-                <h3 className="text-2xl font-bold text-foreground mt-3">{planName}</h3>
-                <p className="text-foreground-muted text-xs mt-1">
-                  Paid changes always require an explicit checkout approval. There is no trial usage hidden in this workspace.
-                </p>
-              </div>
-              <div className="text-left sm:text-right">
-                <p className="text-[10px] text-foreground-muted uppercase font-bold">Billing Identity</p>
-                <p className="text-sm font-extrabold text-foreground mt-1">{fullName}</p>
-              </div>
-            </div>
-
-            <div className="border-t border-border/60 my-5" />
-
-            <div className="grid md:grid-cols-3 gap-4">
-              {["Authenticated account billing", "Per-user application activity", "Payment-gated changes"].map((feature) => (
-                <div key={feature} className="flex items-center gap-2 text-xs font-semibold text-foreground-muted">
-                  <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0">
-                    <Check size={12} className="text-success" />
-                  </div>
-                  <span>{feature}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-card border border-border rounded-xl p-6 shadow-sm"
-          >
-            <h3 className="text-sm font-bold text-foreground mb-6 flex items-center gap-2">
-              <TrendingUp size={16} className="text-primary" />
-              Account Usage
-            </h3>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              {usageStats.map((stat) => (
-                <div key={stat.name} className="p-4 rounded-xl bg-background-secondary border border-border/50 space-y-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{stat.name}</p>
-                  <p className="text-2xl font-extrabold text-foreground">{stat.value}</p>
-                  <p className="text-[10px] text-foreground-muted font-semibold">{stat.detail}</p>
-                </div>
-              ))}
-            </div>
-          </motion.div>
+      {isLoading ? (
+        <div
+          role="status"
+          className="flex min-h-64 items-center justify-center rounded-xl border border-border bg-card"
+        >
+          <Loader2 size={22} className="animate-spin text-primary" aria-hidden="true" />
+          <span className="ml-3 text-sm text-foreground-muted">Loading billing operations…</span>
         </div>
+      ) : error ? (
+        <StatePanel
+          variant="error"
+          title="Billing data is unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadOperations() }}
+        />
+      ) : operations.length === 0 ? (
+        <StatePanel
+          title="No paid operations"
+          description="No payment-gated operation has been created for this account."
+        />
+      ) : (
+        <section aria-labelledby="operation-history-heading" className="space-y-3">
+          <div className="flex items-center gap-2">
+            <ReceiptText size={18} className="text-primary" aria-hidden="true" />
+            <h2 id="operation-history-heading" className="text-sm font-semibold text-foreground">
+              Operation history
+            </h2>
+          </div>
 
-        <div className="space-y-6">
-          <motion.div
-            initial={{ opacity: 0, x: 15 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.2 }}
-            className="rounded-2xl p-5 bg-gradient-to-br from-zinc-900 to-zinc-950 text-white relative overflow-hidden shadow-xl min-h-44 flex flex-col justify-between border border-zinc-700/50"
-          >
-            <div className="absolute top-5 right-5 w-14 h-7 bg-white/10 rounded border border-white/20 backdrop-blur-md flex items-center justify-center font-bold text-[9px] uppercase tracking-widest text-white/70">
-              ZeroOps
-            </div>
-            <div>
-              <CreditCard size={28} className="text-white/80" />
-              <p className="mt-6 text-sm font-bold text-white">Payment Method</p>
-              <p className="text-xs text-white/55 mt-1 leading-relaxed">
-                Checkout is handled by the configured payment provider. No card details are stored in this app.
-              </p>
-            </div>
-          </motion.div>
+          <ul className="space-y-3">
+            {operations.map((operation) => {
+              const isCheckingOut = checkoutOperationId === operation.id;
+              return (
+                <li
+                  key={operation.id}
+                  className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CreditCard size={16} className="text-primary" aria-hidden="true" />
+                        <h3 className="text-sm font-semibold text-foreground">
+                          {operation.description?.trim() || operationLabel(operation.operation_type)}
+                        </h3>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusClass(operation.status)}`}
+                        >
+                          {operationLabel(operation.status)}
+                        </span>
+                      </div>
+                      <dl className="mt-3 grid gap-x-8 gap-y-2 text-xs sm:grid-cols-2">
+                        <div>
+                          <dt className="text-foreground-muted">Created</dt>
+                          <dd className="mt-0.5 text-foreground">{formatDate(operation.created_at)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-foreground-muted">Payment provider</dt>
+                          <dd className="mt-0.5 text-foreground">
+                            {operation.provider ? operationLabel(operation.provider) : "Not reported"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="bg-card border border-border rounded-xl p-5 shadow-sm"
-          >
-            <h3 className="text-sm font-bold text-foreground mb-4">Paid actions</h3>
-            <div className="space-y-3">
-              {operations.length > 0 ? operations.map((operation) => (
-                <div key={operation.id} className="p-3 rounded-lg bg-background-secondary border border-border/50 hover:bg-card transition space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold text-foreground">{operation.description || operation.operation_type.replaceAll("_", " ")}</p>
-                      <p className="text-[10px] text-foreground-muted mt-0.5 font-semibold">{formatDate(operation.created_at)}</p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-xs font-bold text-foreground">{formatMoney(operation.amount_cents, operation.currency)}</p>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-bold uppercase mt-0.5 inline-block ${statusClass(operation.status)}`}>
-                        {operation.status.replaceAll("_", " ")}
-                      </span>
-                    </div>
-                  </div>
-                  {operation.status === "pending_payment" && (
-                    <button
-                      onClick={() => continueCheckout(operation)}
-                      disabled={checkoutOperationId === operation.id}
-                      className="w-full px-3 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
-                    >
-                      {checkoutOperationId === operation.id ? (
-                        <>
-                          <Loader2 size={12} className="animate-spin" /> Starting checkout...
-                        </>
-                      ) : (
-                        <>
-                          Continue Checkout <ExternalLink size={12} />
-                        </>
+                    <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                      <p className="font-mono text-base font-semibold tabular-nums text-foreground">
+                        {formatMoney(operation.amount_cents, operation.currency)}
+                      </p>
+                      {operation.status === "pending_payment" && (
+                        <button
+                          type="button"
+                          onClick={() => void continueCheckout(operation)}
+                          disabled={isCheckingOut}
+                          className="ops-primary min-w-40 disabled:opacity-60"
+                        >
+                          {isCheckingOut ? (
+                            <>
+                              <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                              Starting checkout…
+                            </>
+                          ) : (
+                            <>
+                              Continue checkout
+                              <ExternalLink size={15} aria-hidden="true" />
+                            </>
+                          )}
+                        </button>
                       )}
-                    </button>
-                  )}
-                </div>
-              )) : (
-                <div className="text-center py-8">
-                  <p className="text-xs font-semibold text-foreground">No paid operations yet</p>
-                  <p className="text-[11px] text-foreground-muted mt-1">
-                    AI code fixes will appear here after a project requests one.
-                  </p>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        </div>
-      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

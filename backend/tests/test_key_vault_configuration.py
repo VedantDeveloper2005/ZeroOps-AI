@@ -68,6 +68,20 @@ def test_development_default_is_used_only_without_a_vault(monkeypatch):
     assert vault.get_application_setting("OPENAI_MODEL", default="gpt-5.4-mini") == "gpt-5.4-mini"
 
 
+def test_project_secret_names_reject_ambiguous_keys_and_hash_long_keys():
+    project_id = "12345678-1234-1234-1234-123456789abc"
+
+    assert vault._secret_name(project_id, "FOO_BAR").endswith("-foo-bar")
+    with pytest.raises(ValueError, match="uppercase"):
+        vault._secret_name(project_id, "foo-bar")
+
+    first = vault._secret_name(project_id, f"PREFIX_{'A' * 220}")
+    second = vault._secret_name(project_id, f"PREFIX_{'B' * 220}")
+    assert len(first) == 127
+    assert len(second) == 127
+    assert first != second
+
+
 def test_worker_callback_token_is_rejected_before_database_access(monkeypatch):
     from fastapi import HTTPException
     from backend import main

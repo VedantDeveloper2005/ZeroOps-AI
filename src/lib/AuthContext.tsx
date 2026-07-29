@@ -88,7 +88,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/, "");
 const GITHUB_OAUTH_PENDING_KEY = "zeroops.githubOAuth.pending";
 const GOOGLE_OAUTH_PENDING_KEY = "zeroops.googleOAuth.pending";
 
@@ -110,43 +109,36 @@ function notifyAuthenticationSucceeded() {
   }
 }
 
-// Global fetch interceptor to automatically route client-side relative API requests to backend
-if (typeof window !== "undefined") {
-  const originalFetch = window.fetch;
-  window.fetch = async function (input, init) {
-    const initCopy = init ? { ...init } : {};
-    const headers = new Headers(initCopy.headers || {});
-    
-    let targetInput = input;
-    if (API_BASE_URL && typeof targetInput === "string" && targetInput.startsWith("/api/")) {
-      targetInput = `${API_BASE_URL}${targetInput}`;
-    }
-    
-    // Automatically include credentials for same-origin and configured cross-origin API calls
-    if (typeof targetInput === "string" && (targetInput.startsWith("/api/") || (API_BASE_URL && targetInput.startsWith(API_BASE_URL)))) {
-      initCopy.credentials = "include";
-    }
-    
-    // Automatically inject CSRF token header for state-changing calls
-    const method = initCopy.method ? initCopy.method.toUpperCase() : "GET";
-    if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-      const csrfToken = getCookie("csrf_token") || sessionStorage.getItem("csrf_token");
-      if (csrfToken) {
-        headers.set("X-CSRF-Token", csrfToken);
-      }
-    }
-    
-    initCopy.headers = headers;
-    const response = await originalFetch(targetInput, initCopy);
-    
-    // Capture CSRF token from response headers if present (e.g. in cross-domain configurations)
-    const responseCsrf = response.headers.get("X-CSRF-Token");
-    if (responseCsrf) {
-      sessionStorage.setItem("csrf_token", responseCsrf);
-    }
-    
-    return response;
+async function authFetch(path: string, init?: RequestInit, timeoutMs = 15_000) {
+  const controller = new AbortController();
+  const upstreamSignal = init?.signal;
+  const forwardAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) controller.abort();
+  else upstreamSignal?.addEventListener("abort", forwardAbort, { once: true });
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  const options: RequestInit = {
+    ...init,
+    credentials: "include",
+    signal: controller.signal,
   };
+  const headers = new Headers(options.headers);
+  const method = (options.method || "GET").toUpperCase();
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    const csrfToken = getCookie("csrf_token") || sessionStorage.getItem("csrf_token");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
+  options.headers = headers;
+
+  try {
+    const response = await fetch(path, options);
+    const responseCsrf = response.headers.get("X-CSRF-Token");
+    if (responseCsrf) sessionStorage.setItem("csrf_token", responseCsrf);
+    return response;
+  } finally {
+    window.clearTimeout(timeout);
+    upstreamSignal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -159,12 +151,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Fetch current user details on load
   const fetchCurrentUser = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
-        credentials: "include",
-        headers: {
-          "Accept": "application/json",
+      const res = await authFetch(
+        "/api/auth/me",
+        {
+          headers: {
+            "Accept": "application/json",
+          },
         },
-      });
+        5_000,
+      );
       if (res.ok) {
         const data = await res.json();
         setUser(data);
@@ -174,8 +169,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setUser(null);
       }
-    } catch (err) {
-      console.error("Error checking session:", err);
+    } catch {
       setUser(null);
     } finally {
       setLoading(false);
@@ -201,25 +195,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       addToast("Please sign in to access the dashboard", "warning");
       router.push("/login");
     } else if (user && isAuthRoute) {
-      // Check deployment state from backend API instead of localStorage
-      fetch(`${API_BASE_URL}/api/dashboard/stats`, { credentials: "include" })
-        .then((res) => res.ok ? res.json() : { has_deployed: false })
-        .then((stats) => {
-          if (stats.has_deployed) {
-            router.push("/dashboard");
-          } else {
-            router.push("/dashboard/repositories");
-          }
-        })
-        .catch(() => router.push("/dashboard/repositories"));
+      router.push("/dashboard");
     }
   }, [user, loading, pathname, router, addToast]);
 
   // Login handler
   const login = async (email: string, password: string): Promise<LoginResult> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    const res = await authFetch("/api/auth/login", {
       method: "POST",
-      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -243,9 +226,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const verifyMfa = async (code: string): Promise<User> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/mfa/verify`, {
+    const res = await authFetch("/api/auth/mfa/verify", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     });
@@ -270,9 +252,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     phoneNumber: string,
     password: string
   ): Promise<SignupResult> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+    const res = await authFetch("/api/auth/signup", {
       method: "POST",
-      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -300,7 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const verifyEmail = async (email: string, token: string): Promise<VerifyEmailResult> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/verify-email`, {
+    const res = await authFetch("/api/auth/verify-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, token }),
@@ -321,9 +302,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const verifyPhone = async (code: string): Promise<VerifyPhoneResult> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/verify-phone`, {
+    const res = await authFetch("/api/auth/verify-phone", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     });
@@ -344,7 +324,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resendVerification = async (email: string): Promise<void> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/resend-verification`, {
+    const res = await authFetch("/api/auth/resend-verification", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -359,9 +339,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resendPhoneVerification = async (): Promise<PhoneVerificationPending> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/resend-phone-verification`, {
+    const res = await authFetch("/api/auth/resend-phone-verification", {
       method: "POST",
-      credentials: "include",
     });
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({ detail: "Failed to resend phone verification code" }));
@@ -373,9 +352,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resendMfaOtp = async (): Promise<void> => {
-    const res = await fetch(`${API_BASE_URL}/api/auth/mfa/resend-otp`, {
+    const res = await authFetch("/api/auth/mfa/resend-otp", {
       method: "POST",
-      credentials: "include",
     });
 
     if (!res.ok) {
@@ -389,25 +367,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // GitHub OAuth login — redirects to backend which redirects to GitHub
   const loginWithGitHub = () => {
     sessionStorage.setItem(GITHUB_OAUTH_PENDING_KEY, "true");
-    const githubAuthUrl = `${API_BASE_URL}/api/auth/github`;
-    window.location.href = githubAuthUrl;
+    window.location.href = "/api/auth/github";
   };
 
   const loginWithGoogle = () => {
     sessionStorage.setItem(GOOGLE_OAUTH_PENDING_KEY, "true");
-    const googleAuthUrl = `${API_BASE_URL}/api/auth/google`;
-    window.location.href = googleAuthUrl;
+    window.location.href = "/api/auth/google";
   };
 
   // Logout handler
   const logout = async () => {
     try {
-      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      await authFetch("/api/auth/logout", {
         method: "POST",
-        credentials: "include",
       });
-    } catch (err) {
-      console.error("Error during logout endpoint call:", err);
+    } catch {
+      // Local state still needs to clear when the backend is unavailable.
     }
     setUser(null);
     sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);

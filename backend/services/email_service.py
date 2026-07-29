@@ -42,7 +42,12 @@ def _record_send(email: str) -> None:
 
 def is_configured() -> bool:
     """Return whether transactional email can be delivered in this environment."""
-    return True
+    return bool(
+        config.SMTP_HOST
+        and config.SMTP_USERNAME
+        and config.SMTP_PASSWORD
+        and (config.SMTP_FROM_EMAIL or config.SMTP_USERNAME)
+    )
 
 
 # Compatibility alias for the earlier private helper. New auth code uses the
@@ -53,11 +58,12 @@ def _smtp_configured() -> bool:
 
 def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
     """Send an email via SMTP. Returns True on success, False on failure."""
-    if not (config.SMTP_HOST and config.SMTP_USERNAME and config.SMTP_PASSWORD):
-        # Local development fallback: print link/OTP to backend console
-        print(f"\n[LOCAL DEVELOPER EMAIL BYPASS] to_email={to_email} subject={subject}")
-        print(f"Text body:\n{text_body}\n", flush=True)
-        return True
+    if not is_configured():
+        # Authentication secrets must never be copied to process output. A
+        # missing SMTP configuration is a delivery failure, not a successful
+        # local bypass.
+        logger.warning("Transactional email delivery is not configured.")
+        return False
 
     if _is_rate_limited(to_email):
         logger.info("Rate-limited email to %s — skipping.", to_email)
@@ -85,7 +91,9 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
         server.quit()
 
         _record_send(to_email)
-        logger.info("Transactional email sent: %s", subject)
+        # Subjects and bodies may contain authentication material. Keep
+        # delivery logs deliberately content-free.
+        logger.info("Transactional email sent.")
         return True
     except Exception:
         logger.exception("Failed to send transactional email.")
@@ -118,7 +126,7 @@ def _email_wrapper(title: str, content: str) -> str:
 <table width="480" cellpadding="0" cellspacing="0" style="background:{_CARD_BG};border-radius:16px;overflow:hidden;">
 <tr><td style="padding:32px 32px 0;">
   <div style="font-size:20px;font-weight:700;color:white;margin-bottom:4px;">ZeroOps AI</div>
-  <div style="font-size:12px;color:{_MUTED_COLOR};margin-bottom:24px;">Autonomous Cloud Deployment</div>
+  <div style="font-size:12px;color:{_MUTED_COLOR};margin-bottom:24px;">Review-first cloud deployment</div>
   <div style="font-size:16px;font-weight:600;color:white;margin-bottom:16px;">{title}</div>
 </td></tr>
 <tr><td style="padding:0 32px 32px;">
@@ -197,7 +205,7 @@ def send_verification_otp_email(to_email: str, otp_code: str) -> bool:
 
     return _send_email(
         to_email,
-        f"Verify your email: {otp_code} — ZeroOps AI",
+        "Verify your email - ZeroOps AI",
         _email_wrapper("Verify your email address", html_content),
         text_body,
     )
@@ -233,7 +241,7 @@ def send_otp_email(to_email: str, otp_code: str) -> bool:
 
     return _send_email(
         to_email,
-        f"Your verification code: {otp_code} — ZeroOps AI",
+        "Your sign-in verification code - ZeroOps AI",
         _email_wrapper("Your sign-in verification code", html_content),
         text_body,
     )

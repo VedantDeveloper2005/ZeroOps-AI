@@ -1,196 +1,317 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Brain, Loader2, ShieldCheck, TrendingUp } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
-import { api, type HealthScore, type CostOptimization } from "@/lib/api";
+import Link from "next/link";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  Box,
+  Braces,
+  Clock3,
+  Code2,
+  FileSearch,
+  History,
+  Loader2,
+  PackageSearch,
+  Play,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import { api, getErrorMessage, type AIAnalysis } from "@/lib/api";
+
+function formatTimestamp(value: string | null) {
+  if (!value) return "Time not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time not recorded";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function Fact({
+  label,
+  value,
+  icon: Icon,
+}: {
+  label: string;
+  value: string | null | undefined;
+  icon: typeof Code2;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-subtle p-4">
+      <div className="flex items-center gap-2 text-xs font-medium text-foreground-muted">
+        <Icon size={15} />
+        {label}
+      </div>
+      <p className="mt-2 break-words text-sm font-semibold text-foreground">
+        {value?.trim() || "Not detected"}
+      </p>
+    </div>
+  );
+}
 
 export default function AIAnalysisPage() {
-  const { projects, isLoading: loadingProjects } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [loadingData, setLoadingData] = useState(false);
-  const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
-  const [costOpt, setCostOpt] = useState<CostOptimization | null>(null);
+  return (
+    <Suspense fallback={<AnalysisLoading />}>
+      <AnalysisWorkspace />
+    </Suspense>
+  );
+}
+
+function AnalysisWorkspace() {
+  const searchParams = useSearchParams();
+  const { projects, isLoading: projectsLoading, addToast } = useNotifications();
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [analyses, setAnalyses] = useState<AIAnalysis[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (projects.length > 0 && !selectedProjectId) {
+    const requestedProject = searchParams.get("project");
+    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
+      setSelectedProjectId(requestedProject);
+      return;
+    }
+    if (!selectedProjectId && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
     }
-  }, [projects, selectedProjectId]);
+  }, [projects, searchParams, selectedProjectId]);
+
+  const loadAnalyses = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setAnalyses(await api.getAIAnalysisHistory(projectId));
+    } catch (requestError) {
+      setAnalyses([]);
+      setError(getErrorMessage(requestError, "Repository analysis could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!selectedProjectId) return;
-    async function loadReview() {
-      setLoadingData(true);
-      try {
-        const [scoreRes, costRes] = await Promise.allSettled([
-          api.getHealthScore(selectedProjectId),
-          api.getCostOptimization(selectedProjectId),
-        ]);
-        if (scoreRes.status === "fulfilled") setHealthScore(scoreRes.value);
-        if (costRes.status === "fulfilled") setCostOpt(costRes.value);
-      } catch (err) {
-        console.error("Failed to fetch AI review", err);
-      } finally {
-        setLoadingData(false);
-      }
+    void loadAnalyses(selectedProjectId);
+  }, [loadAnalyses, selectedProjectId]);
+
+  const runAnalysis = async () => {
+    if (!selectedProjectId || running) return;
+    setRunning(true);
+    setError(null);
+    try {
+      await api.analyzeRepository(selectedProjectId);
+      await loadAnalyses(selectedProjectId);
+      addToast("Repository analysis completed and was saved.", "success");
+    } catch (requestError) {
+      const message = getErrorMessage(requestError, "Repository analysis could not be completed.");
+      setError(message);
+      addToast(message, "error");
+    } finally {
+      setRunning(false);
     }
-    loadReview();
-  }, [selectedProjectId]);
+  };
 
-  const scoreCards = useMemo(() => {
-    return [
-      {
-        label: "Performance Score",
-        value: healthScore?.breakdown.performance,
-      },
-      {
-        label: "Security Score",
-        value: healthScore?.breakdown.security,
-      },
-      {
-        label: "Reliability Score",
-        value: healthScore?.breakdown.reliability,
-      },
-      {
-        label: "Cost Efficiency Score",
-        value: healthScore?.breakdown.cost,
-      },
-    ];
-  }, [healthScore]);
-
-  const recommendations = useMemo(() => {
-    const healthRecommendations = (healthScore?.recommendations || []).map((text, index) => ({
-      id: `health-${index}`,
-      category: "Health",
-      issue: text,
-      impact: "Based on recorded deployments, metrics, and scanner output.",
-      recommendation: text,
-    }));
-
-    const costRecommendations = (costOpt?.recommendations || []).map((item, index) => ({
-      id: `cost-${index}`,
-      category: "Cost",
-      issue: item.title,
-      impact: item.savings > 0 ? `Estimated savings: $${item.savings}/month.` : "Cost telemetry is still being established.",
-      recommendation: item.description,
-    }));
-
-    return [...healthRecommendations, ...costRecommendations];
-  }, [healthScore, costOpt]);
-
-  if (loadingProjects || (loadingData && !healthScore)) {
-    return (
-      <div className="flex items-center justify-center py-20 text-xs font-semibold text-foreground-muted gap-2">
-        <Loader2 size={16} className="animate-spin text-primary" /> Generating AI engineering review...
-      </div>
-    );
-  }
+  if (projectsLoading) return <AnalysisLoading />;
 
   if (projects.length === 0) {
     return (
-      <div className="text-center py-20 border border-dashed border-border rounded-2xl bg-card/20 space-y-3">
-        <Brain size={40} className="text-foreground-muted mx-auto" />
-        <h3 className="font-extrabold text-sm text-foreground">No deployments to review</h3>
-        <p className="text-xs text-foreground-muted max-w-xs mx-auto">
-          Connect a repository to unlock AI engineering insights.
-        </p>
-      </div>
+      <StatePanel
+        title="No repository to analyze"
+        description="Connect GitHub or upload a ZIP so ZeroOps can inspect real source files."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
     );
   }
 
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const latest = analyses[0] ?? null;
+
   return (
-    <div className="space-y-8 max-w-5xl mx-auto pb-12">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border/40 pb-5">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">AI Engineering Review</h1>
-          <p className="text-xs text-foreground-muted">
-            Clear, actionable insights to improve performance, reliability, security, and cost.
-          </p>
-        </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Project intelligence"
+        title="Repository analysis"
+        description="Recorded source-analysis output for framework, runtime, build, and deployment requirements. This is not a live runtime audit or a complete CVE scan."
+        actions={
+          <>
+            <Link
+              href={`/dashboard/ai-analysis/history?project=${selectedProjectId}`}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-surface-raised"
+            >
+              <History size={15} />
+              History
+            </Link>
+            <button
+              type="button"
+              onClick={() => void runAnalysis()}
+              disabled={running || !selectedProjectId}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
+            >
+              <RefreshCw size={15} className={running ? "animate-spin" : ""} />
+              {running ? "Analyzing…" : latest ? "Run again" : "Run analysis"}
+            </button>
+          </>
+        }
+      />
 
-        {projects.length > 0 && (
-          <select
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="bg-card border border-border rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none cursor-pointer font-semibold"
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <ProjectSelector
+        projects={projects}
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        className="block max-w-sm"
+      />
 
-      <div className="grid md:grid-cols-4 gap-4">
-        {scoreCards.map((card, index) => (
-          <motion.div
-            key={card.label}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.05 }}
-            className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-2"
-          >
-            <p className="text-[10px] font-bold uppercase tracking-wider text-foreground-muted">{card.label}</p>
-            <p className="text-2xl font-extrabold text-foreground">
-              {card.value != null ? `${card.value}%` : "No data"}
-            </p>
-            <p className="text-[10px] text-foreground-muted font-medium">From recorded deployment telemetry</p>
-          </motion.div>
-        ))}
-      </div>
+      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 border-b border-border/40 pb-2">
-          <ShieldCheck size={16} className="text-primary" />
-          <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">AI Engineering Recommendations</h2>
-        </div>
-        <div className="grid md:grid-cols-2 gap-6">
-          {recommendations.length > 0 ? recommendations.map((rec, index) => (
-              <motion.div
-                key={rec.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.04 }}
-                className="bg-card border border-border rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary">
-                      {rec.category}
-                    </span>
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-foreground">{rec.issue}</h3>
-                    <p className="text-[11px] text-foreground-muted mt-1 leading-relaxed"><span className="font-bold text-foreground">Impact:</span> {rec.impact}</p>
-                    <p className="text-[11px] text-foreground-muted mt-1 leading-relaxed"><span className="font-bold text-foreground font-semibold">Recommendation:</span> {rec.recommendation}</p>
-                  </div>
-                </div>
-                <p className="pt-4 border-t border-border/20 text-[11px] font-medium text-foreground-muted">
-                  Review the recommendation and make the change in your source repository before launching a new version.
+      {error && (
+        <StatePanel
+          variant="error"
+          compact
+          title="Analysis is unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadAnalyses(selectedProjectId) }}
+        />
+      )}
+
+      {loading ? (
+        <AnalysisLoading compact />
+      ) : !latest ? (
+        <StatePanel
+          variant="info"
+          title="No saved analysis for this project"
+          description="Run analysis to inspect the connected source snapshot. Results are recommendations and must be reviewed before deployment."
+          action={{ label: "Run analysis", onClick: () => void runAnalysis() }}
+        />
+      ) : (
+        <>
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">Latest recorded result</h2>
+                <p className="mt-1 flex items-center gap-1.5 text-xs text-foreground-muted">
+                  <Clock3 size={13} />
+                  {formatTimestamp(latest.created_at)}
                 </p>
-              </motion.div>
-          )) : (
-            <div className="md:col-span-2 bg-card border border-border rounded-2xl p-8 text-center">
-              <p className="text-xs font-semibold text-foreground">No recommendations yet</p>
-              <p className="text-[11px] text-foreground-muted mt-1">
-                Deployments and telemetry must be recorded before ZeroOps can generate actionable guidance.
-              </p>
+              </div>
+              <span className="w-fit rounded-full border border-border bg-surface-subtle px-2.5 py-1 text-[11px] font-medium text-foreground-muted">
+                {analyses.length} saved {analyses.length === 1 ? "run" : "runs"}
+              </span>
             </div>
-          )}
-        </div>
-      </div>
 
-      <div className="bg-background-secondary border border-border rounded-2xl p-5 flex items-center gap-3">
-        <TrendingUp size={18} className="text-primary" />
-        <div>
-          <p className="text-xs font-semibold text-foreground">Need deeper analysis?</p>
-          <p className="text-[11px] text-foreground-muted font-medium">Use the ZeroOps AI assistant to audit a specific deployment plan or service configuration.</p>
-        </div>
-      </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Fact
+                label="Framework"
+                value={[latest.framework, latest.framework_version].filter(Boolean).join(" ")}
+                icon={Braces}
+              />
+              <Fact label="Language / runtime" value={latest.runtime || latest.language} icon={Code2} />
+              <Fact label="Package manager" value={latest.package_manager} icon={PackageSearch} />
+              <Fact
+                label="Container support"
+                value={latest.docker_support ? "Docker configuration detected" : "Not detected"}
+                icon={Box}
+              />
+            </div>
+          </section>
+
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(300px,0.7fr)]">
+            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center gap-2">
+                <FileSearch size={17} className="text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">Build and runtime findings</h2>
+              </div>
+              <dl className="mt-4 divide-y divide-border rounded-lg border border-border">
+                {[
+                  ["Application type", latest.application_type],
+                  ["Build command", latest.build_commands],
+                  ["Start command", latest.start_commands],
+                  ["Detected port", latest.port],
+                  ["Deployment strategy", latest.deployment_strategy],
+                  ["Monorepo structure", latest.monorepo_structure],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid gap-1 px-4 py-3 sm:grid-cols-[160px_1fr] sm:gap-4">
+                    <dt className="text-xs font-medium text-foreground-muted">{label}</dt>
+                    <dd className="break-words font-mono text-xs text-foreground">
+                      {value?.trim() || "Not detected"}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+
+            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center gap-2">
+                <ShieldAlert size={17} className="text-warning" />
+                <h2 className="text-sm font-semibold text-foreground">Analysis warnings</h2>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-foreground-muted">
+                These are analyzer findings, not independently verified vulnerabilities.
+              </p>
+              {latest.vulnerabilities.length > 0 ? (
+                <ul className="mt-4 space-y-2">
+                  {latest.vulnerabilities.map((warning, index) => (
+                    <li
+                      key={`${warning}-${index}`}
+                      className="rounded-lg border border-warning/25 bg-warning-subtle px-3 py-2.5 text-xs leading-5 text-foreground"
+                    >
+                      {warning}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-4 rounded-lg border border-border bg-surface-subtle px-3 py-4 text-xs text-foreground-muted">
+                  No warnings were saved with this analysis. This does not replace dependency or container scanning.
+                </p>
+              )}
+            </section>
+          </div>
+
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="flex items-center gap-2">
+              <Play size={17} className="text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">Detected dependencies</h2>
+            </div>
+            {latest.dependencies.length > 0 ? (
+              <ul className="mt-4 flex flex-wrap gap-2">
+                {latest.dependencies.map((dependency) => (
+                  <li
+                    key={dependency}
+                    className="rounded-md border border-border bg-surface-subtle px-2.5 py-1.5 font-mono text-[11px] text-foreground"
+                  >
+                    {dependency}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-xs text-foreground-muted">No dependency names were saved.</p>
+            )}
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AnalysisLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm font-medium text-foreground-muted ${
+        compact ? "min-h-52" : "min-h-[55vh]"
+      }`}
+    >
+      <Loader2 size={18} className="animate-spin text-primary" />
+      Loading saved analysis…
     </div>
   );
 }

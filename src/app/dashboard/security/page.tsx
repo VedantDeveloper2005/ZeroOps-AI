@@ -1,180 +1,213 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { useCallback, useEffect, useState } from "react";
-import { Shield, Lock, Eye, ShieldCheck, AlertTriangle, Search } from "lucide-react";
-import { GaugeChart } from "@/components/ui/GaugeChart";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  FileWarning,
+  KeyRound,
+  Loader2,
+  LockKeyhole,
+  RefreshCw,
+  ServerCog,
+  ShieldCheck,
+} from "lucide-react";
+import { MetricCard } from "@/components/ui/MetricCard";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatePanel } from "@/components/ui/StatePanel";
+import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
+import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
-import { api } from "@/lib/api";
-import { LockedView } from "@/components/dashboard/LockedView";
-
-interface SecurityThreat {
-  id: string;
-  type: string;
-  severity: "critical" | "high" | "medium" | "low";
-  source: string;
-  timestamp: string;
-  status: "blocked" | "detected" | "resolved" | "investigating";
-  description: string;
-}
-
-type SecurityData = {
-  securityScore: number;
-  firewallStatus: string;
-  httpsStatus: string;
-  secretsManaged: number;
-  vulnerabilities: number;
-  soc2Status: string;
-  threatLevel: string;
-  namespaceIsolated: boolean;
-  rbacEnabled: boolean;
-};
-
-const severityColor: Record<string, string> = { critical: "bg-danger/10 text-danger border-l-danger", high: "bg-warning/10 text-warning border-l-warning", medium: "bg-info/10 text-info border-l-info", low: "bg-foreground-muted/10 text-foreground-muted border-l-foreground-muted" };
+import { api, getErrorMessage, type SecurityStatus } from "@/lib/api";
 
 export default function SecurityPage() {
-  const { addToast, hasDeployed, projects } = useNotifications();
-  const [securityData, setSecurityData] = useState<SecurityData>({
-    securityScore: 0,
-    firewallStatus: "Unknown",
-    httpsStatus: "Unknown",
-    secretsManaged: 0,
-    vulnerabilities: 0,
-    soc2Status: "Unknown",
-    threatLevel: "Unknown",
-    namespaceIsolated: false,
-    rbacEnabled: false
-  });
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [securityThreats] = useState<SecurityThreat[]>([]);
-  const [isScanning, setIsScanning] = useState(false);
+  return (
+    <Suspense fallback={<SecurityLoading />}>
+      <SecurityWorkspace />
+    </Suspense>
+  );
+}
 
-  const loadSecurityStatus = useCallback(async (projectId: string) => {
+function SecurityWorkspace() {
+  const searchParams = useSearchParams();
+  const { projects, isLoading: projectsLoading } = useNotifications();
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [status, setStatus] = useState<SecurityStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const requestedProject = searchParams.get("project");
+    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
+      setSelectedProjectId(requestedProject);
+      return;
+    }
+    if (!selectedProjectId && projects.length > 0) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, searchParams, selectedProjectId]);
+
+  const loadStatus = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setLoading(true);
+    setError(null);
     try {
-      const data = await api.getSecurityStatus(projectId);
-      setSecurityData(prev => ({
-        securityScore: data.securityScore ?? prev.securityScore,
-        firewallStatus: data.firewallStatus ?? prev.firewallStatus,
-        httpsStatus: data.httpsStatus ?? prev.httpsStatus,
-        secretsManaged: data.secretsManaged ?? prev.secretsManaged,
-        vulnerabilities: data.vulnerabilities ?? prev.vulnerabilities,
-        soc2Status: data.soc2Status ?? prev.soc2Status,
-        threatLevel: data.threatLevel ?? prev.threatLevel,
-        namespaceIsolated: data.namespaceIsolated ?? prev.namespaceIsolated,
-        rbacEnabled: data.rbacEnabled ?? prev.rbacEnabled
-      }));
-    } catch (err) {
-      console.error("Failed to load security status:", err);
+      setStatus(await api.getSecurityStatus(projectId));
+    } catch (requestError) {
+      setStatus(null);
+      setError(getErrorMessage(requestError, "Security configuration could not be loaded."));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!hasDeployed || projects.length === 0) return;
-    if (!selectedProjectId) {
-      setSelectedProjectId(projects[0].id);
-      loadSecurityStatus(projects[0].id);
-    }
-  }, [hasDeployed, projects, selectedProjectId, loadSecurityStatus]);
+    void loadStatus(selectedProjectId);
+  }, [loadStatus, selectedProjectId]);
 
-  const handleSecurityScan = async () => {
-    if (isScanning) return;
-    setIsScanning(true);
-    addToast("Refreshing recorded security status...", "info");
-    try {
-      if (selectedProjectId) {
-        await loadSecurityStatus(selectedProjectId);
-      }
-      addToast("Security status refreshed from backend data.", "success");
-    } finally {
-      setIsScanning(false);
-    }
-  };
+  if (projectsLoading) return <SecurityLoading />;
 
-  const statusCards = [
-    { label: "Firewall", status: securityData.firewallStatus, icon: Shield, color: securityData.firewallStatus === "Active" ? "text-success" : "text-foreground-muted" },
-    { label: "HTTPS", status: securityData.httpsStatus, icon: Lock, color: securityData.httpsStatus === "Active" ? "text-success" : "text-foreground-muted" },
-    { label: "Secrets", status: securityData.secretsManaged > 0 ? `${securityData.secretsManaged} Managed` : "None", icon: Eye, color: securityData.secretsManaged > 0 ? "text-primary" : "text-foreground-muted" },
-    { label: "Vulnerabilities", status: `${securityData.vulnerabilities} Found`, icon: AlertTriangle, color: securityData.vulnerabilities > 0 ? "text-warning" : "text-success" },
-    { label: "SOC2", status: securityData.soc2Status, icon: ShieldCheck, color: securityData.soc2Status === "Compliant" ? "text-success" : "text-foreground-muted" },
-    { label: "Threat Level", status: securityData.threatLevel, icon: Shield, color: "text-success" },
-  ];
-
-  if (!hasDeployed) {
+  if (projects.length === 0) {
     return (
-      <div className="space-y-6">
-        <LockedView featureName="Security Command Center" />
-      </div>
+      <StatePanel
+        title="No project security context"
+        description="Connect a project before reviewing stored secrets, HTTPS metadata, and analysis warnings."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
     );
   }
 
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end">
-        <button 
-          onClick={handleSecurityScan} 
-          disabled={isScanning}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary-hover disabled:opacity-50 transition shadow-sm cursor-pointer"
-        >
-          <Search size={16} className={isScanning ? "animate-spin" : ""} />
-          {isScanning ? "Refreshing..." : "Refresh Security Status"}
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="Project controls"
+        title="Security configuration"
+        description="A factual view of configuration ZeroOps can verify from its own records. Active threat detection, firewall telemetry, compliance certification, and independent CVE scanning are not connected."
+        actions={
+          <button
+            type="button"
+            onClick={() => void loadStatus(selectedProjectId)}
+            disabled={loading || !selectedProjectId}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-surface-raised disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        }
+      />
 
-      {/* Score + Status cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} 
-          className="col-span-2 md:col-span-2 lg:col-span-1 bg-card border border-border rounded-xl p-4 flex flex-col items-center justify-center relative min-h-[120px] shadow-sm">
-          <GaugeChart value={securityData.securityScore} label="Security Score" size={90} color="hsl(142, 60%, 40%)" />
-        </motion.div>
-        {statusCards.map((card, i) => (
-          <motion.div key={card.label} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
-            className="bg-card border border-border rounded-xl p-4 text-center flex flex-col items-center justify-center min-h-[120px] shadow-sm">
-            <card.icon size={20} className={`${card.color} mb-2`} />
-            <p className="text-[10px] uppercase font-bold text-foreground-muted">{card.label}</p>
-            <p className={`text-xs font-bold ${card.color} mt-1.5`}>{card.status}</p>
-          </motion.div>
-        ))}
-      </div>
+      <ProjectSelector
+        projects={projects}
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        className="block max-w-sm"
+      />
 
-{/* Threats Timeline */}
-       <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
-         <h3 className="text-sm font-bold text-foreground mb-4">Attack Detection Timeline</h3>
-         {securityThreats.length === 0 ? (
-           <p className="text-xs text-foreground-muted py-4">No threats detected. Security monitoring is active.</p>
-         ) : (
-           <div className="space-y-3">
-             {securityThreats.map((threat, i) => (
-               <motion.div key={threat.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 + i * 0.05 }}
-                 className={`rounded-xl p-4 border border-border/80 border-l-4 ${severityColor[threat.severity]}`}>
-                 <div className="flex items-center justify-between">
-                   <div>
-                     <div className="flex items-center gap-2">
-                       <span className="font-bold text-xs text-foreground">{threat.type}</span>
-                       <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${threat.status === "blocked" ? "bg-success/15 text-success" : threat.status === "resolved" ? "bg-info/15 text-info" : "bg-warning/15 text-warning"}`}>{threat.status}</span>
-                     </div>
-                     <p className="text-[11px] text-foreground-muted mt-1 leading-relaxed">{threat.description}</p>
-                   </div>
-                   <div className="text-right"><p className="text-xs font-semibold text-foreground-muted">{threat.timestamp}</p><p className="text-[10px] text-foreground-muted font-mono font-semibold mt-0.5">{threat.source}</p></div>
-                 </div>
-               </motion.div>
-             ))}
-           </div>
-         )}
-       </motion.div>
+      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
 
-       <div className="grid md:grid-cols-2 gap-4">
-         {/* Blocked IPs */}
-         <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
-           <h3 className="text-sm font-bold text-foreground mb-4">Blocked IPs</h3>
-           <p className="text-xs text-foreground-muted py-4">No blocked IPs recorded. Firewall rules are being monitored.</p>
-         </motion.div>
+      {error ? (
+        <StatePanel
+          variant="error"
+          title="Security configuration is unavailable"
+          description={error}
+          action={{ label: "Try again", onClick: () => void loadStatus(selectedProjectId) }}
+        />
+      ) : loading ? (
+        <SecurityLoading compact />
+      ) : status ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Stored secrets"
+              value={status.secretsManaged.toLocaleString()}
+              supportingText="Secret records associated with this project"
+              icon={KeyRound}
+              tone={status.secretsManaged > 0 ? "success" : "neutral"}
+            />
+            <MetricCard
+              label="HTTPS metadata"
+              value={status.httpsStatus || "Not configured"}
+              supportingText="External certificate validation is not connected"
+              icon={LockKeyhole}
+              tone={status.httpsStatus === "Active" ? "success" : "neutral"}
+            />
+            <MetricCard
+              label="Analyzer warnings"
+              value={status.vulnerabilities.toLocaleString()}
+              supportingText="Latest saved repository-analysis warnings; not verified CVEs"
+              icon={FileWarning}
+              tone={status.vulnerabilities > 0 ? "warning" : "neutral"}
+            />
+            <MetricCard
+              label="Firewall telemetry"
+              value={status.firewallStatus || "Unavailable"}
+              supportingText="No firewall event feed is connected"
+              icon={ServerCog}
+            />
+          </div>
 
-         {/* Compliance */}
-         <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-xl p-6 shadow-sm">
-           <h3 className="text-sm font-bold text-foreground mb-4">Compliance Status</h3>
-           <p className="text-xs text-foreground-muted py-4">No compliance items configured. Configure security policies in the admin panel.</p>
-         </motion.div>
-       </div>
+          <div className="grid gap-5 lg:grid-cols-2">
+            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={17} className="text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">Recorded controls</h2>
+              </div>
+              <dl className="mt-4 divide-y divide-border rounded-lg border border-border">
+                {[
+                  ["HTTPS configuration", status.httpsStatus || "Not configured"],
+                  ["Secret records", `${status.secretsManaged}`],
+                  ["Namespace isolation", status.namespaceIsolated ? "Recorded as enabled" : "Not recorded"],
+                  ["Role-based access", status.rbacEnabled ? "Recorded as enabled" : "Not recorded"],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex items-start justify-between gap-4 px-4 py-3">
+                    <dt className="text-xs text-foreground-muted">{label}</dt>
+                    <dd className="text-right text-xs font-semibold text-foreground">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+
+            <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center gap-2">
+                <FileWarning size={17} className="text-warning" />
+                <h2 className="text-sm font-semibold text-foreground">Assessment boundaries</h2>
+              </div>
+              <ul className="mt-4 space-y-3 text-xs leading-5 text-foreground-muted">
+                <li className="rounded-lg border border-border bg-surface-subtle px-3 py-2.5">
+                  Compliance status: <strong className="font-semibold text-foreground">{status.soc2Status || "Not assessed"}</strong>. ZeroOps does not certify SOC 2 compliance.
+                </li>
+                <li className="rounded-lg border border-border bg-surface-subtle px-3 py-2.5">
+                  No blocked-IP or attack-event feed is connected, so an empty event list would not prove that no attacks occurred.
+                </li>
+                <li className="rounded-lg border border-border bg-surface-subtle px-3 py-2.5">
+                  Repository analysis can flag configuration concerns but does not replace a dependency, image, or cloud-security scanner.
+                </li>
+              </ul>
+            </section>
+          </div>
+        </>
+      ) : (
+        <StatePanel
+          variant="empty"
+          title="No security status was returned"
+          description="ZeroOps did not receive a security configuration record for this project."
+        />
+      )}
+    </div>
+  );
+}
+
+function SecurityLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm font-medium text-foreground-muted ${
+        compact ? "min-h-52" : "min-h-[55vh]"
+      }`}
+    >
+      <Loader2 size={18} className="animate-spin text-primary" />
+      Loading security configuration…
     </div>
   );
 }

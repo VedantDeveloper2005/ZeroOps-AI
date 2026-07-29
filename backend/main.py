@@ -24,14 +24,15 @@ import stat
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from typing import Any, Optional, List, Union
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends, Response, Query, Request, UploadFile, File, Header, status
+from urllib.parse import urlencode
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Response, Query, Request, UploadFile, File, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, desc, or_
+from sqlalchemy import and_, func, desc, or_
 
 logger = logging.getLogger("zeroops.main")
 
@@ -42,14 +43,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, agent, email_service, sms_service, planner, terraform_generator, decision_intelligence
+    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, agent, email_service, sms_service, planner, terraform_generator, decision_intelligence
+    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -432,6 +433,37 @@ def format_dt(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
+def deployment_branch_for_queue(project: models.Project, requested_branch: str) -> str:
+    """Bind a release request to the project's reviewed source selection."""
+
+    if (project.source_type or "github") == "upload":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Uploaded ZIP projects can be reviewed, but deployment is unavailable until "
+                "durable shared source storage is configured for the isolated worker."
+            ),
+        )
+    if (project.source_type or "github") != "github":
+        raise HTTPException(status_code=409, detail="This project source type is not deployable.")
+
+    saved_branch = str(project.branch or "").strip()
+    if not saved_branch:
+        raise HTTPException(
+            status_code=409,
+            detail="Select and save a GitHub branch before starting a deployment.",
+        )
+    if requested_branch != saved_branch:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This project is configured for branch '{saved_branch}'. "
+                "Review and save a different branch before deploying it."
+            ),
+        )
+    return saved_branch
+
+
 async def migrate_legacy_environment_secrets() -> None:
     """Move legacy database secret values to Key Vault before clearing them."""
     if not vault.HAS_AZURE_KV or AsyncSessionLocal is None:
@@ -483,21 +515,99 @@ async def remove_unverified_plan_estimates() -> None:
 
 
 async def recover_interrupted_deployments() -> None:
-    """Fail unfinished in-process work after a restart instead of leaving it stuck."""
+    """Reconcile only expired worker claims; API restarts do not own the queue."""
     if AsyncSessionLocal is None:
         return
+
+    from worker.queue import stale_job_disposition
+
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(models.Deployment).filter(models.Deployment.status.in_(["queued", "building"]))
-        )
-        deployments = result.scalars().all()
-        if not deployments:
-            return
         now = datetime.utcnow()
-        for deployment in deployments:
-            deployment.status = "failed"
-            deployment.failure_reason = "Deployment worker restarted before this release completed. Retry the release safely."
-            deployment.completed_at = now
+        legacy_cutoff = now - timedelta(seconds=config.WORKER_LEASE_SECONDS)
+        result = await db.execute(
+            select(models.DeploymentJob, models.Deployment)
+            .outerjoin(
+                models.Deployment,
+                models.Deployment.id == models.DeploymentJob.deployment_id,
+            )
+            .filter(
+                models.DeploymentJob.status == "running",
+                or_(
+                    models.DeploymentJob.lease_expires_at < now,
+                    and_(
+                        models.DeploymentJob.lease_expires_at.is_(None),
+                        or_(
+                            models.DeploymentJob.updated_at.is_(None),
+                            models.DeploymentJob.updated_at < legacy_cutoff,
+                        ),
+                    ),
+                ),
+            )
+            .order_by(models.DeploymentJob.updated_at.asc())
+            .limit(config.WORKER_RECOVERY_BATCH_SIZE)
+            .with_for_update(skip_locked=True, of=models.DeploymentJob)
+        )
+        rows = result.all()
+        if not rows:
+            return
+
+        counts = {"requeued": 0, "completed": 0, "cancelled": 0, "failed": 0}
+        for job, deployment in rows:
+            disposition = stale_job_disposition(
+                deployment.status if deployment else None,
+                job.attempt_count,
+                config.WORKER_MAX_ATTEMPTS,
+            )
+
+            job.worker_id = None
+            job.lease_token = None
+            job.lease_expires_at = None
+            job.heartbeat_at = None
+
+            if disposition == "requeue":
+                job.status = "queued"
+                job.started_at = None
+                job.completed_at = None
+                job.failure_reason = None
+                counts["requeued"] += 1
+                continue
+
+            if disposition == "complete":
+                job.status = "completed"
+                job.deployment_status = "completed"
+                job.live_url = deployment.live_url if deployment else None
+                job.failure_reason = None
+                job.completed_at = job.completed_at or now
+                counts["completed"] += 1
+                continue
+
+            if disposition == "cancel":
+                job.status = "cancelled"
+                job.failure_reason = "The deployment became inactive while its worker lease was stale."
+                job.completed_at = job.completed_at or now
+                counts["cancelled"] += 1
+                continue
+
+            failure_reason = (
+                deployment.failure_reason
+                if deployment and deployment.failure_reason
+                else (
+                    "The deployment worker lease expired after release processing started. "
+                    "Automatic replay was withheld to avoid duplicate Azure changes."
+                )
+            )
+            job.status = "failed"
+            job.deployment_status = "failed"
+            job.failure_reason = failure_reason
+            job.completed_at = job.completed_at or now
+            counts["failed"] += 1
+
+            if not deployment:
+                continue
+            if deployment.status in {"queued", "building", "deploying"}:
+                deployment.status = "failed"
+                deployment.failure_reason = deployment.failure_reason or failure_reason
+                deployment.completed_at = deployment.completed_at or now
             project_result = await db.execute(
                 select(models.Project).filter(models.Project.id == deployment.project_id)
             )
@@ -513,11 +623,17 @@ async def recover_interrupted_deployments() -> None:
             if evaluation and evaluation.status == "pending":
                 evaluation.status = "failed"
                 evaluation.outcome_metadata = {
-                    "outcome": "Deployment worker restarted before runtime health validation.",
+                    "outcome": "Worker lease expired; automatic replay was withheld.",
                     "completed_at": now.isoformat(),
                 }
         await db.commit()
-        logger.warning("Marked %s interrupted deployment(s) as failed after restart.", len(deployments))
+        logger.warning(
+            "Reconciled expired deployment leases: %s requeued, %s completed, %s cancelled, %s failed.",
+            counts["requeued"],
+            counts["completed"],
+            counts["cancelled"],
+            counts["failed"],
+        )
 
 
 def get_frontend_redirect_url() -> str:
@@ -556,7 +672,16 @@ def map_billing_operation(op: models.BillingOperation) -> dict:
     }
 
 
+SUPPORTED_PAID_OPERATION_TYPES: frozenset[str] = frozenset()
+_PAID_OPERATION_UNAVAILABLE_DETAIL = (
+    "Paid remediation is not available because ZeroOps AI does not currently "
+    "have an implemented execution path for this operation. No checkout was created."
+)
+
+
 def create_stripe_checkout_session(op: models.BillingOperation, user: models.User):
+    if op.operation_type not in SUPPORTED_PAID_OPERATION_TYPES:
+        raise HTTPException(status_code=501, detail=_PAID_OPERATION_UNAVAILABLE_DETAIL)
     if stripe is None:
         raise HTTPException(status_code=500, detail="Stripe package is not installed on the backend.")
     if not config.STRIPE_SECRET_KEY:
@@ -656,45 +781,6 @@ async def get_latest_deployment_hint(db: AsyncSession, user_id: uuid.UUID, proje
         "framework": project.framework,
         "language": project.language,
     }
-
-
-async def consume_paid_operation(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-    operation_type: str,
-    project_id: Optional[uuid.UUID] = None,
-    deployment_id: Optional[uuid.UUID] = None,
-) -> models.BillingOperation:
-    query = (
-        select(models.BillingOperation)
-        .filter(
-            models.BillingOperation.user_id == user_id,
-            models.BillingOperation.operation_type == operation_type,
-            models.BillingOperation.status == "paid",
-            models.BillingOperation.consumed_at == None,
-        )
-        .order_by(models.BillingOperation.paid_at.asc())
-        .limit(1)
-    )
-    if project_id:
-        query = query.filter(models.BillingOperation.project_id == project_id)
-    if deployment_id:
-        query = query.filter(or_(models.BillingOperation.deployment_id == deployment_id, models.BillingOperation.deployment_id == None))
-
-    result = await db.execute(query)
-    operation = result.scalars().first()
-    if not operation:
-        raise HTTPException(
-            status_code=402,
-            detail=(
-                "Payment approval is required before ZeroOps AI can run code-changing "
-                "or redeployment remediation. Create and pay a billing operation first."
-            ),
-        )
-
-    operation.status = "consumed"
-    operation.consumed_at = datetime.utcnow()
-    return operation
 
 
 def safe_extract_zip(zip_path: str, target_dir: str):
@@ -805,7 +891,8 @@ async def prepare_and_send_verification_email(user: models.User) -> None:
     raw_token = auth.create_verification_token()
     user.email_verification_token = auth.hash_verification_token(raw_token)
     user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=config.EMAIL_VERIFICATION_EXPIRE_HOURS)
-    verification_url = f"{config.FRONTEND_URL}/verify-email?token={raw_token}"
+    verification_query = urlencode({"token": raw_token, "email": user.email})
+    verification_url = f"{config.FRONTEND_URL}/verify-email?{verification_query}"
     if not email_service.send_verification_email(user.email, verification_url):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -902,7 +989,7 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
         db.add(models.Notification(
             user_id=new_user.id,
             title="Welcome to ZeroOps AI",
-            message="Your autonomous cloud deployment platform is ready. Connect a repository to get started.",
+            message="Your ZeroOps workspace is ready. Connect a repository or upload a ZIP to get started.",
             type="success",
             category="system",
         ))
@@ -1840,6 +1927,28 @@ async def get_azure_connection(
     }
 
 
+async def compensate_failed_azure_connection_write(
+    db: AsyncSession,
+    azure_connector,
+    user_id: uuid.UUID,
+    previous_secret: Optional[str],
+) -> None:
+    """Roll back database state and restore the credential boundary if possible."""
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception("Unable to roll back a failed Azure connection write.")
+
+    if previous_secret is not None:
+        restored = azure_connector.store_credential_in_vault(user_id, previous_secret)
+        action = "restore the previous"
+    else:
+        restored = azure_connector.delete_credential_from_vault(user_id)
+        action = "remove the newly stored"
+    if not restored:
+        logger.error("Unable to %s Azure credential after a database failure.", action)
+
+
 @app.post("/api/azure/connect")
 async def connect_azure(
     req: schemas.AzureConnectRequest,
@@ -1859,13 +1968,22 @@ async def connect_azure(
     if not validation_res.get("success"):
         raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
 
+    existing = await get_active_azure_connection(db, current_user.id)
+    previous_secret = (
+        azure_connector.get_credential_secret(current_user.id)
+        if existing
+        else None
+    )
+
     # Store SP client secret in vault
     store_ok = azure_connector.store_credential_in_vault(current_user.id, req.client_secret)
     if not store_ok:
-        raise HTTPException(status_code=500, detail="Failed to secure client secret in vault.")
+        raise HTTPException(
+            status_code=503,
+            detail="Azure Key Vault could not store the client secret. The connection was not saved.",
+        )
 
     # Find existing or create new connection
-    existing = await get_active_azure_connection(db, current_user.id)
     if existing:
         existing.tenant_id = req.tenant_id.strip()
         existing.subscription_id = req.subscription_id.strip()
@@ -1895,7 +2013,19 @@ async def connect_azure(
         )
         db.add(connection)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as error:
+        await compensate_failed_azure_connection_write(
+            db,
+            azure_connector,
+            current_user.id,
+            previous_secret,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="The Azure connection record could not be saved. The credential update was reverted where possible.",
+        ) from error
     
     # Audit log entry for connection connect
     try:
@@ -1913,7 +2043,8 @@ async def connect_azure(
         db.add(audit)
         await db.commit()
     except Exception as audit_err:
-        logger.error(f"Failed to write onboarding audit: {audit_err}")
+        await db.rollback()
+        logger.error("Failed to write the Azure connection audit entry: %s", audit_err)
 
     return {
         "connected": True,
@@ -1943,9 +2074,12 @@ async def upsert_azure_connection(
 
     # Retrieve existing to see if we have a secret or require a new one
     existing = await get_active_azure_connection(db, current_user.id)
-    secret_to_use = req.client_secret
-    if not secret_to_use and existing:
-        secret_to_use = azure_connector.get_credential_secret(current_user.id)
+    previous_secret = (
+        azure_connector.get_credential_secret(current_user.id)
+        if existing
+        else None
+    )
+    secret_to_use = req.client_secret or previous_secret
         
     if not secret_to_use:
         raise HTTPException(status_code=400, detail="client_secret is required to connect.")
@@ -1961,8 +2095,15 @@ async def upsert_azure_connection(
     if not validation_res.get("success"):
         raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
 
-    # Store
-    azure_connector.store_credential_in_vault(current_user.id, secret_to_use)
+    # Persist the secret before claiming the connection is active. If the
+    # database write fails, restore the prior vault value (or remove the new
+    # one for a first-time connection).
+    store_ok = azure_connector.store_credential_in_vault(current_user.id, secret_to_use)
+    if not store_ok:
+        raise HTTPException(
+            status_code=503,
+            detail="Azure Key Vault could not store the client secret. The connection was not saved.",
+        )
 
     if existing:
         existing.tenant_id = req.tenant_id.strip()
@@ -1993,7 +2134,19 @@ async def upsert_azure_connection(
         )
         db.add(connection)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as error:
+        await compensate_failed_azure_connection_write(
+            db,
+            azure_connector,
+            current_user.id,
+            previous_secret,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="The Azure connection record could not be saved. The credential update was reverted where possible.",
+        ) from error
     return {
         "connected": True,
         "subscription_id": connection.subscription_id,
@@ -2015,13 +2168,20 @@ async def disconnect_azure(
 
     from backend.services import azure_connector
 
+    previous_secret = azure_connector.get_credential_secret(current_user.id)
+    if not azure_connector.delete_credential_from_vault(current_user.id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Azure Key Vault could not confirm client-secret revocation. "
+                "The connection remains recorded as active."
+            ),
+        )
+
     connection.connection_status = "revoked"
     connection.is_active = False
     connection.updated_at = datetime.utcnow()
-    
-    # Delete from vault
-    azure_connector.delete_credential_from_vault(current_user.id)
-    
+
     # Audit log disconnect
     try:
         audit = models.AuditLogEntry(
@@ -2035,9 +2195,21 @@ async def disconnect_azure(
         )
         db.add(audit)
     except Exception as audit_err:
-        logger.error(f"Failed to write disconnect audit: {audit_err}")
+        logger.error("Failed to prepare the Azure disconnect audit entry: %s", audit_err)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as error:
+        await compensate_failed_azure_connection_write(
+            db,
+            azure_connector,
+            current_user.id,
+            previous_secret,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="The disconnect record could not be saved. The credential was restored where possible.",
+        ) from error
     return {"status": "success", "detail": "Azure subscription disconnected and client credentials revoked."}
 
 
@@ -2149,9 +2321,8 @@ async def create_billing_operation(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    allowed_types = {"ai_code_fix", "ai_redeploy_fix", "ai_action_apply"}
-    if req.operation_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Unsupported paid operation type.")
+    if req.operation_type not in SUPPORTED_PAID_OPERATION_TYPES:
+        raise HTTPException(status_code=501, detail=_PAID_OPERATION_UNAVAILABLE_DETAIL)
 
     if req.project_id:
         project_result = await db.execute(
@@ -2205,6 +2376,8 @@ async def create_billing_checkout(
     operation = result.scalars().first()
     if not operation:
         raise HTTPException(status_code=404, detail="Billing operation not found.")
+    if operation.operation_type not in SUPPORTED_PAID_OPERATION_TYPES:
+        raise HTTPException(status_code=501, detail=_PAID_OPERATION_UNAVAILABLE_DETAIL)
     if operation.status != "pending_payment":
         return map_billing_operation(operation)
     if config.PAYMENT_PROVIDER != "stripe":
@@ -2244,15 +2417,37 @@ async def stripe_webhook(
         metadata = session.get("metadata") or {}
         operation_id = metadata.get("operation_id")
         if operation_id:
+            try:
+                parsed_operation_id = uuid.UUID(operation_id)
+            except (TypeError, ValueError):
+                logger.warning("Ignored Stripe completion with an invalid operation identifier.")
+                return {"received": True}
+
             result = await db.execute(
-                select(models.BillingOperation).filter(models.BillingOperation.id == uuid.UUID(operation_id))
+                select(models.BillingOperation).filter(models.BillingOperation.id == parsed_operation_id)
             )
             operation = result.scalars().first()
-            if operation and operation.status == "pending_payment":
+            checkout_matches_operation = bool(
+                operation
+                and operation.operation_type in SUPPORTED_PAID_OPERATION_TYPES
+                and operation.status == "pending_payment"
+                and session.get("payment_status") == "paid"
+                and session.get("mode") == "payment"
+                and session.get("id") == operation.provider_reference
+                and metadata.get("user_id") == str(operation.user_id)
+                and metadata.get("operation_type") == operation.operation_type
+                and session.get("amount_total") == operation.amount_cents
+                and str(session.get("currency") or "").lower() == operation.currency.lower()
+            )
+            if checkout_matches_operation:
                 operation.status = "paid"
                 operation.provider_reference = session.get("id") or operation.provider_reference
                 operation.paid_at = datetime.utcnow()
                 await db.commit()
+            elif operation:
+                logger.warning(
+                    "Ignored Stripe completion that did not match an available billing operation."
+                )
 
     return {"received": True}
 
@@ -2272,6 +2467,8 @@ async def mark_billing_operation_paid_for_dev(
     operation = result.scalars().first()
     if not operation:
         raise HTTPException(status_code=404, detail="Billing operation not found.")
+    if operation.operation_type not in SUPPORTED_PAID_OPERATION_TYPES:
+        raise HTTPException(status_code=501, detail=_PAID_OPERATION_UNAVAILABLE_DETAIL)
     operation.status = "paid"
     operation.paid_at = datetime.utcnow()
     await db.commit()
@@ -2282,257 +2479,25 @@ async def mark_billing_operation_paid_for_dev(
 async def self_heal_project(
     project_id: uuid.UUID,
     req: schemas.SelfHealRequest,
-    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project.id).filter(
+            models.Project.id == project_id,
+            models.Project.user_id == current_user.id,
+        )
     )
-    project = result.scalars().first()
-    if not project:
+    if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    action = req.action.lower()
-    operation_type = "ai_redeploy_fix" if action in {"redeploy", "rollback"} else "ai_action_apply"
-    await consume_paid_operation(db, current_user.id, operation_type, project_id=project.id)
-    
-    if action == "restart":
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Service Restarted",
-            details="Autonomous healing triggered a service restart. Containers recycled successfully."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Service Restarted",
-            message=f"Application {project.name} has been restarted by AI self-healing.",
-            type="info",
-            category="system"
-        ))
-        project.status = "active"
-        await db.commit()
-        return {"status": "success", "message": "Service restarted successfully."}
-
-    elif action == "regenerate-env":
-        import secrets
-        env_result = await db.execute(
-            select(models.Environment).filter(models.Environment.project_id == project.id, models.Environment.name == "production")
-        )
-        env = env_result.scalars().first()
-        if env:
-            var_result = await db.execute(
-                select(models.EnvironmentVariable).filter(models.EnvironmentVariable.environment_id == env.id)
-            )
-            vars_list = var_result.scalars().all()
-            jwt_secret_var = next((v for v in vars_list if v.key == "JWT_SECRET"), None)
-            new_val = f"zo_sec_{secrets.token_hex(24)}"
-            if jwt_secret_var:
-                jwt_secret_var.value = ""
-            else:
-                db.add(models.EnvironmentVariable(
-                    environment_id=env.id,
-                    key="JWT_SECRET",
-                    value="",
-                    is_secret=True
-                ))
-            vault.set_project_secret(str(project.id), "JWT_SECRET", new_val)
-            
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Environment Variables Regenerated",
-            details="Regenerated JWT_SECRET and updated vault configuration."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Variables Regenerated",
-            message=f"Secure environment variables regenerated for {project.name}.",
-            type="success",
-            category="system"
-        ))
-        await db.commit()
-        return {"status": "success", "message": "Environment variables regenerated."}
-
-    elif action == "reconnect-db":
-        db_instances_result = await db.execute(
-            select(models.DatabaseInstance).filter(models.DatabaseInstance.project_id == project.id)
-        )
-        db_instances = db_instances_result.scalars().all()
-        for db_inst in db_instances:
-            db_inst.status = "available"
-            
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Database Reconnected",
-            details="Autonomous self-healing recycled connection pool to managed databases."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Database Reconnected",
-            message=f"Database connection pool successfully recycled for {project.name}.",
-            type="success",
-            category="system"
-        ))
-        await db.commit()
-        return {"status": "success", "message": "Database connections reconnected."}
-
-    elif action == "redeploy":
-        azure_connection = await get_active_azure_connection(db, current_user.id)
-        analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
-        try:
-            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-redeploy"
-        namespace_prefix = deployment_targets.namespace_prefix(selected_target, current_user.id)
-        image_name = pipeline.normalize_project_id(f"{namespace_prefix}-{project.name}")
-        deployment = models.Deployment(
-            user_id=current_user.id,
-            project_id=project.id,
-            status="building",
-            environment="production",
-            branch=project.branch or "main",
-            version=version,
-            deployed_by="AI Self-Healer",
-            image=deployment_targets.image_ref_for_target(selected_target, image_name, version),
-            infrastructure_metadata={
-                "target_provider": selected_target.provider,
-                "target_reason": selected_target.reason,
-                "target": deployment_targets.metadata_for_target(selected_target),
-                "source_type": project.source_type,
-            }
-        )
-        db.add(deployment)
-        project.status = "deploying"
-        
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Redeployment Triggered",
-            details="Autonomous self-healing initiated a complete rebuild and redeploy."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Redeployment Started",
-            message=f"Redeploying application {project.name} due to autonomous healing request...",
-            type="info",
-            category="deployment"
-        ))
-        await db.commit()
-        await db.refresh(deployment)
-        
-        clone_token = None
-        if current_user.github_access_token_encrypted:
-            try:
-                clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
-            except Exception:
-                pass
-                
-        pipeline.enqueue_deployment(
-            str(deployment.id), project.full_name, project.branch or "main", background_tasks, clone_token
-        )
-        return {"status": "success", "message": "Redeployment triggered.", "deployment_id": str(deployment.id)}
-
-    elif action == "rollback":
-        azure_connection = await get_active_azure_connection(db, current_user.id)
-        rollback_dep_result = await db.execute(
-            select(models.Deployment)
-            .filter(models.Deployment.project_id == project.id, models.Deployment.status == "running")
-            .order_by(desc(models.Deployment.completed_at))
-            .limit(1)
-        )
-        rollback_dep = rollback_dep_result.scalars().first()
-        if not rollback_dep:
-            raise HTTPException(status_code=400, detail="No previous successful deployment found to roll back to.")
-        rollback_meta = rollback_dep.infrastructure_metadata or {}
-        previous_provider = rollback_meta.get("target_provider") or (rollback_meta.get("target") or {}).get("provider") or "auto"
-        analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
-        try:
-            selected_target = deployment_targets.choose_target(analysis_hint, azure_connection, previous_provider)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-            
-        deployment = models.Deployment(
-            user_id=current_user.id,
-            project_id=project.id,
-            status="building",
-            environment="production",
-            branch=rollback_dep.branch,
-            version=f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}-rollback",
-            deployed_by="AI Self-Healer",
-            image=rollback_dep.image,
-            live_url=rollback_dep.live_url,
-            infrastructure_metadata={
-                "target_provider": selected_target.provider,
-                "target_reason": f"Rollback to previous {selected_target.label} deployment.",
-                "target": deployment_targets.metadata_for_target(selected_target),
-                "source_type": project.source_type,
-            }
-        )
-        db.add(deployment)
-        project.status = "deploying"
-        
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Rollback Triggered",
-            details=f"Autonomous self-healing initiated a rollback to version {rollback_dep.version}."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Rollback Started",
-            message=f"Rolling back application {project.name} to {rollback_dep.version}...",
-            type="info",
-            category="deployment"
-        ))
-        await db.commit()
-        await db.refresh(deployment)
-        
-        clone_token = None
-        if current_user.github_access_token_encrypted:
-            try:
-                clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
-            except Exception:
-                pass
-                
-        pipeline.enqueue_deployment(
-            str(deployment.id), project.full_name, rollback_dep.branch, background_tasks, clone_token
-        )
-        return {"status": "success", "message": "Rollback triggered.", "deployment_id": str(deployment.id)}
-
-    elif action == "retry-health":
-        latest_dep_result = await db.execute(
-            select(models.Deployment)
-            .filter(models.Deployment.project_id == project.id)
-            .order_by(desc(models.Deployment.started_at))
-            .limit(1)
-        )
-        latest_dep = latest_dep_result.scalars().first()
-        if not latest_dep:
-            raise HTTPException(status_code=400, detail="No deployment found.")
-            
-        db.add(models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project.id,
-            action="Health Validation Retried",
-            details="Manual validation requested. Deployment status was not changed without live telemetry."
-        ))
-        db.add(models.Notification(
-            user_id=current_user.id,
-            title="Health Check Requested",
-            message=f"Health validation requested for {project.name}. Review deployment logs for the result.",
-            type="info",
-            category="system"
-        ))
-
-        await db.commit()
-        return {"status": "success", "message": "Health validation request recorded."}
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported self-healing action: {action}")
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Automated remediation is not available. Use the reviewed deployment workflow "
+            "for a new release and manage live Azure resources through verified provider operations."
+        ),
+    )
 
 
 # ──────────────────────────────────────────────
@@ -2805,7 +2770,6 @@ async def list_deployments(
 @app.post("/api/deployments/deploy")
 async def start_deploy(
     req: schemas.DeploymentCreate,
-    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -2817,6 +2781,36 @@ async def start_deploy(
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
+
+    selected_branch = deployment_branch_for_queue(project, req.branch)
+    encrypted_github_token = current_user.github_access_token_encrypted
+    if not encrypted_github_token:
+        raise HTTPException(
+            status_code=409,
+            detail="Reconnect GitHub before deploying this repository.",
+        )
+    try:
+        github_token = github_oauth.decrypt_token(encrypted_github_token)
+    except Exception as error:
+        logger.warning("Unable to decrypt GitHub credentials for deployment user %s.", current_user.id)
+        raise HTTPException(
+            status_code=409,
+            detail="Reconnect GitHub before deploying this repository.",
+        ) from error
+
+    commit_sha = await github_oauth.resolve_branch_commit(
+        github_token,
+        project.full_name,
+        selected_branch,
+    )
+    if not commit_sha:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The saved GitHub branch could not be resolved to an immutable commit. "
+                "No deployment was queued; verify repository access and try again."
+            ),
+        )
 
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
@@ -2853,17 +2847,6 @@ async def start_deploy(
             detail="Deployment was blocked by the digital-twin preflight. Resolve its blocking architecture, source-evidence, or Azure-target checks before retrying.",
         )
 
-    plan_for_engine = {**(approved_plan.plan_data or {}), "revision": approved_plan.revision}
-    try:
-        internal_iac = terraform_generator.generate_internal_artifact(
-            plan=plan_for_engine,
-            project_id=str(project.id),
-            project_name=project.name,
-        )
-    except Exception:
-        logger.exception("Internal infrastructure artifact generation failed for project %s", project.id)
-        raise HTTPException(status_code=503, detail="The internal infrastructure engine could not prepare this deployment.")
-
     analysis_hint = await get_latest_deployment_hint(db, current_user.id, project)
     try:
         selected_target = deployment_targets.choose_target(
@@ -2874,19 +2857,24 @@ async def start_deploy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    version = f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}"
+    deployment_id = uuid.uuid4()
+    version = f"v{datetime.utcnow().strftime('%Y%m%d')}.{deployment_id.hex[:12]}"
     namespace_prefix = deployment_targets.namespace_prefix(selected_target, current_user.id)
-    image_name = pipeline.normalize_project_id(f"{namespace_prefix}-{project.name}")
+    image_name = pipeline.normalize_project_id(
+        f"{namespace_prefix}-{project.name}-{str(project.id)[:8]}"
+    )
     image_ref = deployment_targets.image_ref_for_target(selected_target, image_name, version)
 
     # Create deployment record
     deployment = models.Deployment(
+        id=deployment_id,
         user_id=current_user.id,
         project_id=project.id,
         status="queued",
         environment=req.environment,
-        branch=req.branch,
+        branch=selected_branch,
         version=version,
+        commit_sha=commit_sha,
         deployed_by=f"{current_user.first_name or 'User'} {(current_user.last_name or '')[0:1]}.".strip(),
         image=image_ref,
         infrastructure_metadata={
@@ -2895,6 +2883,11 @@ async def start_deploy(
             "target": deployment_targets.metadata_for_target(selected_target),
             "available_targets": target_status["targets"],
             "source_type": project.source_type,
+            "source_revision": {
+                "provider": "github",
+                "branch": selected_branch,
+                "commit_sha": commit_sha,
+            },
             "architecture_plan": {
                 "id": str(approved_plan.id),
                 "revision": approved_plan.revision,
@@ -2908,16 +2901,17 @@ async def start_deploy(
                 "risk_level": preflight.risk_level,
                 "model": decision_intelligence.RISK_MODEL_VERSION,
             },
-            "internal_iac": internal_iac,
             "stages": [
-                {"id": 1, "label": "Repository Analysis", "status": "pending", "duration": ""},
-                {"id": 2, "label": "Infrastructure Planning", "status": "pending", "duration": ""},
-                {"id": 3, "label": "Terraform Generation", "status": "pending", "duration": ""},
-                {"id": 4, "label": "Infrastructure Provisioning", "status": "pending", "duration": ""},
-                {"id": 5, "label": "Application Deployment", "status": "pending", "duration": ""},
-                {"id": 6, "label": "Health Checks", "status": "pending", "duration": ""},
-                {"id": 7, "label": "Monitoring", "status": "pending", "duration": ""},
-                {"id": 8, "label": "Deployment Complete", "status": "pending", "duration": ""}
+                {"id": 1, "label": "Repository verification", "status": "pending", "duration": ""},
+                {"id": 2, "label": "Source preparation", "status": "pending", "duration": ""},
+                {"id": 3, "label": "Repository analysis", "status": "pending", "duration": ""},
+                {"id": 4, "label": "Build specification", "status": "pending", "duration": ""},
+                {"id": 5, "label": "Runtime configuration", "status": "pending", "duration": ""},
+                {"id": 6, "label": "Database requirements", "status": "pending", "duration": ""},
+                {"id": 7, "label": "Azure image build", "status": "pending", "duration": ""},
+                {"id": 8, "label": "App Service deployment", "status": "pending", "duration": ""},
+                {"id": 9, "label": "Public endpoint validation", "status": "pending", "duration": ""},
+                {"id": 10, "label": "Deployment record", "status": "pending", "duration": ""}
             ]
         }
     )
@@ -2953,7 +2947,10 @@ async def start_deploy(
     db.add(models.Notification(
         user_id=current_user.id,
         title="Deployment Started",
-        message=f"Building {project.full_name} ({req.branch}) for {req.environment} on {selected_target.label}...",
+        message=(
+            f"Queued {project.full_name} at {commit_sha[:12]} "
+            f"for {req.environment} on {selected_target.label}."
+        ),
         type="info",
         category="deployment"
     ))
@@ -3029,99 +3026,21 @@ async def get_deployment(
 @app.post("/api/deployments/{deploy_id}/fix-auto")
 async def fix_deployment_automatically(
     deploy_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    result = await db.execute(
+        select(models.Deployment.id).filter(
+            models.Deployment.id == deploy_id,
+            models.Deployment.user_id == current_user.id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Deployment not found.")
     raise HTTPException(
         status_code=501,
         detail="Automatic source-code changes are disabled. Review the recorded failure, update your repository, and launch a new version.",
     )
-
-    # 1. Fetch deployment
-    result = await db.execute(
-        select(models.Deployment).filter(
-            models.Deployment.id == deploy_id,
-            models.Deployment.user_id == current_user.id
-        )
-    )
-    deployment = result.scalars().first()
-    if not deployment:
-        raise HTTPException(status_code=404, detail="Deployment not found.")
-        
-    if deployment.status != "failed":
-        raise HTTPException(status_code=400, detail="Only failed deployments can be automatically fixed.")
-
-    await consume_paid_operation(
-        db,
-        current_user.id,
-        "ai_code_fix",
-        project_id=deployment.project_id,
-        deployment_id=deployment.id,
-    )
-        
-    # 2. Run auto remediation
-    devops_agent = agent.NvidiaNIMDevOpsAgent()
-    remediated = await devops_agent.auto_remediate_failure(
-        deployment_id=str(deployment.id),
-        failure_reason=deployment.failure_reason or "Unknown build error",
-        db=db
-    )
-    
-    if not remediated:
-        raise HTTPException(status_code=500, detail="Failed to apply auto-remediation fix.")
-        
-    # 3. Create a new redeployment record
-    project_result = await db.execute(
-        select(models.Project).filter(models.Project.id == deployment.project_id)
-    )
-    project = project_result.scalars().first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found.")
-        
-    new_deployment = models.Deployment(
-        user_id=current_user.id,
-        project_id=project.id,
-        status="building",
-        environment=deployment.environment,
-        branch=deployment.branch,
-        version=f"v{datetime.utcnow().strftime('%Y%m%d.%H%M')}",
-        deployed_by=f"AI Auto-Fix ({current_user.first_name or 'User'})",
-        image=deployment.image
-    )
-    db.add(new_deployment)
-    
-    project.status = "deploying"
-    
-    db.add(models.Notification(
-        user_id=current_user.id,
-        title="Redeploying with Auto-Fix",
-        message=f"Applied auto-fix for {project.name}. Starting redeployment...",
-        type="info",
-        category="deployment"
-    ))
-    
-    await db.commit()
-    await db.refresh(new_deployment)
-    
-    clone_token = None
-    if current_user.github_access_token_encrypted:
-        try:
-            clone_token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
-        except Exception:
-            clone_token = None
-
-    # 4. Dispatch the new deployment pipeline
-    pipeline.enqueue_deployment(
-        str(new_deployment.id), project.full_name, deployment.branch, background_tasks, clone_token
-    )
-    
-    return {
-        "status": "success",
-        "message": "Auto-fix applied. Redeployment initialized.",
-        "deployment_id": str(new_deployment.id),
-        "project_id": str(project.id)
-    }
 
 
 # ──────────────────────────────────────────────
@@ -3232,17 +3151,13 @@ async def apply_ai_action(
     action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Action not found.")
-    await consume_paid_operation(db, current_user.id, "ai_action_apply", project_id=action.project_id)
-    action.status = "applied"
-    db.add(models.Notification(
-        user_id=current_user.id,
-        title="AI Action Applied",
-        message=f"Applied: {action.message}",
-        type="success",
-        category="ai"
-    ))
-    await db.commit()
-    return {"status": "success"}
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Applying AI recommendations is not available. Review the recommendation "
+            "and make the change through the repository or verified deployment workflow."
+        ),
+    )
 
 
 @app.post("/api/ai/actions/{action_id}/dismiss")
@@ -3326,10 +3241,9 @@ async def analyze_repo(
     db: AsyncSession = Depends(get_db)
 ):
     """Analyze a repository and store results in the database."""
-    token = config.GITHUB_TOKEN
-    import os
-    
-    # Try decrypting user's github token if available
+    # Repository contents must be fetched with the requesting user's GitHub
+    # authorization. A service-wide token could expose repositories that the
+    # signed-in ZeroOps user is not entitled to inspect.
     user_token = None
     if current_user.github_connected and current_user.github_access_token_encrypted:
         try:
@@ -3337,7 +3251,12 @@ async def analyze_repo(
         except Exception:
             pass
             
-    clone_token = user_token or token
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect GitHub before analyzing a GitHub repository.",
+        )
+    clone_token = user_token
     
     try:
         # Fetch repository context via GitHub API (no cloning, no git binary)
@@ -4043,7 +3962,7 @@ async def ai_chat(
                 project_metadata["database"] = (analysis.database_dependencies[0] 
                                                  if (analysis.database_dependencies and len(analysis.database_dependencies) > 0 and analysis.database_dependencies[0] != "None")
                                                  else None)
-                project_metadata["vulnerabilities_count"] = len(analysis.vulnerabilities) if (analysis.vulnerabilities and analysis.vulnerabilities[0] != "Vulnerability checks passed successfully.") else 0
+                project_metadata["analysis_warning_count"] = len(analysis.vulnerabilities or [])
 
             # 1. Databases Query
             db_instances_result = await db.execute(
@@ -4145,17 +4064,10 @@ async def ai_chat(
                             "summary": fa.failure_summary,
                             "cause": fa.root_cause,
                             "recommended_fix": fa.recommended_fix,
-                            "confidence": fa.confidence,
                             "impact": fa.impact
                         }
 
             # 5. Fetch recent telemetry metrics
-            deps_result = await db.execute(
-                select(models.Deployment).filter(models.Deployment.project_id == req.project_id)
-            )
-            deps = deps_result.scalars().all()
-            failed_count = sum(1 for d in deps if d.status == "failed")
-            
             metrics_result = await db.execute(
                 select(models.DeploymentMetric)
                 .filter(models.DeploymentMetric.deployment_id.in_(
@@ -4165,46 +4077,16 @@ async def ai_chat(
                 .limit(5)
             )
             metrics = metrics_result.scalars().all()
-            
-            avg_cpu = 5.0
-            avg_mem = 15.0
-            avg_error_rate = 0.0
+
             if metrics:
                 avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics)
                 avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics)
-                avg_error_rate = sum(m.error_rate for m in metrics) / len(metrics)
                 project_metadata["telemetry"] = {
                     "avg_cpu_utilization": f"{round(avg_cpu, 1)}%",
                     "avg_memory_utilization": f"{round(avg_mem, 1)}%",
                     "recent_error_rate": f"{round(metrics[0].error_rate, 2)}%",
                     "recent_response_time_ms": f"{metrics[0].response_time_ms}ms"
                 }
-                
-            
-            # 6. Calculate dynamic health score
-            vulnerabilities_count = project_metadata.get("vulnerabilities_count", 0)
-            reliability = max(0, 100 - (failed_count * 10) - int(avg_error_rate * 15))
-            security = max(0, 100 - (vulnerabilities_count * 8))
-            performance = max(0, 100 - int(max(0, avg_cpu - 50) * 0.5) - int(max(0, avg_mem - 80) * 1.0))
-            scalability = 95 if len(deps) > 0 else 80
-            cost_score = None
-            if analysis and analysis.pricing_breakdown and isinstance(
-                analysis.pricing_breakdown.get("total_cost"), (int, float)
-            ):
-                total_cost = analysis.pricing_breakdown.get("total_cost", 0.0)
-                if total_cost < 15:
-                    cost_score = 95
-                elif total_cost < 50:
-                    cost_score = 85
-                else:
-                    cost_score = 70
-            health_total = reliability * 3 + security * 2 + performance * 2 + scalability
-            health_weight = 8
-            if cost_score is not None:
-                health_total += cost_score
-                health_weight += 1
-            health_score = int(health_total / health_weight)
-            project_metadata["health_score"] = health_score
 
     plan_payload = None
     plan_updated = False
@@ -4574,10 +4456,10 @@ async def reset_user_onboarding(
     )
     settings = settings_result.scalars().first()
     if settings:
-        settings.predictive_scaling = True
-        settings.auto_rollback = True
-        settings.ai_threat_mitigation = True
-        settings.auto_oom_restart = True
+        settings.predictive_scaling = False
+        settings.auto_rollback = False
+        settings.ai_threat_mitigation = False
+        settings.auto_oom_restart = False
         settings.slack_notifications = False
         settings.email_alerts = True
         settings.theme = "dark"
@@ -4589,7 +4471,7 @@ async def reset_user_onboarding(
     welcome_notif = models.Notification(
         user_id=current_user.id,
         title="Welcome to ZeroOps AI",
-        message="Your autonomous cloud deployment platform is ready. Connect a repository to get started.",
+        message="Your ZeroOps workspace is ready. Connect a repository or upload a ZIP to get started.",
         type="success",
         category="system"
     )
@@ -5006,13 +4888,13 @@ async def disconnect_github(
     return {"status": "success", "message": "GitHub account disconnected."}
 
 
-# Legacy PAT-based endpoint kept for backward compatibility
+# Legacy endpoint kept for backward-compatible clients.
 @app.get("/api/github/repo-metadata")
 async def get_repo_metadata(
     repo: str,
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    """Fetch repo metadata (branches). Uses OAuth token if available, falls back to PAT."""
+    """Fetch repository branches with user OAuth or public, unauthenticated Git access."""
     if current_user.github_connected and current_user.github_access_token_encrypted:
         try:
             token = github_oauth.decrypt_token(current_user.github_access_token_encrypted)
@@ -5022,9 +4904,9 @@ async def get_repo_metadata(
                 return {"branches": branches}
         except Exception:
             pass
-    # Fallback to git ls-remote with PAT
-    token = config.GITHUB_TOKEN
-    branches = git.get_branches(repo, token)
+    # Public repositories can be inspected without a credential. Never fall
+    # back to a service-wide PAT for a user-supplied repository name.
+    branches = git.get_branches(repo, None)
     return {"branches": branches}
 
 
@@ -5080,10 +4962,13 @@ async def add_secret(
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
-    success = vault.set_project_secret(req.projectId, req.key, req.value)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to save secret")
-    return {"status": "success", "key": req.key}
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "The legacy secrets API is not available. Manage runtime values through "
+            "the project environment-variable workflow."
+        ),
+    )
 
 
 @app.get("/api/secrets/{project_id}")
@@ -5093,8 +4978,13 @@ async def list_secrets(project_id: str, db: AsyncSession = Depends(get_db), curr
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
-    secrets = vault.get_project_secrets(project_id)
-    return [{"key": k, "value": "********"} for k in secrets.keys()]
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "The legacy secrets API is not available. Manage runtime values through "
+            "the project environment-variable workflow."
+        ),
+    )
 
 
 @app.delete("/api/secrets/{project_id}/{key}")
@@ -5104,10 +4994,13 @@ async def delete_secret(project_id: str, key: str, db: AsyncSession = Depends(ge
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
-    success = vault.delete_project_secret(project_id, key)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to delete secret")
-    return {"status": "success"}
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "The legacy secrets API is not available. Manage runtime values through "
+            "the project environment-variable workflow."
+        ),
+    )
 
 
 @app.post("/api/autoscaling/configure")
@@ -5146,13 +5039,9 @@ async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=404, detail="Project not found")
     secrets = vault.get_project_secrets(project_id)
     secrets_count = len(secrets)
-    verified_domain = any(
-        bool(domain.get("https_enabled") or domain.get("ssl"))
-        for domain in (project.custom_domains or [])
-        if isinstance(domain, dict)
-    )
     
-    # Fetch vulnerabilities count from latest AI analysis
+    # These are saved repository-analysis warnings, not a live vulnerability or
+    # threat feed. Preserve the recorded count without inferring a threat level.
     vuln_count = 0
     try:
         analysis_result = await db.execute(
@@ -5167,79 +5056,47 @@ async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db
     except Exception:
         pass
 
-    score = 0
-    if secrets_count > 0:
-        score += 35
-    if verified_domain:
-        score += 35
-    if k8s.K8S_AVAILABLE:
-        score += 30
     return {
-        "securityScore": score,
-        "firewallStatus": "Managed" if k8s.K8S_AVAILABLE else "Unavailable",
-        "httpsStatus": "Active" if verified_domain else "Not configured",
+        "securityScore": None,
+        "firewallStatus": "Unavailable",
+        "httpsStatus": "Not assessed",
         "secretsManaged": secrets_count,
         "vulnerabilities": vuln_count,
         "soc2Status": "Not assessed",
-        "threatLevel": "Low" if vuln_count == 0 else ("Medium" if vuln_count < 3 else "High"),
-        "namespaceIsolated": k8s.K8S_AVAILABLE,
-        "rbacEnabled": k8s.K8S_AVAILABLE
+        "threatLevel": "Unavailable",
+        "namespaceIsolated": False,
+        "rbacEnabled": False
     }
 
 
 # ──────────────────────────────────────────────
-# API KEY MANAGEMENT (per-user)
+# API KEY CAPABILITY BOUNDARY
 # ──────────────────────────────────────────────
-
-def _generate_api_key() -> str:
-    return f"zo_{secrets.token_urlsafe(32)}"
-
-
-def _hash_api_key(api_key: str) -> str:
-    """Store API credentials irreversibly; API keys have high entropy."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-
-def _is_hashed_api_key(value: str) -> bool:
-    return len(value) == 64 and all(char in "0123456789abcdef" for char in value.lower())
-
-
-async def _rotate_api_key(current_user: models.User, db: AsyncSession) -> str:
-    api_key = _generate_api_key()
-    current_user.api_key = _hash_api_key(api_key)
-    current_user.api_key_prefix = api_key[:11]
-    db.add(current_user)
-    await db.commit()
-    return api_key
 
 @app.get("/api/settings/api-key")
 async def get_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    if not current_user.api_key:
-        api_key = await _rotate_api_key(current_user, db)
-        return {"apiKey": api_key, "configured": True}
-
-    # Upgrade legacy plaintext values on their next use. Their raw value is
-    # intentionally not returned again; users can rotate it to obtain a new
-    # one-time credential.
-    if not _is_hashed_api_key(current_user.api_key):
-        current_user.api_key_prefix = current_user.api_key[:11]
-        current_user.api_key = _hash_api_key(current_user.api_key)
-        db.add(current_user)
-        await db.commit()
-
-    return {"apiKey": "", "configured": True}
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "API keys are not available because API-key authentication is not "
+            "implemented. No credential was generated."
+        ),
+    )
 
 @app.post("/api/settings/api-key/regenerate")
 async def regenerate_api_key(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    api_key = await _rotate_api_key(current_user, db)
-    return {"apiKey": api_key, "configured": True}
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "API keys are not available because API-key authentication is not "
+            "implemented. No credential was generated."
+        ),
+    )
 
 
 # ──────────────────────────────────────────────
 # COLLABORATION, DOMAINS, HEALTH & COST OPTIMIZATION APIs
 # ──────────────────────────────────────────────
-
-from sqlalchemy.orm.attributes import flag_modified
 
 @app.get("/api/projects/{project_id}/health-score")
 async def get_project_health_score(
@@ -5255,104 +5112,13 @@ async def get_project_health_score(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    deps_result = await db.execute(
-        select(models.Deployment)
-        .filter(models.Deployment.project_id == project_id)
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Composite health scoring is not implemented. Use recorded deployment "
+            "status, logs, and telemetry directly instead of an inferred score."
+        ),
     )
-    deps = deps_result.scalars().all()
-    failed_count = sum(1 for d in deps if d.status == "failed")
-    
-    metrics = []
-    if deps:
-        latest_metric_result = await db.execute(
-            select(models.DeploymentMetric)
-            .filter(models.DeploymentMetric.deployment_id.in_([d.id for d in deps]))
-            .order_by(desc(models.DeploymentMetric.timestamp))
-            .limit(5)
-        )
-        metrics = latest_metric_result.scalars().all()
-    
-    if not deps:
-        return {
-            "score": 0,
-            "status": "No deployments",
-            "breakdown": {
-                "performance": 0,
-                "security": 0,
-                "reliability": 0,
-                "scalability": 0,
-                "cost": None
-            },
-            "recommendations": ["Deploy this project to begin collecting production health signals."]
-        }
-
-    if not metrics:
-        return {
-            "score": 0,
-            "status": "No telemetry",
-            "breakdown": {
-                "performance": 0,
-                "security": 0,
-                "reliability": max(0, 100 - (failed_count * 10)),
-                "scalability": 0,
-                "cost": None
-            },
-            "recommendations": ["No deployment metrics have been recorded for this project yet."]
-        }
-
-    avg_error_rate = sum(m.error_rate for m in metrics) / len(metrics)
-    avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics)
-    avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics)
-    
-    analysis_result = await db.execute(
-        select(models.AIAnalysis)
-        .filter(models.AIAnalysis.project_id == project_id)
-        .order_by(desc(models.AIAnalysis.created_at))
-        .limit(1)
-    )
-    analysis = analysis_result.scalars().first()
-    vulnerabilities_count = 0
-    if analysis and analysis.vulnerabilities:
-        vulnerabilities_count = len(analysis.vulnerabilities)
-        if vulnerabilities_count == 1 and "vulnerability checks passed" in str(analysis.vulnerabilities[0]).lower():
-            vulnerabilities_count = 0
-
-    reliability = max(0, 100 - (failed_count * 10) - int(avg_error_rate * 15))
-    security = max(0, 100 - (vulnerabilities_count * 8))
-    performance = max(0, 100 - int(max(0, avg_cpu - 50) * 0.5) - int(max(0, avg_mem - 80) * 1.0))
-    scalability = 95 if len(deps) > 0 else 80
-    # Cost efficiency is unavailable until Azure Cost Management telemetry is
-    # connected. Do not turn a source-code heuristic into a health score.
-    cost = None
-    overall_score = int((reliability * 3 + security * 2 + performance * 2 + scalability) / 8)
-    overall_score = max(0, min(100, overall_score))
-    
-    status_str = "Strong Reliability" if overall_score >= 90 else "Good Health" if overall_score >= 80 else "Needs Attention" if overall_score >= 60 else "Critical Status"
-    
-    recommendations = []
-    if vulnerabilities_count > 0:
-        recommendations.append(f"Fix {vulnerabilities_count} security warning(s) identified in dependency scans.")
-    if failed_count > 0:
-        recommendations.append("Investigate recent deployment build logs to stabilize runtime startup.")
-    if avg_cpu < 10.0:
-        recommendations.append("CPU utilization is low; review capacity settings after cost telemetry is connected.")
-    if not project.custom_domains:
-        recommendations.append("Connect a custom domain to enable production TLS routing.")
-    if len(recommendations) == 0:
-        recommendations.append("No immediate reliability or security issues found in recorded telemetry.")
-
-    return {
-        "score": overall_score,
-        "status": status_str,
-        "breakdown": {
-            "performance": performance,
-            "security": security,
-            "reliability": reliability,
-            "scalability": scalability,
-            "cost": cost
-        },
-        "recommendations": recommendations
-    }
 
 @app.get("/api/projects/{project_id}/cost-optimization")
 async def get_project_cost_optimization(
@@ -5385,7 +5151,13 @@ async def get_project_domains(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-    return project.custom_domains or []
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Custom-domain provisioning is not implemented. ZeroOps AI does not "
+            "claim DNS verification or certificate state without a provider integration."
+        ),
+    )
 
 @app.post("/api/projects/{project_id}/domains")
 async def create_project_domain(
@@ -5400,31 +5172,13 @@ async def create_project_domain(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    domains = list(project.custom_domains or [])
-    if any(d["name"] == req.name for d in domains):
-        raise HTTPException(status_code=400, detail="Domain is already connected.")
-
-    new_domain = {
-        "name": req.name,
-        "default": len(domains) == 0,
-        "ssl": False,
-        "dns_verified": False,
-        "https_enabled": False,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    domains.append(new_domain)
-    project.custom_domains = domains
-    flag_modified(project, "custom_domains")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Domain Connected",
-        details=f"Connected custom domain {req.name} to project {project.name}."
-    ))
-    await db.commit()
-    return domains
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Custom-domain provisioning is not implemented. Configure domains through "
+            "Azure App Service until a verified provider workflow is available."
+        ),
+    )
 
 @app.post("/api/projects/{project_id}/domains/{domain_name}/verify")
 async def verify_project_domain(
@@ -5439,30 +5193,13 @@ async def verify_project_domain(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    domains = list(project.custom_domains or [])
-    found = False
-    for d in domains:
-        if d["name"] == domain_name:
-            d["dns_verified"] = True
-            d["ssl"] = True
-            d["https_enabled"] = True
-            found = True
-            break
-    if not found:
-        raise HTTPException(status_code=404, detail="Domain not found.")
-
-    project.custom_domains = domains
-    flag_modified(project, "custom_domains")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Domain DNS/SSL Verified",
-        details=f"Successfully verified DNS records and enabled SSL for {domain_name}."
-    ))
-    await db.commit()
-    return domains
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "DNS and certificate verification are not implemented. No DNS lookup "
+            "or certificate issuance was performed."
+        ),
+    )
 
 @app.post("/api/projects/{project_id}/domains/{domain_name}/renew-ssl")
 async def renew_domain_ssl(
@@ -5477,29 +5214,13 @@ async def renew_domain_ssl(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    domains = list(project.custom_domains or [])
-    found = False
-    for d in domains:
-        if d["name"] == domain_name:
-            d["ssl"] = True
-            d["https_enabled"] = True
-            found = True
-            break
-    if not found:
-        raise HTTPException(status_code=404, detail="Domain not found.")
-
-    project.custom_domains = domains
-    flag_modified(project, "custom_domains")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Domain SSL Renewed",
-        details=f"Renewed Let's Encrypt SSL certificate for custom domain {domain_name}."
-    ))
-    await db.commit()
-    return domains
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Certificate renewal is not implemented. Manage the certificate through "
+            "Azure App Service until a verified provider workflow is available."
+        ),
+    )
 
 @app.delete("/api/projects/{project_id}/domains/{domain_name}")
 async def delete_project_domain(
@@ -5514,23 +5235,13 @@ async def delete_project_domain(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    domains = list(project.custom_domains or [])
-    new_domains = [d for d in domains if d["name"] != domain_name]
-    if len(domains) == len(new_domains):
-        raise HTTPException(status_code=404, detail="Domain not found.")
-
-    project.custom_domains = new_domains
-    flag_modified(project, "custom_domains")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Domain Removed",
-        details=f"Removed custom domain {domain_name} from project."
-    ))
-    await db.commit()
-    return new_domains
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Custom-domain management is not implemented. Remove the binding through "
+            "Azure App Service until a verified provider workflow is available."
+        ),
+    )
 
 @app.get("/api/projects/{project_id}/members")
 async def get_project_members(
@@ -5544,20 +5255,13 @@ async def get_project_members(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-        
-    members = list(project.members or [])
-    if not any(m.get("email") == current_user.email for m in members):
-        owner_member = {
-            "email": current_user.email,
-            "role": "Owner",
-            "name": f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email.split("@")[0].capitalize(),
-            "joined_at": current_user.created_at.isoformat() if current_user.created_at else datetime.utcnow().isoformat()
-        }
-        members.insert(0, owner_member)
-        project.members = members
-        flag_modified(project, "members")
-        await db.commit()
-    return members
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Project membership and role assignment are not implemented. Access remains "
+            "limited to the project owner."
+        ),
+    )
 
 @app.post("/api/projects/{project_id}/members")
 async def add_project_member(
@@ -5572,29 +5276,13 @@ async def add_project_member(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    members = list(project.members or [])
-    if any(m["email"] == req.email for m in members) or req.email == current_user.email:
-        raise HTTPException(status_code=400, detail="User is already a member of this project.")
-
-    new_member = {
-        "email": req.email,
-        "role": req.role,
-        "name": req.email.split("@")[0].capitalize(),
-        "joined_at": datetime.utcnow().isoformat()
-    }
-    members.append(new_member)
-    project.members = members
-    flag_modified(project, "members")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Member Invited",
-        details=f"Invited {req.email} to project {project.name} as {req.role}."
-    ))
-    await db.commit()
-    return members
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Project invitations are not implemented. No invitation was sent and no "
+            "access was granted."
+        ),
+    )
 
 @app.delete("/api/projects/{project_id}/members/{email}")
 async def delete_project_member(
@@ -5609,26 +5297,12 @@ async def delete_project_member(
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-
-    if email == current_user.email:
-        raise HTTPException(status_code=400, detail="Cannot remove yourself (Project Owner) from the project.")
-
-    members = list(project.members or [])
-    new_members = [m for m in members if m["email"] != email]
-    if len(members) == len(new_members):
-        raise HTTPException(status_code=404, detail="Member not found.")
-
-    project.members = new_members
-    flag_modified(project, "members")
-    
-    db.add(models.ActivityEvent(
-        user_id=current_user.id,
-        project_id=project.id,
-        action="Member Removed",
-        details=f"Removed {email} from project team."
-    ))
-    await db.commit()
-    return new_members
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Project membership changes are not implemented. No access state was changed."
+        ),
+    )
 
 @app.get("/api/projects/{project_id}/activity")
 async def get_project_activity(
@@ -5649,22 +5323,6 @@ async def get_project_activity(
         .limit(50)
     )
     events = result.scalars().all()
-    
-    if not events:
-        proj_result = await db.execute(
-            select(models.Project).filter(models.Project.id == project_id)
-        )
-        project = proj_result.scalars().first()
-        event = models.ActivityEvent(
-            user_id=current_user.id,
-            project_id=project_id,
-            action="Project Connected",
-            details=f"Repository {project.full_name} was connected and scanned by ZeroOps AI.",
-            created_at=project.created_at
-        )
-        db.add(event)
-        await db.commit()
-        events = [event]
         
     return [
         {
@@ -5689,42 +5347,6 @@ async def get_global_activity(
         .limit(50)
     )
     rows = result.all()
-    
-    if not rows:
-        proj_result = await db.execute(
-            select(models.Project).filter(models.Project.user_id == current_user.id)
-        )
-        projects = proj_result.scalars().all()
-        
-        for p in projects:
-            e1 = models.ActivityEvent(
-                user_id=current_user.id,
-                project_id=p.id,
-                action="Project Connected",
-                details=f"Repository {p.full_name} was connected to ZeroOps.",
-                created_at=p.created_at
-            )
-            db.add(e1)
-            
-            if p.last_deployed_at:
-                e2 = models.ActivityEvent(
-                    user_id=current_user.id,
-                    project_id=p.id,
-                    action="Application Deployed Successfully",
-                    details=f"Deployed version v1.0 ({p.branch}) to production.",
-                    created_at=p.last_deployed_at
-                )
-                db.add(e2)
-        await db.commit()
-        
-        result = await db.execute(
-            select(models.ActivityEvent, models.Project.name)
-            .outerjoin(models.Project, models.ActivityEvent.project_id == models.Project.id)
-            .filter(models.ActivityEvent.user_id == current_user.id)
-            .order_by(desc(models.ActivityEvent.created_at))
-            .limit(50)
-        )
-        rows = result.all()
 
     return [
         {
@@ -5886,6 +5508,19 @@ async def receive_worker_event(
 # WEBSOCKET CHANNELS
 # ──────────────────────────────────────────────
 
+def websocket_origin_is_allowed(websocket: WebSocket) -> bool:
+    """Apply browser-origin checks that HTTP CORS middleware cannot provide."""
+    origin = (websocket.headers.get("origin") or "").strip().rstrip("/")
+    if not origin:
+        return not config.IS_PRODUCTION
+    allowed_origins = {
+        candidate.strip().rstrip("/")
+        for candidate in config.CORS_ORIGINS
+        if candidate and candidate.strip()
+    }
+    return origin in allowed_origins
+
+
 @app.websocket("/ws/deployments/{deploy_id}")
 async def deploy_websocket(websocket: WebSocket, deploy_id: str):
     """Stream deployment events only to the deployment owner.
@@ -5893,6 +5528,10 @@ async def deploy_websocket(websocket: WebSocket, deploy_id: str):
     WebSockets do not run the normal HTTP dependency chain, so ownership must
     be checked explicitly before accepting the connection.
     """
+    if not websocket_origin_is_allowed(websocket):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     access_token = websocket.cookies.get(auth.ACCESS_COOKIE)
     if not access_token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -5925,15 +5564,30 @@ async def deploy_websocket(websocket: WebSocket, deploy_id: str):
         return
 
     await websocket.accept()
-    await pipeline.register_connection(deploy_id, websocket)
-    try:
+
+    async def receive_until_disconnect() -> None:
         while True:
             await websocket.receive_text()
+
+    polling_task = asyncio.create_task(
+        pipeline.stream_deployment_updates(deploy_id, websocket)
+    )
+    receive_task = asyncio.create_task(receive_until_disconnect())
+    try:
+        done, _ = await asyncio.wait(
+            {polling_task, receive_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for completed_task in done:
+            completed_task.result()
     except WebSocketDisconnect:
-        pipeline.unregister_connection(deploy_id, websocket)
-    except Exception as e:
-        print(f"WS error in {deploy_id}: {e}")
-        pipeline.unregister_connection(deploy_id, websocket)
+        pass
+    except Exception:
+        logger.exception("Deployment WebSocket stream failed for %s.", deploy_id)
+    finally:
+        polling_task.cancel()
+        receive_task.cancel()
+        await asyncio.gather(polling_task, receive_task, return_exceptions=True)
 
 
 # ──────────────────────────────────────────────
@@ -5960,34 +5614,42 @@ async def analyze_project_repository(
 
     temp_dir = None
     if project.source_type != "upload" and not project.source_path:
-        from backend.services import git
         try:
-            temp_dir = git.clone_repo(project.full_name, clone_token)
+            temp_dir = git.clone_repo(
+                project.full_name,
+                clone_token,
+                branch=project.branch or "main",
+                workspace_key=f"analysis-{uuid.uuid4()}",
+            )
             repo_path = temp_dir
         except Exception as e:
-            logger.warning(f"Failed to clone repo for analysis: {e}")
-            repo_path = project.full_name
-            
+            logger.warning("Failed to clone selected repository branch for analysis: %s", e)
+            raise HTTPException(
+                status_code=502,
+                detail="The selected repository branch could not be fetched for analysis.",
+            ) from e
+
     try:
         raw_analysis = zeroops_analysis.analyze_repository(repo_path, str(project_id))
     finally:
-        if temp_dir and os.path.exists(temp_dir):
+        if temp_dir:
             try:
-                import shutil
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
+                git.cleanup_workspace(temp_dir)
+            except Exception as cleanup_error:
+                logger.warning("Failed to clean analysis workspace %s: %s", temp_dir, cleanup_error)
 
+    resources = raw_analysis.get("resources") or {}
     db_analysis = models.AIAnalysis(
         user_id=current_user.id,
         project_id=project.id,
         framework=raw_analysis.get("framework"),
         framework_version=raw_analysis.get("version"),
         language=raw_analysis.get("language"),
-        confidence=raw_analysis.get("confidence", 75),
-        cpu_recommendation=raw_analysis.get("resources", {}).get("cpu"),
-        memory_recommendation=raw_analysis.get("resources", {}).get("memory"),
-        storage_recommendation=raw_analysis.get("resources", {}).get("storage"),
+        risk_score=raw_analysis.get("risk_score", 0),
+        confidence=raw_analysis.get("confidence", 0),
+        cpu_recommendation=resources.get("cpu"),
+        memory_recommendation=resources.get("memory"),
+        storage_recommendation=resources.get("storage"),
         port=raw_analysis.get("port"),
         dependencies=raw_analysis.get("dependencies", []),
         vulnerabilities=raw_analysis.get("vulnerabilities", []),
@@ -6003,7 +5665,6 @@ async def analyze_project_repository(
         start_commands=raw_analysis.get("start_commands"),
         environment_variables=raw_analysis.get("environment_variables", []),
         explanation=raw_analysis.get("explanation"),
-        deployment_risk=raw_analysis.get("deployment_risk"),
         recommended_compute_tier=raw_analysis.get("recommended_compute_tier"),
         estimated_cost=raw_analysis.get("estimated_cost"),
         recommended_region=raw_analysis.get("recommended_region"),
@@ -6044,7 +5705,8 @@ async def get_project_analysis(
         "environment_variables": analysis.environment_variables,
         "vulnerabilities": analysis.vulnerabilities,
         "explanation": analysis.explanation,
-        "deployment_risk": analysis.deployment_risk
+        "risk_score": analysis.risk_score,
+        "confidence": analysis.confidence
     }
 
 
@@ -6077,8 +5739,7 @@ async def start_queue_deploy(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    from fastapi import BackgroundTasks
-    return await start_deploy(req, BackgroundTasks(), current_user, db)
+    return await start_deploy(req, current_user, db)
 
 
 @app.get("/api/deployment-jobs/{job_id}/status")
