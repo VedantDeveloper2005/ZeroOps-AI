@@ -4525,8 +4525,16 @@ async def github_oauth_redirect(request: Request):
         raise HTTPException(status_code=500, detail="GitHub OAuth is not configured. Set GITHUB_CLIENT_ID.")
 
     state = secrets.token_urlsafe(32)
-    authorization_url = github_oauth.get_authorization_url(state)
-    
+    # In production the Next.js frontend proxies /api/* to the backend, so
+    # route the callback through the frontend domain so JWT cookies land on
+    # the same origin the browser uses for all subsequent API calls.
+    github_redirect_uri = (
+        f"{config.FRONTEND_URL.rstrip('/')}/api/auth/github/callback"
+        if config.IS_PRODUCTION and config.FRONTEND_URL
+        else ""
+    )
+    authorization_url = github_oauth.get_authorization_url(state, github_redirect_uri)
+
     redirect_response = RedirectResponse(url=authorization_url, status_code=302)
     
     is_prod_cookie = config.IS_PRODUCTION
@@ -4646,6 +4654,19 @@ async def github_oauth_callback(
                 id=uuid.uuid4(),
                 first_name=first_name,
                 last_name=last_name,
+            await db.refresh(user)
+            logger.info(f"GitHub OAuth login: existing user {email} linked to GitHub @{github_username}")
+        else:
+            # Parse name into first/last
+            name_parts = github_name.split(" ", 1)
+            first_name = name_parts[0] if name_parts else github_username
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+            # Create new user
+            user = models.User(
+                id=uuid.uuid4(),
+                first_name=first_name,
+                last_name=last_name,
                 email=email,
                 password_hash=None,
                 provider="github",
@@ -4704,9 +4725,16 @@ async def google_oauth_redirect(request: Request):
     state = secrets.token_urlsafe(32)
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
-    redirect_uri = str(request.url_for("google_oauth_callback"))
-    if config.IS_PRODUCTION or request.headers.get("x-forwarded-proto") == "https":
-        redirect_uri = redirect_uri.replace("http://", "https://")
+    # In production the Next.js frontend proxies /api/* to the backend, so
+    # the callback must be registered on the frontend domain so that the JWT
+    # session cookies are set on the same origin the browser uses for all
+    # subsequent API calls.
+    if config.IS_PRODUCTION and config.FRONTEND_URL:
+        redirect_uri = f"{config.FRONTEND_URL.rstrip('/')}/api/auth/google/callback"
+    else:
+        redirect_uri = str(request.url_for("google_oauth_callback"))
+        if request.headers.get("x-forwarded-proto") == "https":
+            redirect_uri = redirect_uri.replace("http://", "https://")
     authorization_url = google_oauth.get_authorization_url(state, redirect_uri, code_challenge)
 
     redirect_response = RedirectResponse(url=authorization_url, status_code=302)
@@ -4765,9 +4793,12 @@ async def google_oauth_callback(
     if not cookie_state or not code_verifier or not hmac.compare_digest(cookie_state, state):
         return redirect_to_frontend("oauth_error=invalid_state")
 
-    redirect_uri = str(request.url_for("google_oauth_callback"))
-    if config.IS_PRODUCTION or request.headers.get("x-forwarded-proto") == "https":
-        redirect_uri = redirect_uri.replace("http://", "https://")
+    if config.IS_PRODUCTION and config.FRONTEND_URL:
+        redirect_uri = f"{config.FRONTEND_URL.rstrip('/')}/api/auth/google/callback"
+    else:
+        redirect_uri = str(request.url_for("google_oauth_callback"))
+        if request.headers.get("x-forwarded-proto") == "https":
+            redirect_uri = redirect_uri.replace("http://", "https://")
     google_access_token = await google_oauth.exchange_code_for_token(code, redirect_uri, code_verifier)
     if not google_access_token:
         return redirect_to_frontend("oauth_error=token_exchange_failed")

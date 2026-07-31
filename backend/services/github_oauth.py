@@ -77,15 +77,19 @@ def validate_oauth_state(state: str) -> bool:
     return False
 
 
-def get_authorization_url(state: str) -> str:
+def get_authorization_url(state: str, redirect_uri: str = "") -> str:
     """Build the GitHub OAuth authorization URL."""
     scopes = config.GITHUB_OAUTH_SCOPES
-    return (
+    url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={config.GITHUB_CLIENT_ID}"
         f"&scope={scopes}"
         f"&state={state}"
     )
+    if redirect_uri:
+        from urllib.parse import quote as _quote
+        url += f"&redirect_uri={_quote(redirect_uri, safe='')}"
+    return url
 
 
 # ──────────────────────────────────────────────
