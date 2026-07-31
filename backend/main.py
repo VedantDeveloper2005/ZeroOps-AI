@@ -4649,18 +4649,6 @@ async def github_oauth_callback(
             first_name = name_parts[0] if name_parts else github_username
             last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-            # Create new user
-            user = models.User(
-                id=uuid.uuid4(),
-                first_name=first_name,
-                last_name=last_name,
-            await db.refresh(user)
-            logger.info(f"GitHub OAuth login: existing user {email} linked to GitHub @{github_username}")
-        else:
-            # Parse name into first/last
-            name_parts = github_name.split(" ", 1)
-            first_name = name_parts[0] if name_parts else github_username
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
 
             # Create new user
             user = models.User(
