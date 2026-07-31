@@ -1,14 +1,15 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    Column, String, DateTime, Text, Integer, Float, Boolean,
-    ForeignKey, JSON, Enum as SAEnum, Index
+    BigInteger, Column, String, DateTime, Text, Integer, Float, Boolean,
+    CheckConstraint, ForeignKey, JSON, Enum as SAEnum, Index, UniqueConstraint
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
 import enum
 
 Base = declarative_base()
+POSTGRES_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 # ──────────────────────────────────────────────
@@ -200,7 +201,11 @@ class User(Base):
     ai_actions = relationship("AIAction", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     repositories = relationship("Repository", back_populates="user", cascade="all, delete-orphan")
-    activity_events = relationship("ActivityEvent", back_populates="user", cascade="all, delete-orphan")
+    activity_events = relationship(
+        "ActivityEvent",
+        back_populates="user",
+        passive_deletes=True,
+    )
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="user", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="user", cascade="all, delete-orphan")
     azure_connections = relationship("UserAzureConnection", back_populates="user", cascade="all, delete-orphan")
@@ -209,6 +214,9 @@ class User(Base):
     code_uploads = relationship("CodeUpload", back_populates="user", cascade="all, delete-orphan")
     audit_log_entries = relationship("AuditLogEntry", back_populates="user", cascade="all, delete-orphan")
     pending_approvals = relationship("PendingApproval", back_populates="user", cascade="all, delete-orphan")
+    tenant_memberships = relationship("TenantMembership", back_populates="user", cascade="all, delete-orphan")
+    requested_operation_runs = relationship("OperationRun", back_populates="requested_by_user")
+    created_artifacts = relationship("Artifact", back_populates="created_by_user")
 
     def to_dict(self):
         return {
@@ -234,6 +242,170 @@ class User(Base):
 # ──────────────────────────────────────────────
 # PROJECTS (connected repos / apps)
 # ──────────────────────────────────────────────
+
+# ----------------------------------------------------------------
+# TENANTS AND OPERATION HISTORY
+# ----------------------------------------------------------------
+
+class Tenant(Base):
+    """A ZeroOps data-isolation boundary.
+
+    This is deliberately independent from ``UserAzureConnection.tenant_id``.
+    That legacy value identifies a customer's Microsoft Entra tenant, while
+    this model identifies a ZeroOps SaaS tenant.
+    """
+
+    __tablename__ = "tenants"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    display_name = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False, default="personal")
+    status = Column(Text, nullable=False, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    memberships = relationship("TenantMembership", back_populates="tenant", cascade="all, delete-orphan")
+    operation_runs = relationship("OperationRun", back_populates="tenant", cascade="all, delete-orphan")
+    artifacts = relationship("Artifact", back_populates="tenant", cascade="all, delete-orphan")
+    activity_events = relationship("ActivityEvent", back_populates="tenant")
+
+
+class TenantMembership(Base):
+    __tablename__ = "tenant_memberships"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(Text, nullable=False, default="member")
+    status = Column(Text, nullable=False, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    tenant = relationship("Tenant", back_populates="memberships")
+    user = relationship("User", back_populates="tenant_memberships")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_tenant_memberships_tenant_user"),
+        Index("ix_tenant_memberships_user_status", "user_id", "status"),
+        Index("ix_tenant_memberships_tenant_status", "tenant_id", "status"),
+    )
+
+
+class OperationRun(Base):
+    """A durable, tenant-owned record for an analysis or infrastructure run.
+
+    Only digests and redacted summaries belong here. Repository contents,
+    credentials, Terraform state, raw plans, and unredacted model inputs do
+    not belong in the relational history schema.
+    """
+
+    __tablename__ = "operation_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    requested_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    operation_type = Column(Text, nullable=False)
+    status = Column(Text, nullable=False, default="queued")
+    source_revision = Column(Text, nullable=True)
+    input_digest = Column(String(64), nullable=True)
+    idempotency_key = Column(String(128), nullable=True)
+    summary = Column(POSTGRES_JSON, nullable=False, default=dict)
+    model_provider = Column(Text, nullable=True)
+    model_name = Column(Text, nullable=True)
+    model_version = Column(Text, nullable=True)
+    prompt_version = Column(Text, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    model_cost_microusd = Column(BigInteger, nullable=True)
+    error_code = Column(Text, nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    tenant = relationship("Tenant", back_populates="operation_runs")
+    project = relationship("Project")
+    requested_by_user = relationship("User", back_populates="requested_operation_runs")
+    parent_operation_run = relationship("OperationRun", remote_side=[id])
+    artifacts = relationship(
+        "Artifact",
+        back_populates="operation_run",
+        cascade="all, delete-orphan",
+        order_by="Artifact.created_at",
+    )
+    activity_events = relationship(
+        "ActivityEvent",
+        back_populates="operation_run",
+        order_by="ActivityEvent.created_at",
+    )
+
+    __table_args__ = (
+        Index("ix_operation_runs_tenant_created", "tenant_id", "created_at"),
+        Index("ix_operation_runs_tenant_status", "tenant_id", "status"),
+        Index("ix_operation_runs_project_id", "project_id"),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_operation_runs_tenant_idempotency"),
+        CheckConstraint(
+            "input_digest IS NULL OR input_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_operation_runs_input_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class Artifact(Base):
+    """Immutable metadata for a tenant-owned object in Azure Blob Storage."""
+
+    __tablename__ = "artifacts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    artifact_key = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(Text, nullable=False)
+    display_name = Column(Text, nullable=False)
+    content_type = Column(Text, nullable=False, default="application/octet-stream")
+    storage_container = Column(String(63), nullable=False)
+    storage_path = Column(Text, nullable=False)
+    sha256_digest = Column(String(64), nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    access_scope = Column(Text, nullable=False, default="user")
+    sanitization_status = Column(Text, nullable=False, default="sanitized")
+    artifact_metadata = Column("metadata", POSTGRES_JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+
+    tenant = relationship("Tenant", back_populates="artifacts")
+    operation_run = relationship("OperationRun", back_populates="artifacts")
+    project = relationship("Project")
+    created_by_user = relationship("User", back_populates="created_artifacts")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "artifact_key", "version", name="uq_artifacts_tenant_key_version"),
+        UniqueConstraint("storage_container", "storage_path", name="uq_artifacts_storage_locator"),
+        Index("ix_artifacts_tenant_created", "tenant_id", "created_at"),
+        Index("ix_artifacts_operation_run_id", "operation_run_id"),
+        Index("ix_artifacts_sha256_digest", "sha256_digest"),
+        CheckConstraint(
+            "sha256_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_artifacts_sha256",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint("size_bytes >= 0", name="ck_artifacts_size"),
+        CheckConstraint("version >= 1", name="ck_artifacts_version"),
+    )
+
 
 class Project(Base):
     __tablename__ = "projects"
@@ -261,7 +433,11 @@ class Project(Base):
     ai_analyses = relationship("AIAnalysis", back_populates="project", cascade="all, delete-orphan")
     ai_actions = relationship("AIAction", back_populates="project", cascade="all, delete-orphan")
     environments = relationship("Environment", back_populates="project", cascade="all, delete-orphan")
-    activity_events = relationship("ActivityEvent", back_populates="project", cascade="all, delete-orphan")
+    activity_events = relationship(
+        "ActivityEvent",
+        back_populates="project",
+        passive_deletes=True,
+    )
     deployment_recommendations = relationship("DeploymentRecommendation", back_populates="project", cascade="all, delete-orphan")
     failure_analyses = relationship("FailureAnalysis", back_populates="project", cascade="all, delete-orphan")
     databases = relationship("DatabaseInstance", back_populates="project", cascade="all, delete-orphan")
@@ -695,18 +871,48 @@ class ActivityEvent(Base):
     __tablename__ = "activity_events"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
+    operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     action = Column(Text, nullable=False)
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    actor_type = Column(Text, nullable=False, default="user")
+    actor_id = Column(String(128), nullable=True)
+    event_data = Column(POSTGRES_JSON, nullable=False, default=dict)
+    external_event_id = Column(String(128), nullable=True)
+    event_fingerprint = Column(String(64), nullable=True)
+    sequence_number = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
+    tenant = relationship("Tenant", back_populates="activity_events")
+    operation_run = relationship("OperationRun", back_populates="activity_events")
     user = relationship("User", back_populates="activity_events")
     project = relationship("Project", back_populates="activity_events")
 
     __table_args__ = (
         Index("ix_activity_events_user_id", "user_id"),
+        Index("ix_activity_events_tenant_created", "tenant_id", "created_at"),
+        Index("ix_activity_events_operation_created", "operation_run_id", "created_at"),
+        UniqueConstraint(
+            "operation_run_id",
+            "sequence_number",
+            name="uq_activity_events_operation_sequence",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "external_event_id",
+            name="uq_activity_events_tenant_external_event",
+        ),
+        CheckConstraint(
+            "event_fingerprint IS NULL OR event_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_activity_events_fingerprint",
+        ).ddl_if(dialect="postgresql"),
     )
 
 

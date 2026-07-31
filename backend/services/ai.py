@@ -11,13 +11,37 @@ ai_logger = logging.getLogger("zeroops.ai.observability")
 ai_logger.setLevel(logging.INFO)
 try:
     from backend.config import (
-        OPENAI_API_KEY, GITHUB_MODELS_API_KEY, GITHUB_MODELS_ENDPOINT, GITHUB_MODELS_MODEL,
-        NVIDIA_API_KEY, NVIDIA_ENDPOINT, NVIDIA_MODEL, OPENAI_MODEL, AI_MODEL_TIMEOUT_SECONDS
+        AI_REPOSITORY_API_KEY,
+        AI_REPOSITORY_ENDPOINT,
+        AI_REPOSITORY_MODEL,
+        AI_REPOSITORY_PROVIDER,
+        IS_PRODUCTION,
+        GITHUB_MODELS_API_KEY,
+        GITHUB_MODELS_ENDPOINT,
+        GITHUB_MODELS_MODEL,
+        NVIDIA_API_KEY,
+        NVIDIA_ENDPOINT,
+        NVIDIA_MODEL,
+        OPENAI_API_KEY,
+        OPENAI_MODEL,
+        AI_MODEL_TIMEOUT_SECONDS,
     )
 except ImportError:
     from config import (
-        OPENAI_API_KEY, GITHUB_MODELS_API_KEY, GITHUB_MODELS_ENDPOINT, GITHUB_MODELS_MODEL,
-        NVIDIA_API_KEY, NVIDIA_ENDPOINT, NVIDIA_MODEL, OPENAI_MODEL, AI_MODEL_TIMEOUT_SECONDS
+        AI_REPOSITORY_API_KEY,
+        AI_REPOSITORY_ENDPOINT,
+        AI_REPOSITORY_MODEL,
+        AI_REPOSITORY_PROVIDER,
+        IS_PRODUCTION,
+        GITHUB_MODELS_API_KEY,
+        GITHUB_MODELS_ENDPOINT,
+        GITHUB_MODELS_MODEL,
+        NVIDIA_API_KEY,
+        NVIDIA_ENDPOINT,
+        NVIDIA_MODEL,
+        OPENAI_API_KEY,
+        OPENAI_MODEL,
+        AI_MODEL_TIMEOUT_SECONDS,
     )
 
 
@@ -616,11 +640,22 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
     derived locally and verified later by the Azure deployment workflow.
     """
     local_analysis = analyze_repo_local(repo_path, project_id)
-    api_key = GITHUB_MODELS_API_KEY or OPENAI_API_KEY
-    base_url = GITHUB_MODELS_ENDPOINT if GITHUB_MODELS_API_KEY else None
-    model_name = GITHUB_MODELS_MODEL if GITHUB_MODELS_API_KEY else OPENAI_MODEL
-    provider = "github-models" if GITHUB_MODELS_API_KEY else "openai"
+    if IS_PRODUCTION:
+        ai_logger.info(
+            "AI_ROUTE_ISOLATED | Production API returned deterministic repository facts; "
+            "model inference runs only in the repository-analysis Function."
+        )
+        return local_analysis
+    api_key = AI_REPOSITORY_API_KEY
+    base_url = AI_REPOSITORY_ENDPOINT
+    model_name = AI_REPOSITORY_MODEL
+    provider = AI_REPOSITORY_PROVIDER
 
+    if provider != "github-models":
+        raise ValueError(
+            "The legacy synchronous repository route supports github-models only; "
+            "use the isolated model gateway for Microsoft Foundry."
+        )
     if not api_key:
         ai_logger.info("AI_CONFIG_ERROR | Repository review is not configured; using source scanner only.")
         raise ValueError("Repository review is not configured.")
@@ -660,39 +695,17 @@ Repository tree:
     tokens_used = 0
     try:
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=1)
-        if provider == "openai":
-            response = client.responses.create(
-                model=model_name,
-                input=[
-                    {"role": "system", "content": "Return only the requested structured repository review."},
-                    {"role": "user", "content": prompt},
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "repository_review",
-                        "strict": True,
-                        "schema": REPOSITORY_REVIEW_SCHEMA,
-                    }
-                },
-                max_output_tokens=1_500,
-                store=False,
-            )
-            content = str(getattr(response, "output_text", "") or "").strip()
-        else:
-            # Keep compatibility with GitHub Models, while enforcing the exact
-            # same server-side schema before its response can be used.
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "Return only valid JSON matching the requested review fields."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1,
-                max_tokens=1_500,
-            )
-            content = str(response.choices[0].message.content or "").strip()
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "Return only valid JSON matching the requested review fields."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_tokens=1_500,
+        )
+        content = str(response.choices[0].message.content or "").strip()
 
         if getattr(response, "usage", None):
             tokens_used = int(getattr(response.usage, "total_tokens", 0) or 0)

@@ -186,6 +186,63 @@ async def run_migrations():
 
     from sqlalchemy import text
 
+    try:
+        from backend.migrations.v001_tenant_history import (
+            STATEMENTS as MIGRATION_001_STATEMENTS,
+            VERSION as MIGRATION_001_VERSION,
+        )
+        from backend.migrations.v002_projector_event_id import (
+            STATEMENTS as MIGRATION_002_STATEMENTS,
+            VERSION as MIGRATION_002_VERSION,
+        )
+        from backend.migrations.v003_history_integrity import (
+            STATEMENTS as MIGRATION_003_STATEMENTS,
+            VERSION as MIGRATION_003_VERSION,
+        )
+    except ImportError:
+        from migrations.v001_tenant_history import (
+            STATEMENTS as MIGRATION_001_STATEMENTS,
+            VERSION as MIGRATION_001_VERSION,
+        )
+        from migrations.v002_projector_event_id import (
+            STATEMENTS as MIGRATION_002_STATEMENTS,
+            VERSION as MIGRATION_002_VERSION,
+        )
+        from migrations.v003_history_integrity import (
+            STATEMENTS as MIGRATION_003_STATEMENTS,
+            VERSION as MIGRATION_003_VERSION,
+        )
+
+    async with async_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        versioned_migrations = (
+            (MIGRATION_001_VERSION, MIGRATION_001_STATEMENTS),
+            (MIGRATION_002_VERSION, MIGRATION_002_STATEMENTS),
+            (MIGRATION_003_VERSION, MIGRATION_003_STATEMENTS),
+        )
+        for migration_version, migration_statements_for_version in versioned_migrations:
+            applied_result = await conn.execute(
+                text("SELECT 1 FROM schema_migrations WHERE version = :version"),
+                {"version": migration_version},
+            )
+            if applied_result.scalar_one_or_none() is None:
+                for statement in migration_statements_for_version:
+                    await conn.execute(text(statement))
+                await conn.execute(
+                    text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+                    {"version": migration_version},
+                )
+                logger.info("Applied schema migration %s.", migration_version)
+
     migration_statements = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_id TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS github_username TEXT",

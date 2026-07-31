@@ -1,0 +1,21 @@
+schemaVersion: zeroops-ai-spec-manifest.v1
+specifications:
+  - workload: repository_analysis
+    promptVersion: repository-analysis.v1
+    contractVersion: repository-assessment.v1
+    instructions: repository-analysis/instructions.md
+    responseSchema: repository-analysis/response.schema.json
+    foundryResponseSchema: repository-analysis/response.foundry.schema.json
+    evaluationDataset: repository-analysis/evaluation.dataset.jsonl
+    githubPrompt: repository-analysis/github-models.prompt.yml
+  - workload: terraform_generation
+    promptVersion: terraform-generation.v1
+    contractVersion: terraform-bundle.v1
+    instructions: terraform-generation/instructions.md
+    responseSchema: terraform-generation/response.schema.json
+    foundryResponseSchema: terraform-generation/response.foundry.schema.json
+    evaluationDataset: terraform-generation/evaluation.dataset.jsonl
+    githubPrompt: terraform-generation/github-models.prompt.yml
+sharedPolicies:
+  - shared/security-policy.md
+  - shared/cost-optimization-policy.md

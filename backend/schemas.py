@@ -6,6 +6,75 @@ from datetime import datetime
 import uuid
 
 
+# ----------------------------------------------------------------
+# TENANT-SCOPED OPERATION HISTORY
+# ----------------------------------------------------------------
+
+class HistoryArtifactResponse(BaseModel):
+    id: uuid.UUID
+    artifact_key: uuid.UUID
+    kind: str
+    display_name: str
+    content_type: str
+    sha256_digest: str
+    size_bytes: int
+    version: int
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+
+class HistoryActivityEventResponse(BaseModel):
+    id: uuid.UUID
+    action: str
+    actor_type: str
+    details: Optional[str] = None
+    event_data: dict[str, Any] = Field(default_factory=dict)
+    external_event_id: Optional[str] = None
+    sequence_number: Optional[int] = None
+    created_at: datetime
+
+
+class OperationRunSummaryResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
+    parent_operation_run_id: Optional[uuid.UUID] = None
+    operation_type: str
+    status: str
+    source_revision: Optional[str] = None
+    input_digest: Optional[str] = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+    model_provider: Optional[str] = None
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    prompt_version: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    model_cost_microusd: Optional[int] = None
+    error_code: Optional[str] = None
+    redacted_error: Optional[str] = None
+    artifact_count: int = 0
+    event_count: int = 0
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OperationRunDetailResponse(OperationRunSummaryResponse):
+    artifacts: list[HistoryArtifactResponse] = Field(default_factory=list)
+    events: list[HistoryActivityEventResponse] = Field(default_factory=list)
+
+
+class OperationHistoryPageResponse(BaseModel):
+    items: list[OperationRunSummaryResponse] = Field(default_factory=list)
+    page: int
+    per_page: int
+    total: int
+    has_next: bool
+
+
 # ──────────────────────────────────────────────
 # AUTH SCHEMAS
 # ──────────────────────────────────────────────

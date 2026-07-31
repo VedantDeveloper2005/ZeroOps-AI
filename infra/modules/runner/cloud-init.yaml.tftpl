@@ -1,0 +1,66 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - docker.io
+  - gnupg
+  - jq
+  - lsb-release
+
+write_files:
+  - path: /etc/zeroops-runner.env
+    owner: root:root
+    permissions: "0600"
+    content: |
+      AZURE_CLIENT_ID=${identity_client_id}
+      ZEROOPS_SERVICE_BUS_NAMESPACE=${service_bus_namespace}
+      ZEROOPS_PLAN_QUEUE=${plan_queue_name}
+      ZEROOPS_APPLY_QUEUE=${apply_queue_name}
+      ZEROOPS_EVENT_QUEUE=${event_queue_name}
+      ZEROOPS_ARTIFACT_ACCOUNT=${artifact_storage_account_name}
+      ZEROOPS_EXECUTOR_ACCOUNT=${executor_storage_account_name}
+      ZEROOPS_PRIVATE_PLAN_CONTAINER=${executor_plan_container_name}
+      ZEROOPS_STATE_CONTAINER=${executor_state_container_name}
+      ZEROOPS_VMSS_RESOURCE_ID=${vmss_resource_id}
+      ZEROOPS_RESOURCE_GROUP=${resource_group_name}
+      ZEROOPS_VMSS_NAME=${vmss_name}
+  - path: /etc/systemd/system/zeroops-runner.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=ZeroOps immutable Terraform executor
+      Wants=network-online.target docker.service
+      After=network-online.target docker.service
+
+      [Service]
+      Type=simple
+      Restart=on-failure
+      RestartSec=15
+      EnvironmentFile=/etc/zeroops-runner.env
+      ExecStartPre=/usr/bin/az login --identity --client-id ${identity_client_id} --allow-no-subscriptions
+      ExecStartPre=/usr/bin/az acr login --name ${registry_name}
+      ExecStartPre=/usr/bin/docker pull ${runner_image_reference}
+      ExecStart=/usr/bin/docker run --rm --name zeroops-runner --network host --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=512m --tmpfs /work:rw,nosuid,nodev,size=4096m --env-file /etc/zeroops-runner.env ${runner_image_reference}
+      ExecStop=/usr/bin/docker stop --time 300 zeroops-runner
+      TimeoutStopSec=330
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - install -d -m 0755 /etc/apt/keyrings
+  - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+  - chmod go+r /etc/apt/keyrings/microsoft.gpg
+  - >
+    sh -c 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg]
+    https://packages.microsoft.com/repos/azure-cli/
+    $(lsb_release -cs) main" > /etc/apt/sources.list.d/azure-cli.list'
+  - apt-get update
+  - apt-get install -y azure-cli
+  - systemctl enable --now docker
+  - test "$(printf '%s' '${runner_image_reference}' | sed -n 's/.*@sha256:\\([0-9a-f]\\{64\\}\\)$/\\1/p' | wc -c)" -eq 65
+  - systemctl daemon-reload
+  - systemctl enable --now zeroops-runner

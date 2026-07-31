@@ -1,0 +1,188 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "repository-assessment.v1"
+      ],
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "deployment_risk": {
+      "type": "string"
+    },
+    "recommendations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "priority": {
+            "enum": [
+              "required",
+              "high",
+              "medium",
+              "low"
+            ],
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "security",
+              "reliability",
+              "operations",
+              "performance",
+              "cost",
+              "delivery"
+            ],
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cost_impact": {
+            "enum": [
+              "decrease",
+              "neutral",
+              "increase",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "security_impact": {
+            "enum": [
+              "decrease",
+              "neutral",
+              "increase",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "reliability_impact": {
+            "enum": [
+              "decrease",
+              "neutral",
+              "increase",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "tradeoffs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "priority",
+          "category",
+          "action",
+          "rationale",
+          "evidence_refs",
+          "cost_impact",
+          "security_impact",
+          "reliability_impact",
+          "tradeoffs"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "cost_optimizations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expected_impact": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "tradeoffs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "validation_needed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "rationale",
+          "evidence_refs",
+          "expected_impact",
+          "tradeoffs",
+          "validation_needed"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "unresolved_questions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "deployment_risk",
+    "recommendations",
+    "cost_optimizations",
+    "unresolved_questions",
+    "confidence",
+    "limitations"
+  ],
+  "type": "object"
+}

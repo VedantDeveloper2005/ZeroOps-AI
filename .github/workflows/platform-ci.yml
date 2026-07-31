@@ -1,0 +1,182 @@
+name: Validate ZeroOps execution platform
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "ai-specs/**"
+      - "backend/contracts/**"
+      - "backend/services/model_gateway.py"
+      - "backend/services/terraform_ai.py"
+      - "functions/**"
+      - "infra/**"
+      - "scripts/package_functions.py"
+      - "worker/**"
+      - ".github/workflows/platform-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "ai-specs/**"
+      - "backend/contracts/**"
+      - "backend/services/model_gateway.py"
+      - "backend/services/terraform_ai.py"
+      - "functions/**"
+      - "infra/**"
+      - "scripts/package_functions.py"
+      - "worker/**"
+      - ".github/workflows/platform-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts-and-packages:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            functions/repository_analysis/requirements.txt
+            functions/history_projector/requirements.txt
+            worker/requirements.vmss.txt
+
+      - name: Install contract-test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+          python -m pip install -r functions/repository_analysis/requirements.txt
+          python -m pip install -r functions/history_projector/requirements.txt
+          python -m pip install -r worker/requirements.vmss.txt
+          python -m pip install pytest==9.0.3 pytest-asyncio==1.3.0
+          python -m pip check
+
+      - name: Validate AI runtime and portal specifications
+        run: |
+          python -m pytest \
+            backend/tests/test_ai_specs.py \
+            backend/tests/test_model_gateway.py \
+            backend/tests/test_terraform_ai_safety.py
+
+      - name: Validate Function contracts
+        run: python -m unittest discover -s functions/tests -v
+
+      - name: Validate VMSS execution gates
+        run: python -m unittest discover -s worker/tests -v
+
+      - name: Build deterministic Function packages
+        run: |
+          python scripts/package_functions.py --output dist/functions-first
+          python scripts/package_functions.py --output dist/functions-second
+          diff \
+            dist/functions-first/manifest.json \
+            dist/functions-second/manifest.json
+          for archive in dist/functions-first/packages/*.zip; do
+            unzip -t "$archive"
+          done
+
+      - name: Smoke-import packaged Function apps
+        run: |
+          for function_name in repository_analysis terraform_generation history_projector; do
+            (
+              cd "dist/functions-first/staging/${function_name}"
+              python -c "import function_app"
+            )
+          done
+
+      - name: Publish immutable Function packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroops-function-packages-${{ github.sha }}
+          path: |
+            dist/functions-first/packages/
+            dist/functions-first/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra
+
+      - name: Initialize without remote state
+        working-directory: infra
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform graph
+        working-directory: infra
+        run: terraform validate -no-color
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v6.2.2
+        with:
+          tflint_version: "v0.64.0"
+
+      - name: Run TFLint
+        run: |
+          tflint --chdir=infra --init
+          tflint --chdir=infra --recursive
+
+      - name: Set up Checkov
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Run Checkov
+        run: |
+          python -m pip install checkov==3.3.8
+          checkov \
+            --config-file infra/.checkov.yml \
+            --directory infra \
+            --framework terraform \
+            --var-file infra/environments/production.tfvars.example \
+            --compact
+
+  runner-image:
+    runs-on: ubuntu-latest
+    needs:
+      - contracts-and-packages
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build immutable runner image
+        run: |
+          docker build \
+            --file worker/Dockerfile \
+            --tag zeroops-runner:${GITHUB_SHA} \
+            .
+
+      - name: Inspect runner entry point
+        run: |
+          entrypoint="$(
+            docker image inspect \
+              zeroops-runner:${GITHUB_SHA} \
+              --format '{{json .Config.Cmd}}'
+          )"
+          test "$entrypoint" = '["python","-m","worker.vmss_main"]'

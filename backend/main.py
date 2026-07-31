@@ -43,14 +43,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence
+    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence
+    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -79,6 +79,13 @@ app = FastAPI(
     openapi_url=None if config.IS_PRODUCTION else "/openapi.json",
     lifespan=lifespan,
 )
+
+try:
+    from backend.routes.history import router as history_router
+except ImportError:
+    from routes.history import router as history_router
+
+app.include_router(history_router)
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
@@ -985,6 +992,7 @@ async def signup(req: schemas.UserCreate, response: Response, db: AsyncSession =
     try:
         db.add(new_user)
         await db.flush()
+        await tenancy.ensure_personal_tenant(db, new_user)
         db.add(models.UserSettings(user_id=new_user.id))
         db.add(models.Notification(
             user_id=new_user.id,
@@ -4599,6 +4607,7 @@ async def github_oauth_callback(
             user.email_verified = True
             if not user.avatar_url:
                 user.avatar_url = github_avatar
+            await tenancy.ensure_personal_tenant(db, user)
             await db.commit()
             await db.refresh(user)
             logger.info(f"GitHub OAuth login: existing user {email} linked to GitHub @{github_username}")
@@ -4628,6 +4637,7 @@ async def github_oauth_callback(
             )
             db.add(user)
             await db.flush()
+            await tenancy.ensure_personal_tenant(db, user)
 
             # Create default settings and welcome notification
             db.add(models.UserSettings(user_id=user.id))
@@ -4790,6 +4800,7 @@ async def google_oauth_callback(
                 category="system",
             ))
 
+        await tenancy.ensure_personal_tenant(db, user)
         user.last_primary_auth_at = datetime.utcnow()
         db.add(user)
         await db.commit()

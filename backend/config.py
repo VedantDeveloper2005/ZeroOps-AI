@@ -99,11 +99,42 @@ OPENAI_API_KEY = _setting("OPENAI_API_KEY")
 OPENAI_MODEL = _setting("OPENAI_MODEL", "gpt-5.4-mini")
 AI_MODEL_TIMEOUT_SECONDS = _integer("AI_MODEL_TIMEOUT_SECONDS", 30)
 GITHUB_MODELS_API_KEY = _setting("GITHUB_MODELS_API_KEY")
-GITHUB_MODELS_ENDPOINT = _setting("GITHUB_MODELS_ENDPOINT", "https://models.inference.ai.azure.com")
-GITHUB_MODELS_MODEL = _setting("GITHUB_MODELS_MODEL", "gpt-4o")
+GITHUB_MODELS_ENDPOINT = _setting("GITHUB_MODELS_ENDPOINT", "https://models.github.ai/inference")
+GITHUB_MODELS_MODEL = _setting("GITHUB_MODELS_MODEL", "openai/gpt-4o")
 NVIDIA_API_KEY = _setting("NVIDIA_API_KEY")
 NVIDIA_ENDPOINT = _setting("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1")
 NVIDIA_MODEL = _setting("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+
+# Isolated AI workload routes. These settings deliberately do not inherit from
+# GITHUB_MODELS_API_KEY or OPENAI_API_KEY. Repository analysis may degrade to
+# the deterministic scanner when its route is unavailable, while Terraform
+# generation fails closed. In production each route is loaded by its own
+# managed workload identity from its dedicated Key Vault.
+AI_GITHUB_API_VERSION = _setting("AI_GITHUB_API_VERSION", "2026-03-10")
+
+AI_REPOSITORY_PROVIDER = _setting("AI_REPOSITORY_PROVIDER", "github-models").strip().lower()
+AI_REPOSITORY_API_KEY = _setting("AI_REPOSITORY_API_KEY")
+AI_REPOSITORY_ENDPOINT = _setting(
+    "AI_REPOSITORY_ENDPOINT",
+    "https://models.github.ai/inference",
+).rstrip("/")
+AI_REPOSITORY_MODEL = _setting("AI_REPOSITORY_MODEL", "openai/gpt-4o")
+AI_REPOSITORY_AGENT_NAME = _setting("AI_REPOSITORY_AGENT_NAME")
+AI_REPOSITORY_PROMPT_VERSION = _setting("AI_REPOSITORY_PROMPT_VERSION", "repository-analysis.v1")
+AI_REPOSITORY_MAX_INPUT_CHARS = _integer("AI_REPOSITORY_MAX_INPUT_CHARS", 60_000)
+AI_REPOSITORY_MAX_OUTPUT_TOKENS = _integer("AI_REPOSITORY_MAX_OUTPUT_TOKENS", 1_600)
+
+AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "github-models").strip().lower()
+AI_TERRAFORM_API_KEY = _setting("AI_TERRAFORM_API_KEY")
+AI_TERRAFORM_ENDPOINT = _setting(
+    "AI_TERRAFORM_ENDPOINT",
+    "https://models.github.ai/inference",
+).rstrip("/")
+AI_TERRAFORM_MODEL = _setting("AI_TERRAFORM_MODEL", "openai/gpt-4.1")
+AI_TERRAFORM_AGENT_NAME = _setting("AI_TERRAFORM_AGENT_NAME")
+AI_TERRAFORM_PROMPT_VERSION = _setting("AI_TERRAFORM_PROMPT_VERSION", "terraform-generation.v1")
+AI_TERRAFORM_MAX_INPUT_CHARS = _integer("AI_TERRAFORM_MAX_INPUT_CHARS", 40_000)
+AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 8_000)
 
 # OAuth and session security
 GITHUB_TOKEN = _setting("GITHUB_TOKEN")
@@ -148,6 +179,13 @@ LOGIN_LOCKOUT_MINUTES = _integer("LOGIN_LOCKOUT_MINUTES", 15)
 # Azure operations and product controls
 AZURE_DEFAULT_REGION = _setting("AZURE_DEFAULT_REGION", "eastus")
 ZEROOPS_PUBLIC_BASE_DOMAIN = _setting("ZEROOPS_PUBLIC_BASE_DOMAIN", "").strip().strip(".")
+ARTIFACT_STORAGE_ACCOUNT_URL = _setting("ARTIFACT_STORAGE_ACCOUNT_URL", "").rstrip("/")
+ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID = _setting(
+    "ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID",
+    "",
+)
+ARTIFACT_STORAGE_NAMESPACE_KEY = _setting("ARTIFACT_STORAGE_NAMESPACE_KEY", "")
+ARTIFACT_STORAGE_MAX_DOWNLOAD_MB = _integer("ARTIFACT_STORAGE_MAX_DOWNLOAD_MB", 25)
 RISK_COST_THRESHOLD_CENTS = _integer("RISK_COST_THRESHOLD_CENTS", 5000)
 MAINTENANCE_WINDOW_UTC = _setting("MAINTENANCE_WINDOW_UTC", "")
 PAYMENT_PROVIDER = _setting("PAYMENT_PROVIDER", "manual")
@@ -172,6 +210,8 @@ WORKER_HEALTH_PORT = _integer("WORKER_HEALTH_PORT", 8085)
 
 if WORKER_POLL_INTERVAL_SECONDS < 1:
     raise RuntimeError("WORKER_POLL_INTERVAL_SECONDS must be at least 1.")
+if not 1 <= ARTIFACT_STORAGE_MAX_DOWNLOAD_MB <= 250:
+    raise RuntimeError("ARTIFACT_STORAGE_MAX_DOWNLOAD_MB must be between 1 and 250.")
 if WORKER_LEASE_SECONDS < 30:
     raise RuntimeError("WORKER_LEASE_SECONDS must be at least 30.")
 if not 1 <= WORKER_HEARTBEAT_SECONDS < WORKER_LEASE_SECONDS:

@@ -1,0 +1,9 @@
+# Copy to backend.hcl (ignored by Git) and replace the placeholders.
+# Bootstrap this account separately with shared-key access disabled, versioning,
+# soft delete, and least-privilege RBAC for the deployment identity.
+resource_group_name  = "zeroops-tfstate-rg"
+storage_account_name = "replacewithstateaccount"
+container_name       = "platform-tfstate"
+key                  = "zeroops/platform/test.tfstate"
+use_azuread_auth     = true
+

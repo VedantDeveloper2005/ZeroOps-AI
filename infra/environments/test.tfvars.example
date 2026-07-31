@@ -1,0 +1,47 @@
+# Test profile: low idle cost, public PaaS endpoints with Entra authentication,
+# FC1 functions, Basic ACR, and a regular VMSS that scales from zero to one.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+
+environment  = "test"
+name_suffix = "2f871a"
+location     = "centralindia"
+
+enable_private_endpoints = false
+service_bus_sku          = "Standard"
+service_bus_capacity     = 1
+
+artifact_storage_redundancy = "ZRS"
+state_storage_redundancy    = "ZRS"
+host_storage_redundancy     = "LRS"
+artifact_retention_days     = 30
+audit_log_retention_days    = 30
+
+analysis_function_max_instances  = 2
+terraform_function_max_instances = 2
+history_function_max_instances   = 2
+function_instance_memory_mb       = 2048
+
+vmss_sku           = "Standard_D2ads_v5"
+vmss_zones         = ["1", "2"]
+vmss_max_instances = 1
+
+# Replace both values before planning. The image must already be present in the
+# ACR created by this profile and the reference must use its manifest digest.
+runner_admin_ssh_public_key = "ssh-ed25519 AAAAREPLACEWITHAREALPUBLICKEY zeroops-test"
+runner_image_reference      = "crzeroopstest2f871a.azurecr.io/terraform-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# Assigning Contributor is opt-in and must target a dedicated customer workload
+# resource group, never zeroops-rg or a subscription.
+execution_scope_resource_id = null
+
+budget_enabled       = false
+budget_amount        = 0
+budget_start_date    = null
+budget_end_date      = null
+alert_email_receivers = {}
+
+tags = {
+  cost-center = "zeroops-test"
+  owner       = "platform-engineering"
+}

@@ -1,0 +1,38 @@
+# ZeroOps scans the production profile in CI. These exclusions are deliberate,
+# reviewed architecture decisions or Checkov graph limitations; the gate is
+# still blocking for every other policy.
+skip-check:
+  # FC1 is a scale-to-zero Flex Consumption plan. Dedicated-plan minimum
+  # workers and zone-redundancy checks do not map to this resource model.
+  - CKV_AZURE_212
+  - CKV_AZURE_225
+
+  # Production sets these conditional values to private/ZRS/zone-redundant,
+  # but Checkov 3.3.8 does not propagate the root production tfvars through
+  # child-module boolean and redundancy expressions.
+  - CKV_AZURE_189
+  - CKV_AZURE_139
+  - CKV_AZURE_233
+  - CKV_AZURE_204
+  - CKV_AZURE_59
+  - CKV_AZURE_206
+
+  # Registry scanning and signed promotion are CI/Defender controls. Registry
+  # quarantine is not enabled until a release scanner can mark images trusted;
+  # geo-replication is intentionally deferred for this single-region MVP.
+  - CKV_AZURE_163
+  - CKV_AZURE_166
+  - CKV_AZURE_164
+  - CKV_AZURE_165
+
+  # Platform-managed encryption is used for the cost-optimized MVP. CMK and
+  # Service Bus double encryption remain an explicit regulated-tier upgrade.
+  - CKV_AZURE_199
+  - CKV_AZURE_201
+  - CKV2_AZURE_1
+
+  # Queue analytics and Blob/Queue data-plane diagnostic settings are modeled
+  # as separate AzureRM resources; Checkov's storage-account/container checks
+  # do not join those resources across this module boundary.
+  - CKV_AZURE_33
+  - CKV2_AZURE_21

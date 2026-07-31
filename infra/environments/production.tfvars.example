@@ -1,0 +1,47 @@
+# Production profile: private PaaS access, Premium Service Bus/ACR, durable
+# storage, and a regular zone-spread VMSS that scales from zero to ten.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+
+environment  = "production"
+name_suffix = "2f871a"
+location     = "centralindia"
+
+enable_private_endpoints = true
+service_bus_sku          = "Premium"
+service_bus_capacity     = 1
+
+artifact_storage_redundancy = "ZRS"
+state_storage_redundancy    = "ZRS"
+host_storage_redundancy     = "ZRS"
+artifact_retention_days     = 90
+audit_log_retention_days    = 90
+
+analysis_function_max_instances  = 20
+terraform_function_max_instances = 20
+history_function_max_instances   = 10
+function_instance_memory_mb       = 2048
+
+vmss_sku           = "Standard_D2ads_v5"
+vmss_zones         = ["1", "2"]
+vmss_max_instances = 10
+
+runner_admin_ssh_public_key = "ssh-ed25519 AAAAREPLACEWITHAREALPUBLICKEY zeroops-production"
+runner_image_reference      = "crzeroopsprod2f871a.azurecr.io/terraform-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# Example only. Replace with the dedicated customer workload resource group.
+execution_scope_resource_id = null
+
+# Enable only after replacing the amount, dates, and receiver.
+budget_enabled    = false
+budget_amount     = 0
+budget_start_date = null
+budget_end_date   = null
+alert_email_receivers = {
+  # platform = "platform-alerts@example.com"
+}
+
+tags = {
+  cost-center = "zeroops-production"
+  owner       = "platform-engineering"
+}

@@ -1,0 +1,231 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "terraform-bundle.v1"
+      ],
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "generated",
+        "blocked"
+      ],
+      "type": "string"
+    },
+    "plan_revision": {
+      "type": "integer"
+    },
+    "plan_sha256": {
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "variables": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sensitive": {
+            "type": "boolean"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "description",
+          "sensitive",
+          "default"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "resources": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "component_id": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "cost_driver": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "address",
+          "resource_type",
+          "component_id",
+          "rationale",
+          "cost_driver"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "outputs": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sensitive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "sensitive"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "cost_optimizations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "component_id": {
+            "type": "string"
+          },
+          "mechanism": {
+            "type": "string"
+          },
+          "expected_impact": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "tradeoff": {
+            "type": "string"
+          },
+          "requires_verified_pricing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "component_id",
+          "mechanism",
+          "expected_impact",
+          "tradeoff",
+          "requires_verified_pricing"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "validation_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "plan_revision",
+    "plan_sha256",
+    "files",
+    "variables",
+    "resources",
+    "outputs",
+    "assumptions",
+    "warnings",
+    "cost_optimizations",
+    "validation_requirements",
+    "blocked_reasons"
+  ],
+  "type": "object"
+}

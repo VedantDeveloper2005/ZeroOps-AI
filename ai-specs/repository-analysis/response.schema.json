@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "AnalysisRecommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/RecommendationPriority"
+        },
+        "category": {
+          "enum": [
+            "security",
+            "reliability",
+            "operations",
+            "performance",
+            "cost",
+            "delivery"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "action": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 700,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "cost_impact": {
+          "$ref": "#/$defs/QualitativeImpact"
+        },
+        "security_impact": {
+          "$ref": "#/$defs/QualitativeImpact"
+        },
+        "reliability_impact": {
+          "$ref": "#/$defs/QualitativeImpact"
+        },
+        "tradeoffs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Tradeoffs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "priority",
+        "category",
+        "action",
+        "rationale",
+        "evidence_refs",
+        "cost_impact",
+        "security_impact",
+        "reliability_impact",
+        "tradeoffs"
+      ],
+      "title": "AnalysisRecommendation",
+      "type": "object"
+    },
+    "ConfidenceLevel": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "ConfidenceLevel",
+      "type": "string"
+    },
+    "CostOptimizationCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 180,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "expected_impact": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ],
+          "title": "Expected Impact",
+          "type": "string"
+        },
+        "tradeoffs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Tradeoffs",
+          "type": "array"
+        },
+        "validation_needed": {
+          "maxLength": 400,
+          "minLength": 1,
+          "title": "Validation Needed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "rationale",
+        "evidence_refs",
+        "expected_impact",
+        "tradeoffs",
+        "validation_needed"
+      ],
+      "title": "CostOptimizationCandidate",
+      "type": "object"
+    },
+    "QualitativeImpact": {
+      "enum": [
+        "decrease",
+        "neutral",
+        "increase",
+        "unknown"
+      ],
+      "title": "QualitativeImpact",
+      "type": "string"
+    },
+    "RecommendationPriority": {
+      "enum": [
+        "required",
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "RecommendationPriority",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "repository-assessment.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 1200,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "deployment_risk": {
+      "maxLength": 1200,
+      "minLength": 1,
+      "title": "Deployment Risk",
+      "type": "string"
+    },
+    "recommendations": {
+      "items": {
+        "$ref": "#/$defs/AnalysisRecommendation"
+      },
+      "maxItems": 8,
+      "title": "Recommendations",
+      "type": "array"
+    },
+    "cost_optimizations": {
+      "items": {
+        "$ref": "#/$defs/CostOptimizationCandidate"
+      },
+      "maxItems": 6,
+      "title": "Cost Optimizations",
+      "type": "array"
+    },
+    "unresolved_questions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Unresolved Questions",
+      "type": "array"
+    },
+    "confidence": {
+      "$ref": "#/$defs/ConfidenceLevel"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "deployment_risk",
+    "recommendations",
+    "cost_optimizations",
+    "unresolved_questions",
+    "confidence",
+    "limitations"
+  ],
+  "title": "RepositoryAssessment",
+  "type": "object"
+}

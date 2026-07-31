@@ -1,0 +1,320 @@
+{
+  "$defs": {
+    "TerraformCostOptimization": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "component_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$",
+          "title": "Component Id",
+          "type": "string"
+        },
+        "mechanism": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Mechanism",
+          "type": "string"
+        },
+        "expected_impact": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ],
+          "title": "Expected Impact",
+          "type": "string"
+        },
+        "tradeoff": {
+          "maxLength": 400,
+          "minLength": 1,
+          "title": "Tradeoff",
+          "type": "string"
+        },
+        "requires_verified_pricing": {
+          "title": "Requires Verified Pricing",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "component_id",
+        "mechanism",
+        "expected_impact",
+        "tradeoff",
+        "requires_verified_pricing"
+      ],
+      "title": "TerraformCostOptimization",
+      "type": "object"
+    },
+    "TerraformFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 180,
+          "minLength": 3,
+          "title": "Path",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 30000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "title": "TerraformFile",
+      "type": "object"
+    },
+    "TerraformOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "sensitive": {
+          "title": "Sensitive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "sensitive"
+      ],
+      "title": "TerraformOutput",
+      "type": "object"
+    },
+    "TerraformResourceMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "pattern": "^[a-z0-9_]+\\.[a-zA-Z0-9_-]+(?:\\[[^\\]]+\\])?$",
+          "title": "Address",
+          "type": "string"
+        },
+        "resource_type": {
+          "pattern": "^azurerm_[a-z0-9_]+$",
+          "title": "Resource Type",
+          "type": "string"
+        },
+        "component_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$",
+          "title": "Component Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "cost_driver": {
+          "title": "Cost Driver",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "address",
+        "resource_type",
+        "component_id",
+        "rationale",
+        "cost_driver"
+      ],
+      "title": "TerraformResourceMapping",
+      "type": "object"
+    },
+    "TerraformVariable": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 400,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "sensitive": {
+          "title": "Sensitive",
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "description",
+        "sensitive",
+        "default"
+      ],
+      "title": "TerraformVariable",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "terraform-bundle.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "generated",
+        "blocked"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "plan_revision": {
+      "minimum": 1,
+      "title": "Plan Revision",
+      "type": "integer"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/TerraformFile"
+      },
+      "maxItems": 12,
+      "title": "Files",
+      "type": "array"
+    },
+    "variables": {
+      "items": {
+        "$ref": "#/$defs/TerraformVariable"
+      },
+      "maxItems": 64,
+      "title": "Variables",
+      "type": "array"
+    },
+    "resources": {
+      "items": {
+        "$ref": "#/$defs/TerraformResourceMapping"
+      },
+      "maxItems": 120,
+      "title": "Resources",
+      "type": "array"
+    },
+    "outputs": {
+      "items": {
+        "$ref": "#/$defs/TerraformOutput"
+      },
+      "maxItems": 32,
+      "title": "Outputs",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Warnings",
+      "type": "array"
+    },
+    "cost_optimizations": {
+      "items": {
+        "$ref": "#/$defs/TerraformCostOptimization"
+      },
+      "maxItems": 12,
+      "title": "Cost Optimizations",
+      "type": "array"
+    },
+    "validation_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Validation Requirements",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Blocked Reasons",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "plan_revision",
+    "plan_sha256",
+    "files",
+    "variables",
+    "resources",
+    "outputs",
+    "assumptions",
+    "warnings",
+    "cost_optimizations",
+    "validation_requirements",
+    "blocked_reasons"
+  ],
+  "title": "TerraformBundle",
+  "type": "object"
+}
