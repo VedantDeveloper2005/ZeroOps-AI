@@ -43,14 +43,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy
+    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy
+    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -5605,7 +5605,10 @@ async def deploy_websocket(websocket: WebSocket, deploy_id: str):
 # AI CLOUD ARCHITECT EVOLVED ROUTERS
 # ──────────────────────────────────────────────
 
-from backend.services import analysis as zeroops_analysis
+try:
+    from backend.services import analysis as zeroops_analysis
+except ImportError:
+    from services import analysis as zeroops_analysis
 
 @app.post("/api/projects/{project_id}/analyze")
 async def analyze_project_repository(
