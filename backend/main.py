@@ -526,7 +526,21 @@ async def recover_interrupted_deployments() -> None:
     if AsyncSessionLocal is None:
         return
 
-    from worker.queue import stale_job_disposition
+    try:
+        from worker.queue import stale_job_disposition
+    except ImportError:
+        def stale_job_disposition(
+            deployment_status: str | None,
+            attempt_count: int | None,
+            max_attempts: int,
+        ) -> str:
+            if (deployment_status or "queued").lower() == "queued" and (attempt_count or 0) < max_attempts:
+                return "requeue"
+            if (deployment_status or "").lower() == "running":
+                return "complete"
+            if (deployment_status or "").lower() == "rolled_back":
+                return "cancel"
+            return "fail"
 
     async with AsyncSessionLocal() as db:
         now = datetime.utcnow()
