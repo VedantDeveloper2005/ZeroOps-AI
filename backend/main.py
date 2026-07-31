@@ -87,6 +87,16 @@ except ImportError:
 
 app.include_router(history_router)
 
+@app.get("/health")
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "ZeroOps AI Control Plane",
+        "environment": config.APP_ENV,
+        "database": database_available(),
+    }
+
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
