@@ -94,7 +94,7 @@ async def health_check():
         "status": "healthy",
         "service": "ZeroOps AI Control Plane",
         "environment": config.APP_ENV,
-        "database": database_available(),
+        "database": database_available,
     }
 
 # Enable CORS for Next.js frontend
