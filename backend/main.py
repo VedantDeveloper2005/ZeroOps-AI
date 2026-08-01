@@ -440,6 +440,11 @@ def map_user_response(user: models.User) -> schemas.UserResponse:
         phone_verified=user.phone_verified or False,
     )
 
+
+def oauth_mfa_method(user: models.User) -> str:
+    """Return the only MFA method values the login redirect may expose."""
+    return "email" if user.mfa_method == "email" else "totp"
+
 def format_duration(seconds: Optional[int]) -> str:
     if seconds is None:
         return "—"
@@ -4603,6 +4608,14 @@ async def github_oauth_callback(
     github_avatar = gh_user.get("avatar_url", "")
     github_name = gh_user.get("name", "") or github_username
 
+    # The immutable provider subject is the account-linking key. Never create
+    # or link a user from a partial provider profile with an empty subject.
+    if not github_id:
+        logger.warning("GitHub OAuth user profile did not contain an account id.")
+        return get_redirect_and_clean_state(
+            f"{frontend_url}/login?oauth_error=github_user_fetch_failed&provider=github"
+        )
+
     # Always require the verified email API result before linking an account.
     email = await github_oauth.get_github_user_email(access_token)
     if not email:
@@ -4695,7 +4708,10 @@ async def github_oauth_callback(
     await db.commit()
 
     if user.mfa_enabled and (user.mfa_secret_encrypted or user.mfa_method == "email"):
-        redirect_response = get_redirect_and_clean_state(f"{frontend_url}/login?mfa=required&provider=github")
+        redirect_response = get_redirect_and_clean_state(
+            f"{frontend_url}/login?mfa=required&provider=github"
+            f"&mfa_method={oauth_mfa_method(user)}"
+        )
         await begin_mfa_challenge(user, redirect_response, db)
         return redirect_response
 
@@ -4853,7 +4869,9 @@ async def google_oauth_callback(
         return redirect_to_frontend("oauth_error=server_error")
 
     if user.mfa_enabled and (user.mfa_secret_encrypted or user.mfa_method == "email"):
-        redirect_response = redirect_to_frontend("mfa=required")
+        redirect_response = redirect_to_frontend(
+            f"mfa=required&mfa_method={oauth_mfa_method(user)}"
+        )
         await begin_mfa_challenge(user, redirect_response, db)
         return redirect_response
 

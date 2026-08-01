@@ -33,34 +33,47 @@ trigger deployments.
 
 ### Environment Variables / Key Vault Secrets
 
-All settings follow the `zeroops-<kebab-case>` Key Vault naming convention.
+The two production workers have separate user-assigned identities and separate
+Key Vaults. Terraform wires versionless references to these workload-specific
+secrets:
 
-| Environment Variable | Key Vault Secret Name | Example Value |
-|---|---|---|
-| `NVIDIA_API_KEY` | `zeroops-nvidia-api-key` | *(your NVIDIA Build key)* |
-| `NVIDIA_ENDPOINT` | `zeroops-nvidia-endpoint` | `https://integrate.api.nvidia.com/v1` |
-| `NVIDIA_MODEL` | `zeroops-nvidia-model` | `z-ai/glm-5.2` |
-| `AI_REPOSITORY_PROVIDER` | `zeroops-ai-repository-provider` | `nvidia` |
-| `AI_REPOSITORY_ENDPOINT` | `zeroops-ai-repository-endpoint` | `https://integrate.api.nvidia.com/v1` |
-| `AI_REPOSITORY_MODEL` | `zeroops-ai-repository-model` | `z-ai/glm-5.2` |
-| `AI_REPOSITORY_API_KEY` | `zeroops-ai-repository-api-key` | *(your NVIDIA Build key)* |
-| `AI_TERRAFORM_PROVIDER` | `zeroops-ai-terraform-provider` | `nvidia` |
-| `AI_TERRAFORM_ENDPOINT` | `zeroops-ai-terraform-endpoint` | `https://integrate.api.nvidia.com/v1` |
-| `AI_TERRAFORM_MODEL` | `zeroops-ai-terraform-model` | `z-ai/glm-5.2` |
-| `AI_TERRAFORM_API_KEY` | `zeroops-ai-terraform-api-key` | *(your NVIDIA Build key)* |
+| Worker | Environment variable | Dedicated vault secret | Value |
+|---|---|---|---|
+| Repository analysis | `AI_REPOSITORY_API_KEY` | `ai-repository-api-key` | *(repository-route NVIDIA key)* |
+| Terraform generation | `AI_TERRAFORM_API_KEY` | `ai-terraform-api-key` | *(Terraform-route NVIDIA key)* |
+
+Each worker receives only its own non-secret route settings:
+
+| Environment variable | Value |
+|---|---|
+| `AI_REPOSITORY_PROVIDER` | `nvidia` |
+| `AI_REPOSITORY_ENDPOINT` | `https://integrate.api.nvidia.com/v1` |
+| `AI_REPOSITORY_MODEL` | `z-ai/glm-5.2` |
+| `AI_TERRAFORM_PROVIDER` | `nvidia` |
+| `AI_TERRAFORM_ENDPOINT` | `https://integrate.api.nvidia.com/v1` |
+| `AI_TERRAFORM_MODEL` | `z-ai/glm-5.2` |
 
 > **Important:** `AI_REPOSITORY_API_KEY` and `AI_TERRAFORM_API_KEY` are
 > workload-specific. They do not inherit from `NVIDIA_API_KEY` silently. Set
 > them explicitly so each workload's credential can be rotated independently in
-> production.
+> production. For a small local demo the two vault secrets may temporarily hold
+> the same NVIDIA key value, but the settings and access boundaries remain
+> separate. Production must use two distinct credentials so either workload can
+> be revoked and rotated independently. `NVIDIA_API_KEY` is used only by the
+> opt-in local smoke script.
 
-### Free Prototype Endpoint Limits
+### Application Guardrails
+
+These are ZeroOps request budgets, not NVIDIA service quotas or a promise of
+free or unlimited usage. Hosted NVIDIA Build access should be treated as a
+prototype/trial route: available credits and rate limits vary by account and
+model. A production service needs an appropriate supported NVIDIA subscription
+or model deployment, plus measured quota and capacity before promotion.
 
 | Parameter | Repository analysis | Terraform generation |
 |---|---|---|
 | Max input characters | 40,000 | 40,000 |
 | Max output tokens | 1,600 | 4,000 |
-| Concurrency | 1 | 1 |
 | Hidden SDK retries | 0 | 0 |
 | Gateway repair attempts | 1 | 1 |
 | Temperature | 0.0 | 0.0 |
@@ -124,39 +137,38 @@ PASS — NVIDIA provider is reachable and returns a valid structured response.
 
 ```powershell
 # From the repository root
-cd "d:\ZeroOps AI\backend"
-python -m pytest tests/test_nvidia_provider.py tests/test_model_gateway.py -v
+python -m pytest backend/tests/test_nvidia_provider.py backend/tests/test_model_gateway.py -v
+python -m unittest functions.tests.test_function_contracts.ModelClientTests -v
 ```
 
 All tests use a mocked OpenAI client. No test calls the real NVIDIA API.
 
 ---
 
-## Production Restart Command
+## Production Worker Restart
 
-After updating Key Vault secrets, restart the backend App Service:
+After rotating either Key Vault secret, restart only the matching Function App
+so its versionless Key Vault reference is refreshed:
 
 ```bash
-az webapp restart --name <app-service-name> --resource-group <resource-group>
+az functionapp restart \
+  --name <repository-analysis-function-name> \
+  --resource-group <resource-group>
 ```
 
-Or for Container Apps:
-
 ```bash
-az containerapp revision restart \
-  --name <container-app-name> \
-  --resource-group <resource-group> \
-  --revision <revision-name>
+az functionapp restart \
+  --name <terraform-generation-function-name> \
+  --resource-group <resource-group>
 ```
 
 ---
 
-## Provider Retirement — GitHub Models
+## Alternate Provider: GitHub Models
 
-GitHub Models (`github-models`) has been retired as the active default testing
-route. It remains importable for backward compatibility with existing test
-fixtures but must not be configured as an active provider. The defaults in
-`config.py` now point to the NVIDIA provider.
+GitHub Models (`github-models`) remains an explicitly configurable provider,
+but it is no longer the default route. Provider selection never triggers an
+automatic credential fallback.
 
 To re-enable GitHub Models for a specific workload, set:
 

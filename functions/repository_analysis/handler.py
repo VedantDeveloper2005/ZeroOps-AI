@@ -81,7 +81,7 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
         )
     )
     instructions = prompt_path.read_text(encoding="utf-8")
-    provider = os.getenv("AI_REPOSITORY_PROVIDER", "github-models")
+    provider = os.getenv("AI_REPOSITORY_PROVIDER", "nvidia")
     api_key = os.getenv("AI_REPOSITORY_API_KEY", "")
     model_client: StructuredModelClient | None
     try:
@@ -89,9 +89,9 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
             provider=provider,
             endpoint=os.getenv(
                 "AI_REPOSITORY_ENDPOINT",
-                "https://models.github.ai/inference",
+                "https://integrate.api.nvidia.com/v1",
             ),
-            model=os.getenv("AI_REPOSITORY_MODEL", "openai/gpt-4o"),
+            model=os.getenv("AI_REPOSITORY_MODEL", "z-ai/glm-5.2"),
             api_key=api_key,
             workload="repository-analysis",
             prompt_version=os.getenv(

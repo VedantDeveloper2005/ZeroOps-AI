@@ -166,9 +166,9 @@ module "analysis_function" {
     REPOSITORY_ANALYSIS_QUEUE_NAME = local.queue_names.repo_analysis
     WORKFLOW_EVENTS_QUEUE_NAME     = local.queue_names.workflow_events
     ARTIFACT_STORAGE_ACCOUNT_URL   = "https://${module.storage.artifact_account_name}.blob.core.windows.net"
-    AI_REPOSITORY_PROVIDER         = "github-models"
-    AI_REPOSITORY_ENDPOINT         = "https://models.github.ai/inference"
-    AI_REPOSITORY_MODEL            = "openai/gpt-4o"
+    AI_REPOSITORY_PROVIDER         = "nvidia"
+    AI_REPOSITORY_ENDPOINT         = "https://integrate.api.nvidia.com/v1"
+    AI_REPOSITORY_MODEL            = "z-ai/glm-5.2"
     AI_REPOSITORY_PROMPT_VERSION   = "repository-analysis.v1"
   }
   tags = local.standard_tags
@@ -210,9 +210,9 @@ module "terraform_generation_function" {
     TERRAFORM_PLAN_QUEUE_NAME       = local.queue_names.terraform_plan
     WORKFLOW_EVENTS_QUEUE_NAME      = local.queue_names.workflow_events
     ARTIFACT_STORAGE_ACCOUNT_URL    = "https://${module.storage.artifact_account_name}.blob.core.windows.net"
-    AI_TERRAFORM_PROVIDER           = "github-models"
-    AI_TERRAFORM_ENDPOINT           = "https://models.github.ai/inference"
-    AI_TERRAFORM_MODEL              = "openai/gpt-4.1"
+    AI_TERRAFORM_PROVIDER           = "nvidia"
+    AI_TERRAFORM_ENDPOINT           = "https://integrate.api.nvidia.com/v1"
+    AI_TERRAFORM_MODEL              = "z-ai/glm-5.2"
     AI_TERRAFORM_PROMPT_VERSION     = "terraform-generation.v1"
   }
   tags = local.standard_tags

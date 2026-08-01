@@ -42,18 +42,28 @@ tokens, SAS URLs, connection strings, or tenant display names.
 
 ## Runtime configuration
 
-During GitHub Models testing, keep the two independent setting groups:
+During NVIDIA Build testing, keep the two independent setting groups:
+
+```text
+AI_REPOSITORY_PROVIDER=nvidia
+AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
+AI_REPOSITORY_MODEL=z-ai/glm-5.2
+AI_REPOSITORY_API_KEY=<Key Vault secret>
+
+AI_TERRAFORM_PROVIDER=nvidia
+AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
+AI_TERRAFORM_MODEL=z-ai/glm-5.2
+AI_TERRAFORM_API_KEY=<different Key Vault secret>
+```
+
+GitHub Models remains an explicit alternate test route. If selected for one
+workload, configure its publisher-qualified model and current endpoint without
+reusing the other workload's credential:
 
 ```text
 AI_REPOSITORY_PROVIDER=github-models
 AI_REPOSITORY_ENDPOINT=https://models.github.ai/inference
 AI_REPOSITORY_MODEL=openai/gpt-4o
-AI_REPOSITORY_API_KEY=<Key Vault secret>
-
-AI_TERRAFORM_PROVIDER=github-models
-AI_TERRAFORM_ENDPOINT=https://models.github.ai/inference
-AI_TERRAFORM_MODEL=openai/gpt-4.1
-AI_TERRAFORM_API_KEY=<different Key Vault secret>
 ```
 
 After the managed identity Foundry runtime adapter is deployed for the
@@ -71,12 +81,13 @@ AI_TERRAFORM_AGENT_NAME=zeroops-terraform-generator
 
 Grant each workload identity only the Foundry role required to invoke its own
 agent. The API, Terraform VMSS, and the other AI workload must not be able to
-read that workload's GitHub Models credential.
+read that workload's model credential.
 
-The current Azure Function client intentionally fails closed for any provider
-other than `github-models`. Creating the portal agents does not authorize a
-runtime switch; promote the managed-identity adapter and pass its regression
-suite before changing either provider setting.
+The current Azure Function client accepts only the approved `nvidia` and
+`github-models` origins and never falls back across providers or workload
+credentials. Creating the portal agents does not authorize a runtime switch;
+promote the managed-identity adapter and pass its regression suite before
+changing either provider setting to `azure-foundry`.
 
 ## Application invocation contract
 

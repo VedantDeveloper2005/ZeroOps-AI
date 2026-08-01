@@ -271,6 +271,95 @@ class ModelClientTests(unittest.TestCase):
                 maximum_output_tokens=100,
             )
 
+    def test_nvidia_client_uses_approved_route_without_github_only_fields(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "model": "z-ai/glm-5.2",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": "test-output.v1",
+                                        "summary": "Evidence-bound result",
+                                    }
+                                )
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 3},
+                },
+            )
+
+        class Output(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            schema_version: str
+            summary: str
+
+        client = StructuredModelClient(
+            provider="nvidia",
+            endpoint="https://integrate.api.nvidia.com/v1/",
+            model="z-ai/glm-5.2",
+            api_key="repository-route-token",
+            workload="repository-analysis",
+            prompt_version="repository-analysis.v1",
+            maximum_input_chars=10_000,
+            maximum_output_tokens=100,
+            transport=httpx.MockTransport(handler),
+        )
+        result, provenance = client.generate(
+            system_instructions="Return strict JSON.",
+            input_value={"evidence": []},
+            output_model=Output,
+            schema_version="test-output.v1",
+        )
+
+        self.assertEqual(result.summary, "Evidence-bound result")
+        self.assertEqual(provenance.provider, "nvidia")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            str(requests[0].url),
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        )
+        self.assertEqual(
+            requests[0].headers["authorization"],
+            "Bearer repository-route-token",
+        )
+        self.assertEqual(requests[0].headers["accept"], "application/json")
+        self.assertNotIn("x-github-api-version", requests[0].headers)
+        request_body = json.loads(requests[0].content)
+        self.assertEqual(request_body["model"], "z-ai/glm-5.2")
+        self.assertFalse(request_body["stream"])
+        self.assertNotIn("response_format", request_body)
+
+    def test_nvidia_client_rejects_cross_route_origin_and_unqualified_model(self):
+        common = {
+            "provider": "nvidia",
+            "api_key": "route-token",
+            "workload": "repository-analysis",
+            "prompt_version": "v1",
+            "maximum_input_chars": 1_000,
+            "maximum_output_tokens": 100,
+        }
+        with self.assertRaises(ValueError):
+            StructuredModelClient(
+                endpoint="https://models.github.ai/inference",
+                model="z-ai/glm-5.2",
+                **common,
+            )
+        with self.assertRaises(ValueError):
+            StructuredModelClient(
+                endpoint="https://integrate.api.nvidia.com/v1",
+                model="glm-5.2",
+                **common,
+            )
+
 
 @dataclass
 class Uploaded:

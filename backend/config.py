@@ -101,10 +101,6 @@ AI_MODEL_TIMEOUT_SECONDS = _integer("AI_MODEL_TIMEOUT_SECONDS", 30)
 GITHUB_MODELS_API_KEY = _setting("GITHUB_MODELS_API_KEY")
 GITHUB_MODELS_ENDPOINT = _setting("GITHUB_MODELS_ENDPOINT", "https://models.github.ai/inference")
 GITHUB_MODELS_MODEL = _setting("GITHUB_MODELS_MODEL", "openai/gpt-4o")
-NVIDIA_API_KEY = _setting("NVIDIA_API_KEY")
-NVIDIA_ENDPOINT = _setting("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = _setting("NVIDIA_MODEL", "z-ai/glm-5.2")
-
 # Isolated AI workload routes. These settings deliberately do not inherit from
 # NVIDIA_API_KEY, GITHUB_MODELS_API_KEY, or OPENAI_API_KEY. Repository analysis
 # may degrade to the deterministic scanner when its route is unavailable, while

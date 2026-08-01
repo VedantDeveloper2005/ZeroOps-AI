@@ -16,6 +16,9 @@ from .security import canonical_json_bytes, sha256_bytes
 
 T = TypeVar("T", bound=BaseModel)
 
+_GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference"
+_NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1"
+
 
 class ModelUnavailableError(RuntimeError):
     pass
@@ -64,8 +67,8 @@ class StructuredModelClient:
         api_version: str = "2026-03-10",
         transport: httpx.BaseTransport | None = None,
     ):
-        self.provider = provider.strip().lower()
-        self.endpoint = endpoint.rstrip("/")
+        self.provider = provider.strip().lower().replace("_", "-")
+        self.endpoint = endpoint.strip().rstrip("/")
         self.model = model.strip()
         self.api_key = api_key.strip()
         self.workload = workload
@@ -75,15 +78,28 @@ class StructuredModelClient:
         self.timeout_seconds = timeout_seconds
         self.api_version = api_version.strip()
         self.transport = transport
-        if self.provider != "github-models":
-            raise ModelUnavailableError(
-                "This runtime currently supports github-models; use the Foundry "
-                "managed-identity adapter when AI_*_PROVIDER=azure-foundry"
-            )
-        if self.endpoint != "https://models.github.ai/inference":
-            raise ValueError("GitHub Models endpoint must use the approved inference origin")
-        if not self.model.startswith(("openai/", "microsoft/", "meta/", "mistral-ai/")):
-            raise ValueError("Model must be a publisher-qualified GitHub Models ID")
+        if self.provider == "github-models":
+            if self.endpoint != _GITHUB_MODELS_ENDPOINT:
+                raise ValueError(
+                    "GitHub Models endpoint must use the approved inference origin"
+                )
+            if not self.model.startswith(
+                ("openai/", "microsoft/", "meta/", "mistral-ai/")
+            ):
+                raise ValueError(
+                    "Model must be a publisher-qualified GitHub Models ID"
+                )
+        elif self.provider == "nvidia":
+            if self.endpoint != _NVIDIA_ENDPOINT:
+                raise ValueError(
+                    "NVIDIA endpoint must use the approved inference origin"
+                )
+            if "/" not in self.model:
+                raise ValueError(
+                    "NVIDIA model must be a publisher-qualified catalog ID"
+                )
+        else:
+            raise ModelUnavailableError("Configured model provider is not supported")
         if not self.api_key:
             raise ModelUnavailableError(f"No credential configured for {workload}")
 
@@ -116,6 +132,7 @@ class StructuredModelClient:
             canonical_json_bytes(
                 {
                     "workload": self.workload,
+                    "provider": self.provider,
                     "model": self.model,
                     "prompt_version": self.prompt_version,
                     "schema_version": schema_version,
@@ -181,22 +198,26 @@ class StructuredModelClient:
 
     def _request(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
         headers = {
-            "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            **(
-                {"X-GitHub-Api-Version": self.api_version}
-                if self.api_version
-                else {}
-            ),
         }
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": self.maximum_output_tokens,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
+            "stream": False,
         }
+        if self.provider == "github-models":
+            headers["Accept"] = "application/vnd.github+json"
+            if self.api_version:
+                headers["X-GitHub-Api-Version"] = self.api_version
+            payload["response_format"] = {"type": "json_object"}
+        else:
+            # NVIDIA Build's OpenAI-compatible catalog does not guarantee
+            # response_format support for every model. The schema is already
+            # embedded in the bounded system prompt and validation stays local.
+            headers["Accept"] = "application/json"
         try:
             with httpx.Client(
                 timeout=self.timeout_seconds,

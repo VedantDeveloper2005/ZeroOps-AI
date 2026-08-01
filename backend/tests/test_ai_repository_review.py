@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 try:
@@ -81,3 +83,100 @@ def test_failure_review_redacts_log_credentials_and_validates_shape():
     assert "super-secret" not in redacted
     assert "token-value" not in redacted
     assert review["severity"] == "error"
+
+
+def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch):
+    captured = {}
+
+    class FakeNvidiaProvider:
+        def __init__(self, configuration):
+            captured["configuration"] = configuration
+
+        def generate(self, request):
+            captured["request"] = request
+            return SimpleNamespace(
+                content=(
+                    '{"explanation":"The source facts describe a bounded app.",'
+                    '"deployment_risk":"Runtime behavior is not yet verified.",'
+                    '"recommendations":[],"unresolved_questions":[]}'
+                ),
+                input_tokens=10,
+                output_tokens=5,
+            )
+
+    monkeypatch.setattr(ai, "IS_PRODUCTION", False)
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
+    monkeypatch.setattr(ai, "NvidiaProvider", FakeNvidiaProvider)
+
+    result = ai.analyze_repository(
+        {
+            "files_context": {
+                "package.json": '{"dependencies":{"next":"16.0.0"}}',
+            },
+            "files_list": ["package.json"],
+            "repo_tree": "package.json",
+        }
+    )
+
+    assert captured["configuration"].api_key == "repository-route-key"
+    assert not hasattr(ai, "NVIDIA_API_KEY")
+    assert captured["request"].output_schema == ai.REPOSITORY_REVIEW_SCHEMA
+    assert result["explanation"] == "The source facts describe a bounded app."
+
+
+def test_nvidia_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
+    monkeypatch.setattr(ai, "IS_PRODUCTION", False)
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
+
+    assert not hasattr(ai, "NVIDIA_API_KEY")
+
+    with pytest.raises(ValueError, match="not configured"):
+        ai.analyze_repository(
+            {
+                "files_context": {},
+                "files_list": [],
+                "repo_tree": "",
+            }
+        )
+
+
+def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
+    captured = {}
+
+    class FakeNvidiaProvider:
+        def __init__(self, configuration):
+            captured["configuration"] = configuration
+
+        def generate(self, request):
+            captured["request"] = request
+            return SimpleNamespace(
+                content=(
+                    '{"failure_summary":"The deployment failed.",'
+                    '"root_cause":"The supplied log reports a build error.",'
+                    '"severity":"error",'
+                    '"recommended_fix":"Correct the build error.",'
+                    '"step_by_step_resolution":["Run the build locally."]}'
+                ),
+                input_tokens=20,
+                output_tokens=10,
+            )
+
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
+    monkeypatch.setattr(ai, "NvidiaProvider", FakeNvidiaProvider)
+
+    result = ai.analyze_failure_nemotron(
+        ["build failed"],
+        ["compiler error"],
+        [],
+    )
+
+    assert captured["configuration"].api_key == "repository-route-key"
+    assert captured["request"].output_schema == ai.FAILURE_REVIEW_SCHEMA
+    assert result["severity"] == "error"

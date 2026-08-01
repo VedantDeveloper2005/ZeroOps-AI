@@ -75,15 +75,15 @@ The trust boundaries are deliberate:
 
 ## 4. Model and Foundry contract
 
-For current testing, both routes use GitHub Models but never share a credential:
+For current testing, both routes use NVIDIA Build but never share a credential:
 
 | Workload | Provider/model | Configuration/key boundary | Failure policy |
 |---|---|---|---|
-| Repository analysis | `openai/gpt-4o` | `AI_REPOSITORY_*`, analysis Function UAMI, analysis Key Vault | deterministic scanner result may be returned with explicit provenance |
-| Terraform generation | `openai/gpt-4.1` | `AI_TERRAFORM_*`, generation Function UAMI, generation Key Vault | fail closed; no fallback to the analysis key |
+| Repository analysis | `nvidia` / `z-ai/glm-5.2` | `AI_REPOSITORY_*`, analysis Function UAMI, analysis Key Vault | deterministic scanner result may be returned with explicit provenance |
+| Terraform generation | `nvidia` / `z-ai/glm-5.2` | `AI_TERRAFORM_*`, generation Function UAMI, generation Key Vault | fail closed; no fallback to the analysis key |
 
 The detailed Foundry portal package lives in [`ai-specs/`](../ai-specs/): strict
-schemas, instructions, GitHub Models prompts, evaluations, redaction rules,
+schemas, instructions, provider import prompts, evaluations, redaction rules,
 cost policy, and migration notes. A future Foundry deployment switches the
 provider configuration to managed identity; it does not merge the two trust
 boundaries or introduce a shared key.

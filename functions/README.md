@@ -106,12 +106,15 @@ Repository analysis:
 ```text
 REPOSITORY_ANALYSIS_QUEUE_NAME=repo-analysis
 ARTIFACT_STORAGE_ACCOUNT_URL=https://<artifact-account>.blob.core.windows.net
-AI_REPOSITORY_PROVIDER=github-models
-AI_REPOSITORY_ENDPOINT=https://models.github.ai/inference
-AI_REPOSITORY_MODEL=openai/gpt-4o
+AI_REPOSITORY_PROVIDER=nvidia
+AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
+AI_REPOSITORY_MODEL=z-ai/glm-5.2
 AI_REPOSITORY_API_KEY=<Key Vault reference resolved by the Function platform>
 AI_REPOSITORY_PROMPT_VERSION=repository-analysis.v1
 ```
+
+`AI_REPOSITORY_API_KEY` is a versionless reference to the
+`ai-repository-api-key` secret in the repository-analysis Key Vault.
 
 Terraform generation:
 
@@ -119,12 +122,17 @@ Terraform generation:
 TERRAFORM_GENERATION_QUEUE_NAME=terraform-generation
 TERRAFORM_PLAN_QUEUE_NAME=terraform-plan
 ARTIFACT_STORAGE_ACCOUNT_URL=https://<artifact-account>.blob.core.windows.net
-AI_TERRAFORM_PROVIDER=github-models
-AI_TERRAFORM_ENDPOINT=https://models.github.ai/inference
-AI_TERRAFORM_MODEL=openai/gpt-4.1
+AI_TERRAFORM_PROVIDER=nvidia
+AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
+AI_TERRAFORM_MODEL=z-ai/glm-5.2
 AI_TERRAFORM_API_KEY=<a different Key Vault reference>
 AI_TERRAFORM_PROMPT_VERSION=terraform-generation.v1
 ```
+
+`AI_TERRAFORM_API_KEY` is a versionless reference to the
+`ai-terraform-api-key` secret in the Terraform-generation Key Vault. The two
+workers use different managed identities and cannot read each other's vault.
+There is no shared-key or automatic provider fallback.
 
 The VMSS never receives either model setting or Key Vault permission.
 

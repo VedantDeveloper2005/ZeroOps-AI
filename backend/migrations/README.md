@@ -5,13 +5,16 @@ transaction and records it in `schema_migrations`. New migrations must be
 append-only, idempotent, and must never copy credentials or raw execution
 payloads into history tables.
 
-Current history migrations:
+Current migrations:
 
 - `001_tenant_history` creates and backfills the tenant/run/artifact schema.
 - `002_projector_event_id` adds the external workflow-event idempotency key.
 - `003_history_integrity` repairs fresh schemas created before migrations,
   standardizes PostgreSQL JSONB columns and checks, preserves events when users
   are deleted, and adds durable actor/fingerprint columns.
+- `004_auth_identity_integrity` normalizes stored email identities, rejects
+  ambiguous case/whitespace aliases, and restores the Google identity unique
+  index on upgraded databases.
 
 ## Legacy sensitive-column retirement
 

@@ -11,10 +11,17 @@ They are separate agents, routes, credentials, prompts, output contracts, and
 evaluation suites. They must never share a credential or silently fall back to
 each other.
 
-## Current GitHub Models testing
+## Current NVIDIA Build testing
+
+Runtime calls use the two workload-specific settings documented in
+`FOUNDRY-PORTAL.md`, with the approved NVIDIA endpoint and `z-ai/glm-5.2`.
+The route credentials remain separate even when a local demo temporarily uses
+the same NVIDIA account for both secrets.
+
+## Optional GitHub Models prompt assets
 
 The `github-models.prompt.yml` files can be opened in the GitHub Models prompt
-editor. Runtime calls use:
+editor for manual prompt evaluation. That optional route uses:
 
 - endpoint: `https://models.github.ai/inference`
 - catalog-qualified model IDs such as `openai/gpt-4o`

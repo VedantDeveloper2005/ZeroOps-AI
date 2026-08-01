@@ -212,12 +212,12 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
         store=BlobArtifactStore(account_url, credential),
         publisher=ServiceBusPublisher(namespace, credential),
         model_client=StructuredModelClient(
-            provider=os.getenv("AI_TERRAFORM_PROVIDER", "github-models"),
+            provider=os.getenv("AI_TERRAFORM_PROVIDER", "nvidia"),
             endpoint=os.getenv(
                 "AI_TERRAFORM_ENDPOINT",
-                "https://models.github.ai/inference",
+                "https://integrate.api.nvidia.com/v1",
             ),
-            model=os.getenv("AI_TERRAFORM_MODEL", "openai/gpt-4.1"),
+            model=os.getenv("AI_TERRAFORM_MODEL", "z-ai/glm-5.2"),
             api_key=os.getenv("AI_TERRAFORM_API_KEY", ""),
             workload="terraform-generation",
             prompt_version=os.getenv(
@@ -228,7 +228,7 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
                 os.getenv("AI_TERRAFORM_MAX_INPUT_CHARS", "40000")
             ),
             maximum_output_tokens=int(
-                os.getenv("AI_TERRAFORM_MAX_OUTPUT_TOKENS", "8000")
+                os.getenv("AI_TERRAFORM_MAX_OUTPUT_TOKENS", "4000")
             ),
             api_version=os.getenv("AI_GITHUB_API_VERSION", "2026-03-10"),
         ),

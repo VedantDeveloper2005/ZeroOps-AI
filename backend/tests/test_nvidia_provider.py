@@ -98,6 +98,12 @@ class TestNvidiaProviderConfiguration:
         with pytest.raises(ProviderConfigurationError, match="credential"):
             NvidiaProvider(_cfg(api_key=""))
 
+    def test_whitespace_api_key_and_model_are_rejected(self):
+        with pytest.raises(ProviderConfigurationError, match="credential"):
+            NvidiaProvider(_cfg(api_key="   "), client=SimpleNamespace())
+        with pytest.raises(ProviderConfigurationError, match="model"):
+            NvidiaProvider(_cfg(model="   "), client=SimpleNamespace())
+
     def test_http_endpoint_is_rejected(self):
         with pytest.raises(ProviderConfigurationError, match="HTTPS"):
             NvidiaProvider(
@@ -232,6 +238,21 @@ class TestNvidiaProviderGenerate:
         client = _fake_client(content="")
         provider = NvidiaProvider(_cfg(), client=client)
         with pytest.raises(ProviderError, match="empty response"):
+            provider.generate(_request())
+
+    def test_invalid_response_envelope_is_safely_rejected(self):
+        class _InvalidCompletions:
+            def create(self, **_):
+                return SimpleNamespace(
+                    choices=[SimpleNamespace()],
+                    usage=None,
+                )
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=_InvalidCompletions())
+        )
+        provider = NvidiaProvider(_cfg(), client=client)
+        with pytest.raises(ProviderError, match="invalid response"):
             provider.generate(_request())
 
     def test_sdk_exception_becomes_safe_provider_error(self):

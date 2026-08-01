@@ -73,6 +73,56 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertIn('module "history_function"', root)
         self.assertIn('version = "3.13"', function_module)
 
+    def test_model_routes_use_separate_identities_vaults_and_nvidia_settings(self) -> None:
+        root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
+        rbac = (INFRA_ROOT / "rbac.tf").read_text(encoding="utf-8")
+
+        self.assertIn('resource "azurerm_user_assigned_identity" "analysis"', root)
+        self.assertIn(
+            'resource "azurerm_user_assigned_identity" "terraform_generation"',
+            root,
+        )
+        self.assertIn(
+            'model_api_key_setting_name = "AI_REPOSITORY_API_KEY"',
+            root,
+        )
+        self.assertIn(
+            'model_api_key_secret_name  = "ai-repository-api-key"',
+            root,
+        )
+        self.assertIn(
+            'model_api_key_setting_name = "AI_TERRAFORM_API_KEY"',
+            root,
+        )
+        self.assertIn(
+            'model_api_key_secret_name  = "ai-terraform-api-key"',
+            root,
+        )
+        self.assertIn(
+            "model_key_vault_uri        = module.model_key_vaults.analysis_vault_uri",
+            root,
+        )
+        self.assertIn(
+            "model_key_vault_uri        = module.model_key_vaults.terraform_vault_uri",
+            root,
+        )
+        self.assertEqual(root.count('AI_REPOSITORY_PROVIDER         = "nvidia"'), 1)
+        self.assertEqual(root.count('AI_TERRAFORM_PROVIDER           = "nvidia"'), 1)
+        self.assertEqual(
+            root.count('https://integrate.api.nvidia.com/v1'),
+            2,
+        )
+        self.assertEqual(root.count('z-ai/glm-5.2'), 2)
+        self.assertNotIn('model_api_key_setting_name = "NVIDIA_API_KEY"', root)
+        self.assertIn(
+            "scope              = module.model_key_vaults.analysis_vault_id",
+            rbac,
+        )
+        self.assertIn(
+            "scope              = module.model_key_vaults.terraform_vault_id",
+            rbac,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

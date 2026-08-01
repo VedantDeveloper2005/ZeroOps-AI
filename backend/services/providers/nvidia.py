@@ -75,11 +75,11 @@ class NvidiaProvider:
         *,
         client: Any | None = None,
     ) -> None:
-        if not configuration.api_key:
+        if not configuration.api_key.strip():
             raise ProviderConfigurationError(
                 "The selected AI workload has no NVIDIA API credential."
             )
-        if not configuration.model:
+        if not configuration.model.strip():
             raise ProviderConfigurationError(
                 "The selected AI workload has no NVIDIA model configured."
             )
@@ -91,8 +91,8 @@ class NvidiaProvider:
         self.configuration = ProviderConfiguration(
             provider=configuration.provider,
             endpoint=endpoint,
-            model=configuration.model,
-            api_key=configuration.api_key,
+            model=configuration.model.strip(),
+            api_key=configuration.api_key.strip(),
             agent_name=configuration.agent_name,
             api_version=configuration.api_version,
             timeout_seconds=configuration.timeout_seconds,
@@ -158,17 +158,19 @@ class NvidiaProvider:
             # errors, logs, or API responses.
             raise ProviderError("NVIDIA inference failed.") from error
 
-        content = str(
-            response.choices[0].message.content or ""
-            if response.choices
-            else ""
-        ).strip()
+        try:
+            choices = getattr(response, "choices", None)
+            content = str(
+                choices[0].message.content or "" if choices else ""
+            ).strip()
+            usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        except Exception as error:
+            raise ProviderError("NVIDIA returned an invalid response.") from error
         if not content:
             raise ProviderError("NVIDIA returned an empty response.")
 
-        usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         return ProviderResponse(
             content=content,
             model=str(

@@ -199,6 +199,10 @@ async def run_migrations():
             STATEMENTS as MIGRATION_003_STATEMENTS,
             VERSION as MIGRATION_003_VERSION,
         )
+        from backend.migrations.v004_auth_identity_integrity import (
+            STATEMENTS as MIGRATION_004_STATEMENTS,
+            VERSION as MIGRATION_004_VERSION,
+        )
     except ImportError:
         from migrations.v001_tenant_history import (
             STATEMENTS as MIGRATION_001_STATEMENTS,
@@ -211,6 +215,10 @@ async def run_migrations():
         from migrations.v003_history_integrity import (
             STATEMENTS as MIGRATION_003_STATEMENTS,
             VERSION as MIGRATION_003_VERSION,
+        )
+        from migrations.v004_auth_identity_integrity import (
+            STATEMENTS as MIGRATION_004_STATEMENTS,
+            VERSION as MIGRATION_004_VERSION,
         )
 
     async with async_engine.begin() as conn:
@@ -228,6 +236,7 @@ async def run_migrations():
             (MIGRATION_001_VERSION, MIGRATION_001_STATEMENTS),
             (MIGRATION_002_VERSION, MIGRATION_002_STATEMENTS),
             (MIGRATION_003_VERSION, MIGRATION_003_STATEMENTS),
+            (MIGRATION_004_VERSION, MIGRATION_004_STATEMENTS),
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(

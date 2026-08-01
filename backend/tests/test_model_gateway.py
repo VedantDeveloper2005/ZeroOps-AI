@@ -127,6 +127,8 @@ def test_workload_routes_use_distinct_credentials_without_legacy_fallback(monkey
     monkeypatch.setattr(config, "GITHUB_MODELS_API_KEY", "legacy-shared-key")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "legacy-openai-key")
 
+    assert not hasattr(config, "NVIDIA_API_KEY")
+
     repository = route_configuration(AIWorkload.REPOSITORY_ANALYSIS)
     terraform = route_configuration(AIWorkload.TERRAFORM_GENERATION)
 
