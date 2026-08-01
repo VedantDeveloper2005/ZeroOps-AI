@@ -13,11 +13,13 @@ from backend.services.providers.github_models import (
     CURRENT_GITHUB_MODELS_ENDPOINT,
     GitHubModelsProvider,
 )
+from backend.services.providers.nvidia import NvidiaProvider
 
 __all__ = [
     "AzureFoundryProvider",
     "CURRENT_GITHUB_MODELS_ENDPOINT",
     "GitHubModelsProvider",
+    "NvidiaProvider",
     "ProviderConfiguration",
     "ProviderConfigurationError",
     "ProviderError",

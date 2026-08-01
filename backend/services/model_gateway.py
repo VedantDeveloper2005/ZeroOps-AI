@@ -27,6 +27,7 @@ from backend.contracts.ai import (
 from backend.services.providers import (
     AzureFoundryProvider,
     GitHubModelsProvider,
+    NvidiaProvider,
     ProviderConfiguration,
     ProviderConfigurationError,
     ProviderError,
@@ -99,6 +100,8 @@ def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
 
 def build_provider(configuration: ProviderConfiguration) -> StructuredModelProvider:
     provider_name = configuration.provider.strip().lower().replace("_", "-")
+    if provider_name == "nvidia":
+        return NvidiaProvider(configuration)
     if provider_name == "github-models":
         return GitHubModelsProvider(configuration)
     if provider_name in {"azure-foundry", "microsoft-foundry"}:

@@ -103,38 +103,42 @@ GITHUB_MODELS_ENDPOINT = _setting("GITHUB_MODELS_ENDPOINT", "https://models.gith
 GITHUB_MODELS_MODEL = _setting("GITHUB_MODELS_MODEL", "openai/gpt-4o")
 NVIDIA_API_KEY = _setting("NVIDIA_API_KEY")
 NVIDIA_ENDPOINT = _setting("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = _setting("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+NVIDIA_MODEL = _setting("NVIDIA_MODEL", "z-ai/glm-5.2")
 
 # Isolated AI workload routes. These settings deliberately do not inherit from
-# GITHUB_MODELS_API_KEY or OPENAI_API_KEY. Repository analysis may degrade to
-# the deterministic scanner when its route is unavailable, while Terraform
-# generation fails closed. In production each route is loaded by its own
-# managed workload identity from its dedicated Key Vault.
+# NVIDIA_API_KEY, GITHUB_MODELS_API_KEY, or OPENAI_API_KEY. Repository analysis
+# may degrade to the deterministic scanner when its route is unavailable, while
+# Terraform generation fails closed. In production each route is loaded by its
+# own managed workload identity from its dedicated Key Vault.
 AI_GITHUB_API_VERSION = _setting("AI_GITHUB_API_VERSION", "2026-03-10")
 
-AI_REPOSITORY_PROVIDER = _setting("AI_REPOSITORY_PROVIDER", "github-models").strip().lower()
+# Repository analysis workload. Defaults to NVIDIA for the testing prototype;
+# override via Key Vault for production routes.
+AI_REPOSITORY_PROVIDER = _setting("AI_REPOSITORY_PROVIDER", "nvidia").strip().lower()
 AI_REPOSITORY_API_KEY = _setting("AI_REPOSITORY_API_KEY")
 AI_REPOSITORY_ENDPOINT = _setting(
     "AI_REPOSITORY_ENDPOINT",
-    "https://models.github.ai/inference",
+    "https://integrate.api.nvidia.com/v1",
 ).rstrip("/")
-AI_REPOSITORY_MODEL = _setting("AI_REPOSITORY_MODEL", "openai/gpt-4o")
+AI_REPOSITORY_MODEL = _setting("AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
 AI_REPOSITORY_AGENT_NAME = _setting("AI_REPOSITORY_AGENT_NAME")
 AI_REPOSITORY_PROMPT_VERSION = _setting("AI_REPOSITORY_PROMPT_VERSION", "repository-analysis.v1")
-AI_REPOSITORY_MAX_INPUT_CHARS = _integer("AI_REPOSITORY_MAX_INPUT_CHARS", 60_000)
+AI_REPOSITORY_MAX_INPUT_CHARS = _integer("AI_REPOSITORY_MAX_INPUT_CHARS", 40_000)
 AI_REPOSITORY_MAX_OUTPUT_TOKENS = _integer("AI_REPOSITORY_MAX_OUTPUT_TOKENS", 1_600)
 
-AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "github-models").strip().lower()
+# Terraform generation workload. Defaults to NVIDIA for the testing prototype;
+# override via Key Vault for production routes.
+AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "nvidia").strip().lower()
 AI_TERRAFORM_API_KEY = _setting("AI_TERRAFORM_API_KEY")
 AI_TERRAFORM_ENDPOINT = _setting(
     "AI_TERRAFORM_ENDPOINT",
-    "https://models.github.ai/inference",
+    "https://integrate.api.nvidia.com/v1",
 ).rstrip("/")
-AI_TERRAFORM_MODEL = _setting("AI_TERRAFORM_MODEL", "openai/gpt-4.1")
+AI_TERRAFORM_MODEL = _setting("AI_TERRAFORM_MODEL", "z-ai/glm-5.2")
 AI_TERRAFORM_AGENT_NAME = _setting("AI_TERRAFORM_AGENT_NAME")
 AI_TERRAFORM_PROMPT_VERSION = _setting("AI_TERRAFORM_PROMPT_VERSION", "terraform-generation.v1")
 AI_TERRAFORM_MAX_INPUT_CHARS = _integer("AI_TERRAFORM_MAX_INPUT_CHARS", 40_000)
-AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 8_000)
+AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 4_000)
 
 # OAuth and session security
 GITHUB_TOKEN = _setting("GITHUB_TOKEN")
