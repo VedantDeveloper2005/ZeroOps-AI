@@ -140,10 +140,22 @@ locals {
     }
   ]
 
+  fallback_model_api_key_settings = (
+    var.model_key_vault_uri == null ||
+    var.fallback_model_api_key_setting_name == null ||
+    var.fallback_model_api_key_secret_name == null
+    ) ? [] : [
+    {
+      name  = var.fallback_model_api_key_setting_name
+      value = "@Microsoft.KeyVault(SecretUri=${var.model_key_vault_uri}secrets/${var.fallback_model_api_key_secret_name})"
+    }
+  ]
+
   app_settings = concat(
     local.common_app_settings,
     local.workload_app_settings,
     local.model_api_key_settings,
+    local.fallback_model_api_key_settings,
   )
 }
 

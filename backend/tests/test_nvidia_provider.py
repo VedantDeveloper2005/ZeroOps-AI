@@ -468,6 +468,60 @@ class TestNvidiaGatewayIntegration:
         assert result.provenance.input_tokens == 15
         assert result.provenance.output_tokens == 80
 
+    def test_three_tier_fallback_chain_nvidia_primary_secondary_groq(self, monkeypatch):
+        """Test that when NVIDIA primary fails, NVIDIA secondary is tried, and when both fail, Groq is used."""
+        monkeypatch.setattr(config, "AI_REPOSITORY_PROVIDER", "nvidia")
+        monkeypatch.setattr(config, "AI_REPOSITORY_ENDPOINT", _NVIDIA_ENDPOINT)
+        monkeypatch.setattr(config, "AI_REPOSITORY_MODEL", _NVIDIA_MODEL)
+        monkeypatch.setattr(config, "AI_REPOSITORY_API_KEY", "primary-key")
+        monkeypatch.setattr(config, "AI_REPOSITORY_SECONDARY_API_KEY", "secondary-key")
+        monkeypatch.setattr(config, "AI_REPOSITORY_FALLBACK_PROVIDER", "groq")
+        monkeypatch.setattr(config, "AI_REPOSITORY_FALLBACK_ENDPOINT", "https://api.groq.com/openai/v1")
+        monkeypatch.setattr(config, "AI_REPOSITORY_FALLBACK_MODEL", "openai/gpt-oss-120b")
+        monkeypatch.setattr(config, "AI_REPOSITORY_FALLBACK_API_KEY", "groq-key")
+
+        # Case 1: Primary fails, Secondary succeeds
+        primary_provider = _FakeNvidiaProvider([ProviderError("Primary NVIDIA failed.")])
+        secondary_provider = _FakeNvidiaProvider(
+            [
+                ProviderResponse(
+                    content=_valid_assessment_json(),
+                    model=_NVIDIA_MODEL,
+                    input_tokens=12,
+                    output_tokens=50,
+                )
+            ]
+        )
+        gateway = ModelGateway(
+            configurations={
+                AIWorkload.REPOSITORY_ANALYSIS: _nvidia_configuration(
+                    AIWorkload.REPOSITORY_ANALYSIS, api_key="primary-key"
+                )
+            },
+            providers={AIWorkload.REPOSITORY_ANALYSIS: primary_provider},
+        )
+        # Mock _generate_with_secondary to return secondary_provider result
+        with patch.object(
+            gateway,
+            "secondary_configuration_for",
+            return_value=_nvidia_configuration(
+                AIWorkload.REPOSITORY_ANALYSIS, api_key="secondary-key"
+            ),
+        ):
+            with patch(
+                "backend.services.model_gateway.build_provider",
+                return_value=secondary_provider,
+            ):
+                result = gateway.generate_structured(
+                    workload=AIWorkload.REPOSITORY_ANALYSIS,
+                    system_prompt="Analyze bounded facts.",
+                    user_prompt='{"facts": []}',
+                    output_contract=RepositoryAssessment,
+                )
+                assert result.value is not None
+                assert result.provenance.provider == "nvidia"
+
+
 
 # ---------------------------------------------------------------------------
 # Credential safety tests

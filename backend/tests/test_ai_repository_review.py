@@ -17,6 +17,17 @@ def valid_review() -> dict:
     }
 
 
+def fake_provenance(provider="nvidia", model="z-ai/glm-5.2"):
+    return SimpleNamespace(
+        provider=provider,
+        model=model,
+        input_tokens=10,
+        output_tokens=5,
+        primary_input_tokens=0,
+        primary_output_tokens=0,
+    )
+
+
 def test_repository_review_accepts_only_the_bounded_contract():
     review = ai.validate_repository_review(valid_review())
 
@@ -88,20 +99,20 @@ def test_failure_review_redacts_log_credentials_and_validates_shape():
 def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch):
     captured = {}
 
-    class FakeNvidiaProvider:
-        def __init__(self, configuration):
-            captured["configuration"] = configuration
-
-        def generate(self, request):
-            captured["request"] = request
+    class FakeGateway:
+        def generate_structured(self, **kwargs):
+            captured.update(kwargs)
             return SimpleNamespace(
-                content=(
-                    '{"explanation":"The source facts describe a bounded app.",'
-                    '"deployment_risk":"Runtime behavior is not yet verified.",'
-                    '"recommendations":[],"unresolved_questions":[]}'
+                value=ai.RepositoryReviewContract.model_validate(
+                    {
+                        "explanation": "The source facts describe a bounded app.",
+                        "deployment_risk": "Runtime behavior is not yet verified.",
+                        "recommendations": [],
+                        "unresolved_questions": [],
+                    }
                 ),
-                input_tokens=10,
-                output_tokens=5,
+                provenance=fake_provenance(),
+                degraded_reason=None,
             )
 
     monkeypatch.setattr(ai, "IS_PRODUCTION", False)
@@ -109,7 +120,18 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
     monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
     monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
-    monkeypatch.setattr(ai, "NvidiaProvider", FakeNvidiaProvider)
+    monkeypatch.setattr(
+        ai, "AI_REPOSITORY_FALLBACK_API_KEY", "repository-fallback-route-key"
+    )
+
+    configured_gateway = ai._repository_model_gateway()
+    primary_configuration = configured_gateway.configuration_for(
+        ai.AIWorkload.REPOSITORY_ANALYSIS
+    )
+    fallback_configuration = configured_gateway.fallback_configuration_for(
+        ai.AIWorkload.REPOSITORY_ANALYSIS
+    )
+    monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
 
     result = ai.analyze_repository(
         {
@@ -121,9 +143,11 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
         }
     )
 
-    assert captured["configuration"].api_key == "repository-route-key"
+    assert primary_configuration.api_key == "repository-route-key"
+    assert fallback_configuration.api_key == "repository-fallback-route-key"
+    assert primary_configuration.api_key != fallback_configuration.api_key
     assert not hasattr(ai, "NVIDIA_API_KEY")
-    assert captured["request"].output_schema == ai.REPOSITORY_REVIEW_SCHEMA
+    assert captured["output_contract"] is ai.RepositoryReviewContract
     assert result["explanation"] == "The source facts describe a bounded app."
 
 
@@ -131,45 +155,46 @@ def test_nvidia_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
     monkeypatch.setattr(ai, "IS_PRODUCTION", False)
     monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_API_KEY", "")
 
     assert not hasattr(ai, "NVIDIA_API_KEY")
 
-    with pytest.raises(ValueError, match="not configured"):
-        ai.analyze_repository(
-            {
-                "files_context": {},
-                "files_list": [],
-                "repo_tree": "",
-            }
-        )
+    result = ai.analyze_repository(
+        {
+            "files_context": {},
+            "files_list": [],
+            "repo_tree": "",
+        }
+    )
+    assert result["framework"] == "Unknown"
+    assert result["recommendations"] == []
 
 
 def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
     captured = {}
 
-    class FakeNvidiaProvider:
-        def __init__(self, configuration):
-            captured["configuration"] = configuration
-
-        def generate(self, request):
-            captured["request"] = request
+    class FakeGateway:
+        def generate_structured(self, **kwargs):
+            captured.update(kwargs)
             return SimpleNamespace(
-                content=(
-                    '{"failure_summary":"The deployment failed.",'
-                    '"root_cause":"The supplied log reports a build error.",'
-                    '"severity":"error",'
-                    '"recommended_fix":"Correct the build error.",'
-                    '"step_by_step_resolution":["Run the build locally."]}'
+                value=ai.FailureReviewContract.model_validate(
+                    {
+                        "failure_summary": "The deployment failed.",
+                        "root_cause": "The supplied log reports a build error.",
+                        "severity": "error",
+                        "recommended_fix": "Correct the build error.",
+                        "step_by_step_resolution": ["Run the build locally."],
+                    }
                 ),
-                input_tokens=20,
-                output_tokens=10,
+                provenance=fake_provenance(),
+                degraded_reason=None,
             )
 
     monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
     monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
     monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
-    monkeypatch.setattr(ai, "NvidiaProvider", FakeNvidiaProvider)
+    monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
 
     result = ai.analyze_failure_nemotron(
         ["build failed"],
@@ -177,6 +202,50 @@ def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
         [],
     )
 
-    assert captured["configuration"].api_key == "repository-route-key"
-    assert captured["request"].output_schema == ai.FAILURE_REVIEW_SCHEMA
+    assert captured["output_contract"] is ai.FailureReviewContract
     assert result["severity"] == "error"
+
+
+def test_failure_review_accepts_groq_fallback_result(monkeypatch):
+    class FakeFallbackGateway:
+        def generate_structured(self, **_):
+            return SimpleNamespace(
+                value=ai.FailureReviewContract.model_validate(
+                    {
+                        "failure_summary": "The fallback identified a build failure.",
+                        "root_cause": "The supplied compiler diagnostic reports an error.",
+                        "severity": "error",
+                        "recommended_fix": "Correct the reported compiler error.",
+                        "step_by_step_resolution": ["Run the production build locally."],
+                    }
+                ),
+                provenance=fake_provenance(
+                    provider="groq", model="openai/gpt-oss-120b"
+                ),
+                degraded_reason=None,
+            )
+
+    monkeypatch.setattr(
+        ai, "_repository_model_gateway", lambda: FakeFallbackGateway()
+    )
+    result = ai.analyze_failure_nemotron(["compiler error"], ["build failed"])
+
+    assert result["failure_summary"] == "The fallback identified a build failure."
+    assert result["severity"] == "error"
+
+
+def test_failure_review_uses_local_analysis_after_both_routes_are_missing(
+    monkeypatch,
+):
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_PROVIDER", "groq")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_API_KEY", "")
+
+    result = ai.analyze_failure_nemotron(
+        ["DATABASE_URL missing"],
+        ["database connection refused"],
+    )
+
+    assert result["severity"] == "critical"
+    assert "DATABASE_URL" in result["failure_summary"]

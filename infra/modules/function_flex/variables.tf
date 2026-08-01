@@ -64,6 +64,18 @@ variable "model_api_key_secret_name" {
   nullable = true
 }
 
+variable "fallback_model_api_key_setting_name" {
+  type     = string
+  default  = null
+  nullable = true
+}
+
+variable "fallback_model_api_key_secret_name" {
+  type     = string
+  default  = null
+  nullable = true
+}
+
 variable "application_settings" {
   type    = map(string)
   default = {}

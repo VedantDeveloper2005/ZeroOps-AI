@@ -122,6 +122,36 @@ AI_REPOSITORY_PROMPT_VERSION = _setting("AI_REPOSITORY_PROMPT_VERSION", "reposit
 AI_REPOSITORY_MAX_INPUT_CHARS = _integer("AI_REPOSITORY_MAX_INPUT_CHARS", 40_000)
 AI_REPOSITORY_MAX_OUTPUT_TOKENS = _integer("AI_REPOSITORY_MAX_OUTPUT_TOKENS", 1_600)
 
+# Secondary NVIDIA credential for the repository workload. Same endpoint and
+# model as the primary; independent key allows the gateway to retry with a
+# second NVIDIA account before escalating to the Groq fallback.
+# Empty means the secondary tier is skipped.
+AI_REPOSITORY_SECONDARY_API_KEY = _setting("AI_REPOSITORY_SECONDARY_API_KEY")
+
+# Explicit repository-analysis fallback. It never inherits a generic provider
+# key or either primary workload credential. Conservative complete-prompt
+# budgets reduce rate-limit risk for small demos; provider limits can change.
+AI_REPOSITORY_FALLBACK_PROVIDER = _setting(
+    "AI_REPOSITORY_FALLBACK_PROVIDER", "groq"
+).strip().lower()
+AI_REPOSITORY_FALLBACK_API_KEY = _setting("AI_REPOSITORY_FALLBACK_API_KEY")
+AI_REPOSITORY_FALLBACK_ENDPOINT = _setting(
+    "AI_REPOSITORY_FALLBACK_ENDPOINT",
+    "https://api.groq.com/openai/v1",
+).rstrip("/")
+AI_REPOSITORY_FALLBACK_MODEL = _setting(
+    "AI_REPOSITORY_FALLBACK_MODEL", "openai/gpt-oss-120b"
+)
+AI_REPOSITORY_FALLBACK_PROMPT_VERSION = _setting(
+    "AI_REPOSITORY_FALLBACK_PROMPT_VERSION", "repository-analysis.v1"
+)
+AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS = _integer(
+    "AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS", 14_000
+)
+AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS = _integer(
+    "AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS", 800
+)
+
 # Terraform generation workload. Defaults to NVIDIA for the testing prototype;
 # override via Key Vault for production routes.
 AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "nvidia").strip().lower()
@@ -135,6 +165,35 @@ AI_TERRAFORM_AGENT_NAME = _setting("AI_TERRAFORM_AGENT_NAME")
 AI_TERRAFORM_PROMPT_VERSION = _setting("AI_TERRAFORM_PROMPT_VERSION", "terraform-generation.v1")
 AI_TERRAFORM_MAX_INPUT_CHARS = _integer("AI_TERRAFORM_MAX_INPUT_CHARS", 40_000)
 AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 4_000)
+
+# Secondary NVIDIA credential for the Terraform workload. Same endpoint and
+# model as the primary; independent key allows the gateway to retry with a
+# second NVIDIA account before escalating to the Groq fallback.
+# Empty means the secondary tier is skipped.
+AI_TERRAFORM_SECONDARY_API_KEY = _setting("AI_TERRAFORM_SECONDARY_API_KEY")
+
+# Explicit Terraform fallback. This route is independently credentialed from
+# both the repository fallback and both NVIDIA primary routes.
+AI_TERRAFORM_FALLBACK_PROVIDER = _setting(
+    "AI_TERRAFORM_FALLBACK_PROVIDER", "groq"
+).strip().lower()
+AI_TERRAFORM_FALLBACK_API_KEY = _setting("AI_TERRAFORM_FALLBACK_API_KEY")
+AI_TERRAFORM_FALLBACK_ENDPOINT = _setting(
+    "AI_TERRAFORM_FALLBACK_ENDPOINT",
+    "https://api.groq.com/openai/v1",
+).rstrip("/")
+AI_TERRAFORM_FALLBACK_MODEL = _setting(
+    "AI_TERRAFORM_FALLBACK_MODEL", "openai/gpt-oss-120b"
+)
+AI_TERRAFORM_FALLBACK_PROMPT_VERSION = _setting(
+    "AI_TERRAFORM_FALLBACK_PROMPT_VERSION", "terraform-generation.v1"
+)
+AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS = _integer(
+    "AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS", 14_000
+)
+AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS = _integer(
+    "AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS", 1_000
+)
 
 # OAuth and session security
 GITHUB_TOKEN = _setting("GITHUB_TOKEN")

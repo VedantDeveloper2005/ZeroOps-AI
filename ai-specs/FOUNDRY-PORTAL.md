@@ -42,29 +42,43 @@ tokens, SAS URLs, connection strings, or tenant display names.
 
 ## Runtime configuration
 
-During NVIDIA Build testing, keep the two independent setting groups:
+During NVIDIA Build testing, keep the two independent primary and fallback
+setting groups:
 
 ```text
 AI_REPOSITORY_PROVIDER=nvidia
 AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
 AI_REPOSITORY_MODEL=z-ai/glm-5.2
 AI_REPOSITORY_API_KEY=<Key Vault secret>
+AI_REPOSITORY_FALLBACK_PROVIDER=groq
+AI_REPOSITORY_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
+AI_REPOSITORY_FALLBACK_MODEL=openai/gpt-oss-120b
+AI_REPOSITORY_FALLBACK_API_KEY=<analysis-vault fallback secret>
+AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS=14000
+AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS=800
 
 AI_TERRAFORM_PROVIDER=nvidia
 AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
 AI_TERRAFORM_MODEL=z-ai/glm-5.2
 AI_TERRAFORM_API_KEY=<different Key Vault secret>
+AI_TERRAFORM_FALLBACK_PROVIDER=groq
+AI_TERRAFORM_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
+AI_TERRAFORM_FALLBACK_MODEL=openai/gpt-oss-120b
+AI_TERRAFORM_FALLBACK_API_KEY=<Terraform-vault fallback secret>
+AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS=14000
+AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS=1000
 ```
 
-GitHub Models remains an explicit alternate test route. If selected for one
-workload, configure its publisher-qualified model and current endpoint without
-reusing the other workload's credential:
+The runtime never reads a generic `GROQ_API_KEY`. A small test may put the same
+newly rotated Groq value into the two explicitly named fallback secrets, but
+each Function identity can resolve only its own vault reference. The fallback
+is attempted once only after NVIDIA transport or structured-output failure. It
+is not attempted for input-budget, evidence-policy, or Terraform safety
+rejection, and Groq receives no repair retry.
 
-```text
-AI_REPOSITORY_PROVIDER=github-models
-AI_REPOSITORY_ENDPOINT=https://models.github.ai/inference
-AI_REPOSITORY_MODEL=openai/gpt-4o
-```
+The checked-in GitHub Models prompt assets remain available for manual prompt
+evaluation at `https://models.github.ai/inference`; they are not a runtime
+fallback and do not receive either workload credential.
 
 After the managed identity Foundry runtime adapter is deployed for the
 workload, use these settings and leave both API-key settings empty:
@@ -83,11 +97,12 @@ Grant each workload identity only the Foundry role required to invoke its own
 agent. The API, Terraform VMSS, and the other AI workload must not be able to
 read that workload's model credential.
 
-The current Azure Function client accepts only the approved `nvidia` and
-`github-models` origins and never falls back across providers or workload
-credentials. Creating the portal agents does not authorize a runtime switch;
-promote the managed-identity adapter and pass its regression suite before
-changing either provider setting to `azure-foundry`.
+The current Azure Function client pins the primary to the approved NVIDIA
+origin/model and the only fallback to the approved Groq origin/model. It never
+crosses workload credentials or recursively selects another provider. Creating
+the portal agents does not authorize a runtime switch; promote the
+managed-identity adapter and pass its regression suite before changing either
+primary provider setting to `azure-foundry`.
 
 ## Application invocation contract
 

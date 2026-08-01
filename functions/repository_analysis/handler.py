@@ -25,9 +25,10 @@ from zeroops_functions.contracts import (
 )
 from zeroops_functions.identity import workload_credential
 from zeroops_functions.model_client import (
-    ModelContractError,
+    ModelRoutesExhaustedError,
     ModelUnavailableError,
     StructuredModelClient,
+    generate_with_fallback,
 )
 from zeroops_functions.publisher import ServiceBusPublisher
 from zeroops_functions.security import canonical_json_bytes, redact, sha256_bytes
@@ -40,6 +41,7 @@ class RepositoryHandlerDependencies:
     model_client: StructuredModelClient | None
     workflow_events_queue: str
     instructions: str
+    fallback_model_client: StructuredModelClient | None = None
 
 
 def _evidence_ids(request: RepositoryAnalysisRequest) -> set[str]:
@@ -82,6 +84,8 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
     )
     instructions = prompt_path.read_text(encoding="utf-8")
     provider = os.getenv("AI_REPOSITORY_PROVIDER", "nvidia")
+    if provider.strip().lower().replace("_", "-") != "nvidia":
+        raise ValueError("Repository primary provider must be NVIDIA")
     api_key = os.getenv("AI_REPOSITORY_API_KEY", "")
     model_client: StructuredModelClient | None
     try:
@@ -99,7 +103,7 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
                 "repository-analysis.v1",
             ),
             maximum_input_chars=int(
-                os.getenv("AI_REPOSITORY_MAX_INPUT_CHARS", "60000")
+                os.getenv("AI_REPOSITORY_MAX_INPUT_CHARS", "40000")
             ),
             maximum_output_tokens=int(
                 os.getenv("AI_REPOSITORY_MAX_OUTPUT_TOKENS", "1600")
@@ -108,6 +112,38 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
         )
     except ModelUnavailableError:
         model_client = None
+    fallback_provider = os.getenv("AI_REPOSITORY_FALLBACK_PROVIDER", "groq")
+    if fallback_provider.strip().lower().replace("_", "-") != "groq":
+        raise ValueError("Repository fallback provider must be Groq")
+    try:
+        fallback_model_client: StructuredModelClient | None = StructuredModelClient(
+            provider=fallback_provider,
+            endpoint=os.getenv(
+                "AI_REPOSITORY_FALLBACK_ENDPOINT",
+                "https://api.groq.com/openai/v1",
+            ),
+            model=os.getenv(
+                "AI_REPOSITORY_FALLBACK_MODEL",
+                "openai/gpt-oss-120b",
+            ),
+            api_key=os.getenv("AI_REPOSITORY_FALLBACK_API_KEY", ""),
+            workload="repository-analysis",
+            prompt_version=os.getenv(
+                "AI_REPOSITORY_FALLBACK_PROMPT_VERSION",
+                "repository-analysis.v1",
+            ),
+            maximum_input_chars=int(
+                os.getenv("AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS", "14000")
+            ),
+            maximum_output_tokens=int(
+                os.getenv("AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS", "800")
+            ),
+            timeout_seconds=float(
+                os.getenv("AI_REPOSITORY_FALLBACK_TIMEOUT_SECONDS", "30")
+            ),
+        )
+    except ModelUnavailableError:
+        fallback_model_client = None
     return RepositoryHandlerDependencies(
         store=BlobArtifactStore(account_url, credential),
         publisher=ServiceBusPublisher(namespace, credential),
@@ -117,6 +153,7 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
             "workflow-events",
         ),
         instructions=instructions,
+        fallback_model_client=fallback_model_client,
     )
 
 
@@ -162,26 +199,43 @@ def handle_repository_analysis(
         available_evidence = _evidence_ids(request)
         status = "model_assisted"
         provenance: dict[str, Any]
-        if deps.model_client is None:
+        try:
+            model_output, model_provenance, routing = generate_with_fallback(
+                primary=deps.model_client,
+                fallback=deps.fallback_model_client,
+                system_instructions=deps.instructions,
+                input_value=request.model_dump(mode="json"),
+                output_model=RepositoryAssessment,
+                schema_version="repository-assessment.v1",
+                correlation_id=job.correlation_id,
+                semantic_validator=lambda value: _validate_evidence(
+                    value,
+                    available_evidence,
+                ),
+            )
+            provenance = {**asdict(model_provenance), **asdict(routing)}
+        except ModelRoutesExhaustedError as error:
             status = "deterministic_only"
             model_output = RepositoryAssessment(
                 schema_version="repository-assessment.v1",
                 summary=(
-                    "Deterministic repository scanning completed. Model-assisted "
-                    "interpretation was unavailable, so no unsupported conclusions "
-                    "were added."
+                    "Deterministic repository scanning completed. Neither model route "
+                    "returned a valid structured result."
                 ),
                 deployment_risk=(
-                    "Deployment risk remains unresolved until the deterministic "
-                    "repository evidence is reviewed."
+                    "Deployment risk remains unresolved because model-assisted "
+                    "interpretation did not pass strict validation."
                 ),
                 recommendations=[],
                 cost_optimizations=[],
                 unresolved_questions=[
-                    "Review deterministic scanner facts before approving architecture."
+                    "Review scanner facts and retry model-assisted analysis if needed."
                 ],
                 confidence="low",
-                limitations=["Repository-analysis model route was unavailable."],
+                limitations=[
+                    "Model-assisted analysis was unavailable or blocked by the "
+                    "bounded validation and safety policy."
+                ],
             )
             provenance = {
                 "provider": None,
@@ -197,56 +251,8 @@ def handle_repository_analysis(
                 "request_hash": None,
                 "repair_attempted": False,
                 "cached": False,
+                **asdict(error.routing),
             }
-        else:
-            try:
-                model_output, model_provenance = deps.model_client.generate(
-                    system_instructions=deps.instructions,
-                    input_value=request.model_dump(mode="json"),
-                    output_model=RepositoryAssessment,
-                    schema_version="repository-assessment.v1",
-                    correlation_id=job.correlation_id,
-                    semantic_validator=lambda value: _validate_evidence(
-                        value,
-                        available_evidence,
-                    ),
-                )
-                provenance = asdict(model_provenance)
-            except (ModelUnavailableError, ModelContractError):
-                status = "deterministic_only"
-                model_output = RepositoryAssessment(
-                    schema_version="repository-assessment.v1",
-                    summary=(
-                        "Deterministic repository scanning completed. The model route "
-                        "did not return a valid structured result."
-                    ),
-                    deployment_risk=(
-                        "Deployment risk remains unresolved because model-assisted "
-                        "interpretation did not pass strict validation."
-                    ),
-                    recommendations=[],
-                    cost_optimizations=[],
-                    unresolved_questions=[
-                        "Review scanner facts and retry model-assisted analysis if needed."
-                    ],
-                    confidence="low",
-                    limitations=["Model provider or strict output validation failed."],
-                )
-                provenance = {
-                    "provider": None,
-                    "model": None,
-                    "workload": "repository_analysis",
-                    "prompt_version": None,
-                    "schema_version": "repository-assessment.v1",
-                    "execution_mode": "deterministic_only",
-                    "correlation_id": job.correlation_id,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "latency_ms": 0,
-                    "request_hash": None,
-                    "repair_attempted": False,
-                    "cached": False,
-                }
 
         artifact_id = job.output_artifact_id
         result = {

@@ -12,8 +12,8 @@ recreated, resized, or reconfigured by this root.
 - Three separate FC1 Python 3.13 Function Apps, plans, host storage accounts,
   and identities: repository analysis, Terraform generation, and history
   projection. The two AI Functions also have separate model Key Vaults.
-  Terraform creates no secrets; the two GitHub Models API keys must be written
-  out of band to their respective vaults.
+  Terraform creates no secrets. NVIDIA primary and Groq fallback credentials
+  must be written out of band to four workload-specific secret names.
 - Service Bus queues for repository analysis, generation, plan, apply, and
   workflow events. Plan/apply queues use sessions and duplicate detection.
 - A versioned tenant artifact account and a different executor-only account for
@@ -107,9 +107,15 @@ Prerequisites that are currently external to this code:
    `@sha256:<64 lowercase hex characters>`.
 5. Set `execution_scope_resource_id` only to a dedicated customer workload
    resource group. A Terraform check rejects the ZeroOps platform group.
-6. Put `ai-repository-api-key` and `ai-terraform-api-key` into their matching
-   Key Vaults outside Terraform. Their app settings use versionless Key Vault
-   references named `AI_REPOSITORY_API_KEY` and `AI_TERRAFORM_API_KEY`.
+6. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
+   analysis vault, and `ai-terraform-api-key` and
+   `ai-terraform-fallback-api-key` in the Terraform-generation vault, outside
+   Terraform. Their versionless app-setting references are
+   `AI_REPOSITORY_API_KEY`, `AI_REPOSITORY_FALLBACK_API_KEY`,
+   `AI_TERRAFORM_API_KEY`, and `AI_TERRAFORM_FALLBACK_API_KEY`. A generic
+   `GROQ_API_KEY` is not wired. The same Groq value may be entered into both
+   fallback secrets only for an explicit local test; production credentials
+   must remain independently rotatable.
 7. Map the history managed identity to PostgreSQL principal
    `POSTGRES_ENTRA_USER` and grant only the required `operation_runs`,
    `activity_events`, `artifacts`, and tenant membership permissions. Azure

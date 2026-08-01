@@ -36,8 +36,10 @@ flowchart LR
 
     RA --> KRA["Repository model Key Vault"]
     TG --> KTG["Terraform model Key Vault"]
-    RA --> GHRA["GitHub Models: GPT-4o"]
-    TG --> GHTG["GitHub Models: GPT-4.1"]
+    RA --> NRA["NVIDIA: GLM-5.2 primary"]
+    RA -. "one bounded fallback" .-> GRA["Groq: GPT-OSS 120B"]
+    TG --> NTG["NVIDIA: GLM-5.2 primary"]
+    TG -. "one bounded fallback" .-> GTG["Groq: GPT-OSS 120B"]
 
     RA --> ART
     TG --> ART
@@ -80,6 +82,11 @@ single responsibility.
   Key Vaults, managed identities, provider clients, caches, budgets, and audit
   records.
 - A failure in one route cannot cause the other route's credential to be used.
+- Each workload may make one explicit, strict-schema Groq fallback request only
+  after its NVIDIA provider or output contract fails. There is no generic
+  `GROQ_API_KEY` lookup or recursive provider registry.
+- Input-budget, evidence-policy, and Terraform safety rejection never trigger a
+  fallback model call.
 - GitHub login OAuth tokens are not model credentials.
 - Repository content and approved-plan content are untrusted data, never
   instructions.
@@ -170,9 +177,9 @@ availability. The model:
 The model cannot declare a scanner check passed, invent a vulnerability, invent
 a price, choose an unapproved deployment target, or execute a command.
 
-If the repository model is unavailable, the stage may complete as
-`deterministic_only`. That state is visible in provenance and must not be
-presented as a model-assisted analysis.
+If neither the NVIDIA repository route nor its workload-local Groq fallback
+succeeds, the stage may complete as `deterministic_only`. That state is visible
+in provenance and must not be presented as a model-assisted analysis.
 
 ## Terraform generation
 
@@ -192,7 +199,9 @@ Output must map every file/resource to an approved component. Validation rejects
 - public network access that was not explicitly approved;
 - model assertions that validation, plan, price, or apply already succeeded.
 
-Terraform generation fails closed when the generation model is unavailable.
+Terraform generation fails closed when neither its NVIDIA primary nor its
+workload-local Groq fallback produces a valid, policy-safe bundle. Generation
+can enqueue only a plan job; apply remains a separate approval-gated operation.
 
 ## Plan and apply state machine
 

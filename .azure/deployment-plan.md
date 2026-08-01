@@ -1,6 +1,6 @@
 # Azure Deployment Plan — ZeroOps AI
 
-> **Status:** Approved; local implementation and pre-deployment validation are in progress. Deployment is not authorized.
+> **Status:** Ready for Validation; local implementation and functional verification are complete. Deployment is not authorized.
 >
 > **Architecture approval:** User-approved on 2026-07-29.
 >
@@ -75,12 +75,46 @@ The trust boundaries are deliberate:
 
 ## 4. Model and Foundry contract
 
-For current testing, both routes use NVIDIA Build but never share a credential:
+For current testing, both routes use NVIDIA Build as the primary provider and
+one explicit Groq route as the backup. Credentials never cross the two workload
+boundaries:
 
-| Workload | Provider/model | Configuration/key boundary | Failure policy |
+| Workload | Primary and fallback | Configuration/key boundary | Failure policy |
 |---|---|---|---|
-| Repository analysis | `nvidia` / `z-ai/glm-5.2` | `AI_REPOSITORY_*`, analysis Function UAMI, analysis Key Vault | deterministic scanner result may be returned with explicit provenance |
-| Terraform generation | `nvidia` / `z-ai/glm-5.2` | `AI_TERRAFORM_*`, generation Function UAMI, generation Key Vault | fail closed; no fallback to the analysis key |
+| Repository analysis and deployment recommendations | `nvidia` / `z-ai/glm-5.2`, then `groq` / `openai/gpt-oss-120b` | `AI_REPOSITORY_*` and `AI_REPOSITORY_FALLBACK_*`; analysis Function UAMI; analysis Key Vault secrets `ai-repository-api-key` and `ai-repository-fallback-api-key` | use Groq only after a bounded provider or output-contract failure; use the deterministic scanner if neither route succeeds |
+| Terraform generation | `nvidia` / `z-ai/glm-5.2`, then `groq` / `openai/gpt-oss-120b` | `AI_TERRAFORM_*` and `AI_TERRAFORM_FALLBACK_*`; generation Function UAMI; generation Key Vault secrets `ai-terraform-api-key` and `ai-terraform-fallback-api-key` | use Groq only after a bounded provider or output-contract failure; fail closed if neither succeeds; never enqueue apply |
+
+There is no generic `GROQ_API_KEY` lookup or recursive provider registry. Input
+budget, request-policy, evidence-policy, and Terraform safety failures never
+trigger the fallback. The Groq route gets one strict-schema request with no
+repair retry; NVIDIA keeps one bounded repair attempt. A successful invocation
+records the actual provider and model, so a Groq result cannot appear as an
+NVIDIA result.
+
+For a small local demo, one newly rotated Groq key may be inserted explicitly
+into both fallback secret names. The Function identities still see only their
+own vault and setting, making later independent rotation possible without an
+application change. No provider secret value is accepted as Terraform input or
+stored in Terraform state.
+
+### Provider fallback research summary
+
+- Groq's canonical OpenAI-compatible base URL is
+  `https://api.groq.com/openai/v1`, and ZeroOps allowlists that exact origin and
+  the exact `openai/gpt-oss-120b` model.
+- GPT-OSS 120B supports strict structured output. ZeroOps reduces the transport
+  schema to the supported strict subset, then applies the full Pydantic and
+  deterministic safety contracts locally.
+- Groq's published free-plan base table currently lists 8,000 tokens per minute
+  for this model. The fallback therefore counts the complete prompt and schema,
+  caps the request at 14,000 characters, caps output at 800 tokens for analysis
+  and 1,000 for Terraform, and makes no fallback repair call. Actual
+  organization limits remain authoritative in the Groq console.
+
+Research sources: [Groq OpenAI compatibility](https://console.groq.com/docs/openai),
+[GPT-OSS 120B](https://console.groq.com/docs/model/openai/gpt-oss-120b),
+[structured outputs](https://console.groq.com/docs/structured-outputs), and
+[rate limits](https://console.groq.com/docs/rate-limits).
 
 The detailed Foundry portal package lives in [`ai-specs/`](../ai-specs/): strict
 schemas, instructions, provider import prompts, evaluations, redaction rules,
@@ -143,7 +177,7 @@ that is implemented and tested, production apply remains intentionally blocked.
 Implemented in local code/IaC:
 
 - test profile Functions and VMSS scale to zero; VMSS uses regular (not Spot) instances;
-- one bounded repair attempt, bounded model I/O, qualitative optimisation policy, and separate model paths;
+- one bounded NVIDIA repair attempt, a single-call Groq backup, bounded model I/O, qualitative optimisation policy, and separate model paths;
 - cache-key contracts based on immutable input/version material;
 - Standard Service Bus, Basic ACR, FC1 Functions, LRS Function hosts, and a one-instance test VMSS cap;
 - optional Azure budget resource, explicit production switches, storage lifecycle rules, and audit retention;
@@ -209,8 +243,8 @@ The following commands completed on 2026-07-31 without provisioning a workload:
 
 | Check | Result |
 |---|---|
-| `APP_ENV=test python -m pytest backend/tests -q` | 142 passed; 115 Python 3.14 `datetime.utcnow()` deprecation warnings (no test failure) |
-| Supported Python 3.13 Function environment with pinned requirements | 22 Function contract tests and 15 VMSS worker tests passed |
+| `APP_ENV=test python -m pytest backend/tests -q` | 209 passed; 145 Python 3.14 `datetime.utcnow()` deprecation warnings (no test failure) |
+| Function and infrastructure contract suites | 37 Function tests and 7 IaC contract tests passed |
 | `python scripts/generate_ai_schemas.py --check` and two `package_functions.py` runs | passed; all three ZIP hashes were byte-for-byte deterministic; Function/worker imports passed |
 | Terraform 1.15.8: `fmt -check`, `init -backend=false`, `validate`, recursive TFLint | passed |
 | `python -m unittest discover -s infra/tests -v` | 6 passed, including the implicit-provider-registration guard |
@@ -218,8 +252,8 @@ The following commands completed on 2026-07-31 without provisioning a workload:
 | Disposable-copy Terraform preview (`-refresh=false -lock=false`) with actual subscription/tenant and synthetic SSH/image inputs | 118 to add, 0 to change, 0 to destroy; existing App Services, Key Vault, PostgreSQL, plan, and identity resolved only as data sources |
 | Azure activity log during that safe-preview interval | no registration events; `Microsoft.App` and `Microsoft.Quota` remained `NotRegistered` |
 | `npm run lint`, `npm run typecheck`, `npm run build` | passed; Next.js 16.2.12 generated all 38 pages |
-| targeted high-confidence credential-pattern scan | 0 matches for GitHub tokens, OpenAI-style keys, private-key headers, and Azure Storage account keys |
-| `git diff --check` | pending final workspace hygiene check after this record update |
+| targeted high-confidence credential-pattern scan | 0 matches for Groq, NVIDIA, GitHub, and OpenAI-style API credentials in the application/IaC/specification scopes |
+| `git diff --check` | passed; line-ending conversion warnings only |
 
 Azure policy state was read-only and reported no non-compliant resources for the
 current subscription. Validation has not been marked `Validated` because the
@@ -227,11 +261,14 @@ deployment prerequisites below remain intentionally incomplete.
 
 Required before an authorized deployment:
 
-1. complete the final local test/packaging/secret-scan run and record results;
+1. **Completed 2026-08-01:** final local tests, deterministic Function packaging,
+   schema checks, Python compilation, JSON validation, and secret scan;
 2. recheck global names, live quotas, VM SKU/zone capacity, and policy state;
 3. register `Microsoft.App` (and `Microsoft.Quota` only if the live quota API is used) with explicit authorization;
 4. bootstrap a separate remote Terraform state account and deployment identity;
-5. put the two GitHub Models keys directly into their separate Key Vaults;
+5. put the two NVIDIA primary keys and two workload-local Groq fallback entries
+   directly into their separate Key Vaults; for a small test only, the two Groq
+   entries may explicitly contain the same newly rotated value;
 6. create the PostgreSQL Entra role for the history projector and deploy the
    database migrations/functions/worker image separately;
 7. finish and test the backend enqueue and durable single-use approval flow;
@@ -241,14 +278,61 @@ Required before an authorized deployment:
 9. obtain a separate explicit deployment confirmation before invoking the
    deployment workflow.
 
-## 11. Prohibited deployment shortcuts
+## 11. Functional verification
+
+- **Status:** Verified locally for the changed provider, analysis, Function,
+  history-provenance, and IaC contracts.
+- **Backend:** all 209 tests passed, including persisted signup/login/profile
+  data, NVIDIA-to-Groq routing, synchronous repository/failure analysis,
+  deterministic degradation, and Terraform fail-closed behavior.
+- **Functions/IaC:** all 37 Function and 7 infrastructure contract tests
+  passed; deterministic packaging succeeded and Terraform generation enqueues
+  only plan envelopes.
+- **UI:** no frontend file changed in this provider pass. The existing
+  production build evidence recorded above remains applicable.
+- **External services:** no live NVIDIA, Groq, Azure deployment, or Terraform
+  apply was run and no provider credential was used.
+
+## 12. Prohibited deployment shortcuts
 
 - Do not run `terraform apply` from a developer machine or let Terraform create
   provider registrations implicitly.
-- Do not put GitHub Models keys, storage keys, SAS URLs, raw plan JSON,
+- Do not put provider API keys, storage keys, SAS URLs, raw plan JSON,
   state, or database passwords in Git, Terraform variables, Service Bus, or
   browser responses.
 - Do not grant the backend, model Functions, or browser access to executor
   state/raw plans.
 - Do not enable a production profile, private endpoint cutover, or scale
   increase merely because the code validates locally.
+
+## 13. Azure validation handoff
+
+### All validation checks pass
+
+- [ ] **Terraform installation:** current shell has no `terraform`, `tofu`,
+  `tflint`, or `checkov` executable. Do not substitute an unreviewed binary.
+- [x] **Azure CLI installation:** Azure CLI 2.84.0 is available.
+- [x] **Authentication/context:** read-only `az account show` confirmed Azure
+  for Students (`9277603e-b858-4253-b1ed-e6747e316519`) and Entra tenant
+  `a99f8a86-256f-4146-ad3c-e658a27f7a47`, matching the approved plan.
+- [ ] **Initialize:** deferred until the separate remote state account and
+  deployment identity are bootstrapped.
+- [ ] **Native format check:** deferred with Terraform installation. Static IaC
+  contract and whitespace checks pass.
+- [ ] **Native syntax validation:** deferred with Terraform installation.
+- [ ] **Plan preview:** deferred; no state backend or deployment authorization.
+- [ ] **State backend:** intentionally remains a pre-deployment prerequisite.
+- [x] **Azure policy/static security:** the prior safe preview and policy proof
+  remain recorded above; this pass introduced only Function settings and
+  versionless Key Vault references, with no secret values.
+- [x] **Template-variable resolution:** no unresolved `{{ .Env.* }}` expression
+  exists in Terraform or tfvars JSON.
+- [x] **Static role verification:** analysis and Terraform-generation UAMIs
+  retain queue-scoped Service Bus access, artifact-account Blob contributor,
+  and Key Vault Secrets User on only their own vault. Adding a second secret
+  reference did not broaden scope or add a role assignment.
+
+The plan remains **Ready for Validation**, not `Validated`: native Terraform
+initialization, formatting, validation, and preview cannot be rerun in the
+current shell, and the remote state prerequisite is intentionally incomplete.
+No deployment handoff is authorized.

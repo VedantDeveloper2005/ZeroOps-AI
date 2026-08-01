@@ -24,7 +24,12 @@ from zeroops_functions.contracts import (
     canonical_artifact_blob_name,
 )
 from zeroops_functions.identity import workload_credential
-from zeroops_functions.model_client import StructuredModelClient
+from zeroops_functions.model_client import (
+    ModelRoutesExhaustedError,
+    ModelUnavailableError,
+    StructuredModelClient,
+    generate_with_fallback,
+)
 from zeroops_functions.publisher import ServiceBusPublisher
 from zeroops_functions.security import (
     canonical_json_bytes,
@@ -43,10 +48,11 @@ AUDIT_ARTIFACT_NAME = "terraform-generation-audit.v1"
 class TerraformHandlerDependencies:
     store: BlobArtifactStore
     publisher: ServiceBusPublisher
-    model_client: StructuredModelClient
+    model_client: StructuredModelClient | None
     workflow_events_queue: str
     terraform_plan_queue: str
     instructions: str
+    fallback_model_client: StructuredModelClient | None = None
 
 
 def _event_id(job: TerraformGenerationJobV1, suffix: str) -> str:
@@ -208,11 +214,12 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
             Path(__file__).parent / "prompts" / "instructions.md",
         )
     )
-    return TerraformHandlerDependencies(
-        store=BlobArtifactStore(account_url, credential),
-        publisher=ServiceBusPublisher(namespace, credential),
-        model_client=StructuredModelClient(
-            provider=os.getenv("AI_TERRAFORM_PROVIDER", "nvidia"),
+    primary_provider = os.getenv("AI_TERRAFORM_PROVIDER", "nvidia")
+    if primary_provider.strip().lower().replace("_", "-") != "nvidia":
+        raise ValueError("Terraform primary provider must be NVIDIA")
+    try:
+        model_client: StructuredModelClient | None = StructuredModelClient(
+            provider=primary_provider,
             endpoint=os.getenv(
                 "AI_TERRAFORM_ENDPOINT",
                 "https://integrate.api.nvidia.com/v1",
@@ -231,13 +238,52 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
                 os.getenv("AI_TERRAFORM_MAX_OUTPUT_TOKENS", "4000")
             ),
             api_version=os.getenv("AI_GITHUB_API_VERSION", "2026-03-10"),
-        ),
+        )
+    except ModelUnavailableError:
+        model_client = None
+    fallback_provider = os.getenv("AI_TERRAFORM_FALLBACK_PROVIDER", "groq")
+    if fallback_provider.strip().lower().replace("_", "-") != "groq":
+        raise ValueError("Terraform fallback provider must be Groq")
+    try:
+        fallback_model_client: StructuredModelClient | None = StructuredModelClient(
+            provider=fallback_provider,
+            endpoint=os.getenv(
+                "AI_TERRAFORM_FALLBACK_ENDPOINT",
+                "https://api.groq.com/openai/v1",
+            ),
+            model=os.getenv(
+                "AI_TERRAFORM_FALLBACK_MODEL",
+                "openai/gpt-oss-120b",
+            ),
+            api_key=os.getenv("AI_TERRAFORM_FALLBACK_API_KEY", ""),
+            workload="terraform-generation",
+            prompt_version=os.getenv(
+                "AI_TERRAFORM_FALLBACK_PROMPT_VERSION",
+                "terraform-generation.v1",
+            ),
+            maximum_input_chars=int(
+                os.getenv("AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS", "14000")
+            ),
+            maximum_output_tokens=int(
+                os.getenv("AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS", "1000")
+            ),
+            timeout_seconds=float(
+                os.getenv("AI_TERRAFORM_FALLBACK_TIMEOUT_SECONDS", "30")
+            ),
+        )
+    except ModelUnavailableError:
+        fallback_model_client = None
+    return TerraformHandlerDependencies(
+        store=BlobArtifactStore(account_url, credential),
+        publisher=ServiceBusPublisher(namespace, credential),
+        model_client=model_client,
         workflow_events_queue=os.getenv(
             "WORKFLOW_EVENTS_QUEUE_NAME",
             "workflow-events",
         ),
         terraform_plan_queue=os.getenv("TERRAFORM_PLAN_QUEUE_NAME", "terraform-plan"),
         instructions=prompt_path.read_text(encoding="utf-8"),
+        fallback_model_client=fallback_model_client,
     )
 
 
@@ -286,7 +332,9 @@ def handle_terraform_generation(
             raise ValueError(
                 "Terraform request identity, revision, or approved-plan digest mismatch."
             )
-        bundle, provenance = deps.model_client.generate(
+        bundle, provenance, routing = generate_with_fallback(
+            primary=deps.model_client,
+            fallback=deps.fallback_model_client,
             system_instructions=deps.instructions,
             input_value=request.model_dump(mode="json"),
             output_model=TerraformBundle,
@@ -294,6 +342,7 @@ def handle_terraform_generation(
             correlation_id=job.correlation_id,
             semantic_validator=lambda value: validate_terraform_bundle(value, request),
         )
+        provenance_value = {**asdict(provenance), **asdict(routing)}
         validate_terraform_bundle(bundle, request)
         ordered_files = sorted(bundle.files, key=lambda item: item.path)
         file_manifest = [
@@ -334,7 +383,7 @@ def handle_terraform_generation(
                     }
                 )
             ),
-            "provenance": asdict(provenance),
+            "provenance": provenance_value,
             "validation_status": "not_run",
             "plan_status": "not_run",
             "apply_status": "not_run",
@@ -489,7 +538,7 @@ def handle_terraform_generation(
                 ],
                 safe_metadata=redact(
                     {
-                        **asdict(provenance),
+                        **provenance_value,
                         "approved_plan_digest": job.approved_plan_digest,
                         "target_environment": job.target_environment,
                         "terraform_version": job.terraform_version,
@@ -505,6 +554,11 @@ def handle_terraform_generation(
         )
         return audit_value
     except Exception as error:
+        failure_metadata = (
+            asdict(error.routing)
+            if isinstance(error, ModelRoutesExhaustedError)
+            else {}
+        )
         deps.publisher.send_event(
             deps.workflow_events_queue,
             WorkflowEventV1(
@@ -520,6 +574,7 @@ def handle_terraform_generation(
                 actor_type="function",
                 actor_id="terraform-generation",
                 error_code=type(error).__name__[:96],
+                safe_metadata=redact(failure_metadata),
                 safe_message=(
                     "Terraform generation failed closed; no plan job was enqueued."
                 ),

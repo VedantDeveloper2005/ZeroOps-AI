@@ -14,6 +14,14 @@ class ProviderConfigurationError(ProviderError):
     """Raised when a workload-specific provider route is incomplete."""
 
 
+class ProviderCredentialUnavailableError(ProviderConfigurationError):
+    """Raised when an otherwise selected provider route has no credential."""
+
+
+class ProviderInputBudgetError(ProviderError):
+    """Raised before inference when a request exceeds its route input budget."""
+
+
 @dataclass(frozen=True)
 class ProviderConfiguration:
     provider: str

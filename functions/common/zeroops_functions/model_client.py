@@ -1,11 +1,12 @@
-"""Strict structured inference client for a single configured AI workload."""
+"""Strict structured inference clients and bounded workload-local failover."""
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 from uuid import uuid4
 
 import httpx
@@ -18,6 +19,8 @@ T = TypeVar("T", bound=BaseModel)
 
 _GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference"
 _NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1"
+_GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
+_GROQ_MODEL = "openai/gpt-oss-120b"
 
 
 class ModelUnavailableError(RuntimeError):
@@ -26,6 +29,22 @@ class ModelUnavailableError(RuntimeError):
 
 class ModelContractError(RuntimeError):
     pass
+
+
+class ModelInputBudgetError(RuntimeError):
+    """A route input cannot fit within its configured request budget."""
+
+
+class ModelPolicyViolationError(RuntimeError):
+    """A structurally valid response violated deterministic product policy."""
+
+
+class ModelRoutesExhaustedError(ModelUnavailableError):
+    """All configured routes failed without exposing upstream error text."""
+
+    def __init__(self, routing: "ModelRoutingProvenance"):
+        super().__init__("All configured model routes failed")
+        self.routing = routing
 
 
 @dataclass(frozen=True)
@@ -43,6 +62,148 @@ class ModelProvenance:
     request_hash: str
     repair_attempted: bool
     cached: bool
+
+
+@dataclass(frozen=True)
+class ModelRoutingProvenance:
+    """Safe route-selection evidence persisted with each model result."""
+
+    selected_route: Literal["primary", "fallback", "none"]
+    fallback_attempted: bool
+    primary_provider: str | None
+    primary_model: str | None
+    fallback_provider: str | None
+    fallback_model: str | None
+    primary_failure_code: str | None
+    fallback_failure_code: str | None
+
+
+def _safe_failure_code(error: Exception) -> str:
+    if isinstance(error, ModelInputBudgetError):
+        return "input_budget_exceeded"
+    if isinstance(error, ModelPolicyViolationError):
+        return "policy_violation"
+    if isinstance(error, ModelContractError):
+        return "contract_invalid"
+    if isinstance(error, ModelUnavailableError):
+        return "unavailable"
+    return "failed"
+
+
+def _supports_strict_json_schema(value: Any) -> bool:
+    """Return whether every object follows Groq strict-schema requirements."""
+
+    if isinstance(value, list):
+        return all(_supports_strict_json_schema(item) for item in value)
+    if not isinstance(value, dict):
+        return True
+    properties = value.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            return False
+        if value.get("additionalProperties") is not False:
+            return False
+        required = value.get("required")
+        if not isinstance(required, list) or set(required) != set(properties):
+            return False
+    return all(_supports_strict_json_schema(item) for item in value.values())
+
+
+_UNSUPPORTED_STRICT_SCHEMA_KEYS = {
+    "$schema",
+    "$defs",
+    "$ref",
+    "default",
+    "format",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "maximum",
+    "minContains",
+    "minItems",
+    "minLength",
+    "minProperties",
+    "minimum",
+    "multipleOf",
+    "pattern",
+    "patternProperties",
+    "propertyNames",
+    "title",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+    "uniqueItems",
+}
+
+
+def strict_provider_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Reduce Pydantic JSON Schema to Groq's conservative strict subset.
+
+    Omitted constraints remain authoritative in local Pydantic and semantic
+    validation after inference.
+    """
+
+    definitions = schema.get("$defs", {})
+
+    def dereference(value: Any) -> Any:
+        if isinstance(value, list):
+            return [dereference(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            reference = value["$ref"]
+            prefix = "#/$defs/"
+            if not isinstance(reference, str) or not reference.startswith(prefix):
+                raise ModelContractError(
+                    "Model output schema contains an unsupported reference"
+                )
+            name = reference.removeprefix(prefix)
+            if name not in definitions:
+                raise ModelContractError(
+                    "Model output schema contains an unknown reference"
+                )
+            merged = copy.deepcopy(definitions[name])
+            merged.update({key: item for key, item in value.items() if key != "$ref"})
+            return dereference(merged)
+        return {
+            key: dereference(item)
+            for key, item in value.items()
+            if key != "$defs"
+        }
+
+    def reduce(value: Any, *, property_map: bool = False) -> Any:
+        if isinstance(value, list):
+            return [reduce(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if property_map:
+            return {
+                str(field_name): reduce(field_schema)
+                for field_name, field_schema in value.items()
+            }
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _UNSUPPORTED_STRICT_SCHEMA_KEYS:
+                continue
+            if key == "const":
+                result["enum"] = [item]
+                continue
+            result[key] = reduce(item, property_map=key == "properties")
+        if result.get("type") == "object":
+            properties = result.get("properties")
+            if not isinstance(properties, dict):
+                raise ModelContractError(
+                    "Strict model output objects require explicit properties"
+                )
+            result["additionalProperties"] = False
+            result["required"] = list(properties)
+        return result
+
+    transformed = reduce(dereference(schema))
+    if not isinstance(transformed, dict) or not _supports_strict_json_schema(
+        transformed
+    ):
+        raise ModelContractError("Model output schema is not strict-compatible")
+    return transformed
 
 
 class StructuredModelClient:
@@ -98,6 +259,11 @@ class StructuredModelClient:
                 raise ValueError(
                     "NVIDIA model must be a publisher-qualified catalog ID"
                 )
+        elif self.provider == "groq":
+            if self.endpoint != _GROQ_ENDPOINT:
+                raise ValueError("Groq endpoint must use the approved inference origin")
+            if self.model != _GROQ_MODEL:
+                raise ValueError("Groq fallback must use the approved GPT-OSS model")
         else:
             raise ModelUnavailableError("Configured model provider is not supported")
         if not self.api_key:
@@ -115,19 +281,28 @@ class StructuredModelClient:
     ) -> tuple[T, ModelProvenance]:
         input_json = canonical_json_bytes(input_value).decode("utf-8")
         output_schema = output_model.model_json_schema()
-        schema_json = canonical_json_bytes(output_schema).decode("utf-8")
+        provider_output_schema = (
+            strict_provider_output_schema(output_schema)
+            if self.provider == "groq"
+            else output_schema
+        )
+        schema_json = canonical_json_bytes(provider_output_schema).decode("utf-8")
+        strict_schema_enabled = self.provider == "groq"
         bounded_system_instructions = (
             f"{system_instructions.strip()}\n\n"
-            "Return exactly one JSON object matching this JSON Schema. "
-            "Do not add markdown or unknown fields.\n"
-            f"{schema_json}"
+            "Return exactly one JSON object matching the enforced JSON Schema. "
+            "Do not add markdown or unknown fields."
         )
-        if (
-            len(bounded_system_instructions)
-            + len(input_json)
-            > self.maximum_input_chars
-        ):
-            raise ModelContractError("Structured model input exceeds the configured limit")
+        if not strict_schema_enabled:
+            bounded_system_instructions = f"{bounded_system_instructions}\n{schema_json}"
+        request_character_count = len(bounded_system_instructions) + len(input_json)
+        if strict_schema_enabled:
+            # The schema is sent once through Groq's strict response contract.
+            request_character_count += len(schema_json)
+        if request_character_count > self.maximum_input_chars:
+            raise ModelInputBudgetError(
+                "Structured model input exceeds the configured limit"
+            )
         request_hash = sha256_bytes(
             canonical_json_bytes(
                 {
@@ -147,11 +322,17 @@ class StructuredModelClient:
             {"role": "user", "content": input_json},
         ]
         started = time.perf_counter()
-        raw, usage = self._request(messages)
+        raw, usage = self._request(messages, output_schema=provider_output_schema)
         repair_attempted = False
         try:
             result = self._validate(raw, output_model, semantic_validator)
-        except (json.JSONDecodeError, ValidationError, ValueError):
+        except (json.JSONDecodeError, ValidationError, ValueError) as initial_error:
+            if self.provider == "groq":
+                # The free-plan backup gets one strict-schema attempt. Avoid a
+                # hidden second request that could unexpectedly double token use.
+                raise ModelContractError(
+                    "Model output failed strict validation"
+                ) from initial_error
             repair_attempted = True
             repair_messages = [
                 *messages,
@@ -169,10 +350,13 @@ class StructuredModelClient:
                 sum(len(message["content"]) for message in repair_messages)
                 > self.maximum_input_chars
             ):
-                raise ModelContractError(
+                raise ModelInputBudgetError(
                     "Model output could not be repaired within the configured input limit"
                 )
-            raw, repair_usage = self._request(repair_messages)
+            raw, repair_usage = self._request(
+                repair_messages,
+                output_schema=provider_output_schema,
+            )
             usage["prompt_tokens"] += repair_usage["prompt_tokens"]
             usage["completion_tokens"] += repair_usage["completion_tokens"]
             try:
@@ -196,7 +380,12 @@ class StructuredModelClient:
             cached=False,
         )
 
-    def _request(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
+    def _request(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        output_schema: dict[str, Any],
+    ) -> tuple[str, dict[str, int]]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -204,15 +393,28 @@ class StructuredModelClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": self.maximum_output_tokens,
             "temperature": 0,
             "stream": False,
         }
+        if self.provider == "groq":
+            payload["max_completion_tokens"] = self.maximum_output_tokens
+        else:
+            payload["max_tokens"] = self.maximum_output_tokens
         if self.provider == "github-models":
             headers["Accept"] = "application/vnd.github+json"
             if self.api_version:
                 headers["X-GitHub-Api-Version"] = self.api_version
             payload["response_format"] = {"type": "json_object"}
+        elif self.provider == "groq" and _supports_strict_json_schema(output_schema):
+            headers["Accept"] = "application/json"
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "zeroops_structured_response",
+                    "strict": True,
+                    "schema": output_schema,
+                },
+            }
         else:
             # NVIDIA Build's OpenAI-compatible catalog does not guarantee
             # response_format support for every model. The schema is already
@@ -257,5 +459,103 @@ class StructuredModelClient:
             raise ValueError("Model output root must be an object")
         result = output_model.model_validate(value)
         if semantic_validator is not None:
-            semantic_validator(result)
+            try:
+                semantic_validator(result)
+            except ValueError as error:
+                raise ModelPolicyViolationError(
+                    "Model output violated deterministic policy"
+                ) from error
         return result
+
+
+def generate_with_fallback(
+    *,
+    primary: StructuredModelClient | None,
+    fallback: StructuredModelClient | None,
+    system_instructions: str,
+    input_value: dict[str, Any],
+    output_model: type[T],
+    schema_version: str,
+    correlation_id: str | None = None,
+    semantic_validator: Callable[[T], None] | None = None,
+) -> tuple[T, ModelProvenance, ModelRoutingProvenance]:
+    """Try one explicit backup route without crossing the workload boundary."""
+
+    primary_failure_code: str | None = None
+    if primary is not None:
+        try:
+            result, provenance = primary.generate(
+                system_instructions=system_instructions,
+                input_value=input_value,
+                output_model=output_model,
+                schema_version=schema_version,
+                correlation_id=correlation_id,
+                semantic_validator=semantic_validator,
+            )
+            return result, provenance, ModelRoutingProvenance(
+                selected_route="primary",
+                fallback_attempted=False,
+                primary_provider=getattr(primary, "provider", None),
+                primary_model=getattr(primary, "model", None),
+                fallback_provider=getattr(fallback, "provider", None),
+                fallback_model=getattr(fallback, "model", None),
+                primary_failure_code=None,
+                fallback_failure_code=None,
+            )
+        except (ModelInputBudgetError, ModelPolicyViolationError) as error:
+            raise ModelRoutesExhaustedError(
+                ModelRoutingProvenance(
+                    selected_route="none",
+                    fallback_attempted=False,
+                    primary_provider=getattr(primary, "provider", None),
+                    primary_model=getattr(primary, "model", None),
+                    fallback_provider=getattr(fallback, "provider", None),
+                    fallback_model=getattr(fallback, "model", None),
+                    primary_failure_code=_safe_failure_code(error),
+                    fallback_failure_code="not_attempted",
+                )
+            ) from error
+        except (ModelUnavailableError, ModelContractError) as error:
+            primary_failure_code = _safe_failure_code(error)
+    else:
+        primary_failure_code = "not_configured"
+
+    if fallback is not None:
+        try:
+            result, provenance = fallback.generate(
+                system_instructions=system_instructions,
+                input_value=input_value,
+                output_model=output_model,
+                schema_version=schema_version,
+                correlation_id=correlation_id,
+                semantic_validator=semantic_validator,
+            )
+            return result, provenance, ModelRoutingProvenance(
+                selected_route="fallback",
+                fallback_attempted=True,
+                primary_provider=getattr(primary, "provider", None),
+                primary_model=getattr(primary, "model", None),
+                fallback_provider=getattr(fallback, "provider", None),
+                fallback_model=getattr(fallback, "model", None),
+                primary_failure_code=primary_failure_code,
+                fallback_failure_code=None,
+            )
+        except (ModelInputBudgetError, ModelPolicyViolationError) as error:
+            fallback_failure_code = _safe_failure_code(error)
+        except (ModelUnavailableError, ModelContractError) as error:
+            fallback_failure_code = _safe_failure_code(error)
+    else:
+        fallback_failure_code = "not_configured"
+
+    raise ModelRoutesExhaustedError(
+        ModelRoutingProvenance(
+            selected_route="none",
+            fallback_attempted=fallback is not None,
+            primary_provider=getattr(primary, "provider", None),
+            primary_model=getattr(primary, "model", None),
+            fallback_provider=getattr(fallback, "provider", None),
+            fallback_model=getattr(fallback, "model", None),
+            primary_failure_code=primary_failure_code,
+            fallback_failure_code=fallback_failure_code,
+        )
+    )

@@ -111,10 +111,18 @@ AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
 AI_REPOSITORY_MODEL=z-ai/glm-5.2
 AI_REPOSITORY_API_KEY=<Key Vault reference resolved by the Function platform>
 AI_REPOSITORY_PROMPT_VERSION=repository-analysis.v1
+AI_REPOSITORY_FALLBACK_PROVIDER=groq
+AI_REPOSITORY_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
+AI_REPOSITORY_FALLBACK_MODEL=openai/gpt-oss-120b
+AI_REPOSITORY_FALLBACK_API_KEY=<a second reference in the analysis Key Vault>
+AI_REPOSITORY_FALLBACK_PROMPT_VERSION=repository-analysis.v1
+AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS=14000
+AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS=800
 ```
 
 `AI_REPOSITORY_API_KEY` is a versionless reference to the
-`ai-repository-api-key` secret in the repository-analysis Key Vault.
+`ai-repository-api-key` secret and `AI_REPOSITORY_FALLBACK_API_KEY` references
+`ai-repository-fallback-api-key` in the repository-analysis Key Vault.
 
 Terraform generation:
 
@@ -127,14 +135,34 @@ AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
 AI_TERRAFORM_MODEL=z-ai/glm-5.2
 AI_TERRAFORM_API_KEY=<a different Key Vault reference>
 AI_TERRAFORM_PROMPT_VERSION=terraform-generation.v1
+AI_TERRAFORM_FALLBACK_PROVIDER=groq
+AI_TERRAFORM_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
+AI_TERRAFORM_FALLBACK_MODEL=openai/gpt-oss-120b
+AI_TERRAFORM_FALLBACK_API_KEY=<a second reference in the Terraform Key Vault>
+AI_TERRAFORM_FALLBACK_PROMPT_VERSION=terraform-generation.v1
+AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS=14000
+AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS=1000
 ```
 
 `AI_TERRAFORM_API_KEY` is a versionless reference to the
-`ai-terraform-api-key` secret in the Terraform-generation Key Vault. The two
+`ai-terraform-api-key` secret and `AI_TERRAFORM_FALLBACK_API_KEY` references
+`ai-terraform-fallback-api-key` in the Terraform-generation Key Vault. The two
 workers use different managed identities and cannot read each other's vault.
-There is no shared-key or automatic provider fallback.
+`GROQ_API_KEY` is deliberately ignored; neither workload inherits a generic
+credential or the other workload's fallback key. For a local test, the two
+fallback secrets may be populated explicitly with the same Groq value. They
+remain separate settings and must use independently rotatable credentials in
+production.
 
-The VMSS never receives either model setting or Key Vault permission.
+Each worker makes at most one Groq request after an eligible NVIDIA provider or
+structured-contract failure. Groq input/output budgets are smaller than the
+primary route and Groq receives no repair request. Input-budget failures and
+deterministic policy violations never trigger fallback. After both routes fail,
+repository analysis returns its evidence-only result while Terraform generation
+fails closed. A successful fallback still passes Pydantic, semantic, Terraform,
+policy, VMSS plan, and human-approval gates; it never performs `terraform apply`.
+
+The VMSS never receives any model setting or model Key Vault permission.
 
 ## Local tests
 

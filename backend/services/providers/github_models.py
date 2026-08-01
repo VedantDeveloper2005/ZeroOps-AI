@@ -12,7 +12,9 @@ from openai import OpenAI
 from backend.services.providers.base import (
     ProviderConfiguration,
     ProviderConfigurationError,
+    ProviderCredentialUnavailableError,
     ProviderError,
+    ProviderInputBudgetError,
     ProviderRequest,
     ProviderResponse,
 )
@@ -47,7 +49,7 @@ class GitHubModelsProvider:
         client: Any | None = None,
     ) -> None:
         if not configuration.api_key:
-            raise ProviderConfigurationError(
+            raise ProviderCredentialUnavailableError(
                 "The selected AI workload has no GitHub Models credential."
             )
         if "/" not in configuration.model:
@@ -97,7 +99,9 @@ class GitHubModelsProvider:
             f"{schema_text}"
         )
         if len(bounded_system_prompt) + len(request.user_prompt) > self.configuration.max_input_chars:
-            raise ProviderError("AI request exceeds the configured input budget.")
+            raise ProviderInputBudgetError(
+                "AI request exceeds the configured input budget."
+            )
 
         max_output_tokens = min(
             request.max_output_tokens,

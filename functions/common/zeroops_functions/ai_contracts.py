@@ -401,4 +401,10 @@ class ModelProvenance(StrictContract):
     latency_ms: int = Field(default=0, ge=0)
     repair_attempted: bool = False
     cached: bool = False
-
+    selected_route: Literal["primary", "fallback", "none"] = "primary"
+    fallback_attempted: bool = False
+    primary_failure_code: str | None = Field(default=None, max_length=80)
+    primary_input_tokens: int = Field(default=0, ge=0)
+    primary_output_tokens: int = Field(default=0, ge=0)
+    primary_latency_ms: int = Field(default=0, ge=0)
+    primary_repair_attempted: bool = False

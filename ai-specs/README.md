@@ -11,12 +11,19 @@ They are separate agents, routes, credentials, prompts, output contracts, and
 evaluation suites. They must never share a credential or silently fall back to
 each other.
 
-## Current NVIDIA Build testing
+## Current NVIDIA Build and Groq testing
 
 Runtime calls use the two workload-specific settings documented in
-`FOUNDRY-PORTAL.md`, with the approved NVIDIA endpoint and `z-ai/glm-5.2`.
-The route credentials remain separate even when a local demo temporarily uses
-the same NVIDIA account for both secrets.
+`FOUNDRY-PORTAL.md`. Each workload uses the approved NVIDIA endpoint and
+`z-ai/glm-5.2` first, then its own explicit Groq secret with
+`openai/gpt-oss-120b` only after a provider or structured-output failure. The
+fallback is single-call, strict-schema, and never runs for local input or
+safety-policy rejection. Repository analysis degrades to deterministic facts
+after both model routes fail; Terraform generation fails closed.
+
+All four setting names remain separate. A local demo may explicitly write the
+same newly rotated Groq test value into the two fallback secrets, but there is
+no shared runtime setting or cross-workload secret access.
 
 ## Optional GitHub Models prompt assets
 
