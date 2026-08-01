@@ -32,7 +32,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          # Keep CI aligned with the App Service runtime.
+          python-version: '3.11'
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
@@ -50,12 +51,18 @@ jobs:
           python -m pip check
           python -m pytest backend/tests
 
+      - name: Build App Service deployment package
+        run: |
+          source .venv-ci/bin/activate
+          python scripts/package_appservice_backend.py
+
       - name: Upload backend artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: python-backend-app
-          path: backend/
+          path: dist/zeroops-backend-appservice.zip
+          if-no-files-found: error
 
   deploy:
     runs-on: ubuntu-latest
@@ -71,7 +78,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-backend-app
-          path: .
+          path: dist
 
       - name: Azure Login
         uses: azure/login@v2
@@ -88,4 +95,18 @@ jobs:
         with:
           app-name: 'zeroops-backend'
           slot-name: 'Production'
-          package: .
+          package: dist/zeroops-backend-appservice.zip
+
+      - name: Verify deployed backend health
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 5 --output /dev/null \
+              https://zeroops-backend.azurewebsites.net/health; then
+              exit 0
+            fi
+            echo "Health check attempt ${attempt}/30 failed; retrying in 5 seconds"
+            sleep 5
+          done
+          echo "Backend did not become healthy after deployment" >&2
+          exit 1

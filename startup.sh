@@ -16,7 +16,7 @@ export PORT="${PORT:-8000}"
 export WEB_CONCURRENCY="${WEB_CONCURRENCY:-1}"
 export GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-180}"
 
-exec gunicorn main:app \
+exec python -m gunicorn backend.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
   --workers "$WEB_CONCURRENCY" \
   --bind "0.0.0.0:${PORT}" \
