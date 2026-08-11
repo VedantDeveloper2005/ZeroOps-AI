@@ -21,6 +21,7 @@ import shutil
 import zipfile
 import hashlib
 import stat
+import jwt
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, List, Union
@@ -28,7 +29,7 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Response, Query, Request, UploadFile, File, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from jose import JWTError, jwt
+from jwt.exceptions import InvalidTokenError as JWTError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -2570,9 +2571,12 @@ async def create_project_variable(
     if req.is_secret:
         try:
             vault.set_project_secret(str(project_id), req.key, req.value)
-        except Exception as exc:
-            logger.error("Unable to store a project secret in Key Vault: %s", exc)
-            raise HTTPException(status_code=503, detail="Azure Key Vault is unavailable. Secret was not saved.")
+        except Exception:
+            logger.error("Unable to store a project secret in Key Vault.")
+            raise HTTPException(
+                status_code=503,
+                detail="Azure Key Vault is unavailable. Secret was not saved.",
+            ) from None
 
     new_var = models.EnvironmentVariable(
         environment_id=env.id,
@@ -2624,9 +2628,12 @@ async def delete_project_variable(
     if variable.is_secret:
         try:
             vault.delete_project_secret(str(project_id), variable.key)
-        except Exception as exc:
-            logger.error("Unable to delete a project secret from Key Vault: %s", exc)
-            raise HTTPException(status_code=503, detail="Azure Key Vault is unavailable. Secret was not deleted.")
+        except Exception:
+            logger.error("Unable to delete a project secret from Key Vault.")
+            raise HTTPException(
+                status_code=503,
+                detail="Azure Key Vault is unavailable. Secret was not deleted.",
+            ) from None
 
     # 4. Delete variable metadata
     await db.delete(variable)
@@ -2776,12 +2783,12 @@ async def start_deploy(
         )
     try:
         github_token = github_oauth.decrypt_token(encrypted_github_token)
-    except Exception as error:
-        logger.warning("Unable to decrypt GitHub credentials for deployment user %s.", current_user.id)
+    except Exception:
+        logger.warning("Unable to decrypt the saved GitHub deployment credential.")
         raise HTTPException(
             status_code=409,
             detail="Reconnect GitHub before deploying this repository.",
-        ) from error
+        ) from None
 
     commit_sha = await github_oauth.resolve_branch_commit(
         github_token,

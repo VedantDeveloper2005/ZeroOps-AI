@@ -1,0 +1,11 @@
+# Historical test fixtures and documentation commands used conspicuous
+# placeholders, not credentials. Keep each exception bound to its exact
+# commit, file, rule, and line; current source remains fully scanned.
+41074e79bb4fec0467c4df67180c1040048a8f65:backend/tests/test_truth_boundaries.py:generic-api-key:503
+41074e79bb4fec0467c4df67180c1040048a8f65:backend/tests/test_truth_boundaries.py:generic-api-key:524
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:backend/tests/test_secret_redaction.py:generic-api-key:15
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:docs/test-manual-flow.md:curl-auth-header:15
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:docs/test-manual-flow.md:curl-auth-header:48
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:docs/test-manual-flow.md:curl-auth-header:77
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:docs/test-manual-flow.md:curl-auth-header:90
+56d89a6e6be67d22a2a5c38775a7bc0f8ec1deb2:docs/test-manual-flow.md:curl-auth-header:104

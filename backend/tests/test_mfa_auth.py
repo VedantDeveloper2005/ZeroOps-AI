@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 
+import jwt
 import pytest
-from jose import jwt
+from fastapi import HTTPException
 from pydantic import ValidationError
+from starlette.requests import Request
 
 try:
     from backend import auth, config, models, schemas
@@ -42,6 +44,20 @@ def test_mfa_challenge_token_is_short_lived_and_scoped_to_pre_authentication():
     assert payload["type"] == "mfa_challenge"
     assert payload["challenge_id"] == "single-use-challenge"
     assert payload["exp"] - payload["iat"] == config.MFA_CHALLENGE_EXPIRE_MINUTES * 60
+
+
+def test_mfa_challenge_rejects_a_malformed_pyjwt_token():
+    request = Request(
+        {
+            "type": "http",
+            "headers": [(b"cookie", b"mfa_challenge=not-a-jwt")],
+        }
+    )
+
+    with pytest.raises(HTTPException) as error:
+        auth.decode_mfa_challenge(request)
+
+    assert error.value.status_code == 401
 
 
 def test_refresh_tokens_are_persisted_as_hashes_only():

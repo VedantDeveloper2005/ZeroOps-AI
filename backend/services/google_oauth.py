@@ -47,7 +47,7 @@ async def exchange_code_for_token(code: str, redirect_uri: str, code_verifier: s
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if response.status_code != 200:
-            logger.error("Google token exchange failed: HTTP %s", response.status_code)
+            logger.error("Google token exchange failed.")
             return None
 
         data = response.json()

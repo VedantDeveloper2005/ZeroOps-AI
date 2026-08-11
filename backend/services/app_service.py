@@ -9,6 +9,7 @@ public endpoint must answer first.
 from __future__ import annotations
 
 import http.client
+import io
 import ipaddress
 import json
 import os
@@ -86,18 +87,16 @@ def _run(command: list[str], *, env: dict[str, str], cwd: str | None = None) -> 
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
     except FileNotFoundError as error:
         raise AzureDeploymentError("The deployment worker is missing the Azure CLI.") from error
 
     if process.stdout:
-        for line in process.stdout:
-            value = redact_sensitive_text(line.strip(), maximum_length=10_000)
-            if value:
-                yield value
+        with io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace") as output:
+            for line in output:
+                value = redact_sensitive_text(line.strip(), maximum_length=10_000)
+                if value:
+                    yield value
     if process.wait():
         raise AzureDeploymentError("Azure rejected the deployment request. Review the Azure deployment log.")
 

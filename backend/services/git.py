@@ -4,7 +4,9 @@ import subprocess
 import base64
 import re
 import stat
-from urllib.parse import quote
+import urllib.error
+import urllib.request
+from urllib.parse import quote, urlsplit
 
 try:
     from backend import config
@@ -19,6 +21,73 @@ _GITHUB_REPOSITORY_PATTERN = re.compile(
 _WORKSPACE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
 _GITHUB_COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 _MAX_CHANGED_PATHS = 25_000
+_GITHUB_API_HOST = "api.github.com"
+_GITHUB_ARCHIVE_HOSTS = frozenset({_GITHUB_API_HOST, "codeload.github.com"})
+
+
+def _validated_github_url(url: str, *, allowed_hosts: frozenset[str]) -> str:
+    """Require an HTTPS GitHub URL with an exact, credential-free origin."""
+    if not isinstance(url, str) or not url:
+        raise ValueError("GitHub request URL is invalid.")
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("GitHub request URL has an invalid port.") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in allowed_hosts
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or parsed.path.startswith("//")
+        or "\\" in parsed.path
+        or any(ord(character) < 32 for character in url)
+    ):
+        raise ValueError("GitHub request URL is outside the approved HTTPS origins.")
+    return url
+
+
+class _GitHubRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow only redirects that remain on explicitly trusted GitHub hosts."""
+
+    def __init__(self, allowed_hosts: frozenset[str]):
+        super().__init__()
+        self._allowed_hosts = allowed_hosts
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validated_github_url(newurl, allowed_hosts=self._allowed_hosts)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if (
+            redirected is not None
+            and urlsplit(req.full_url).hostname != urlsplit(newurl).hostname
+        ):
+            # GitHub archive downloads redirect from api.github.com to
+            # codeload.github.com. The archive URL is sufficient on its own;
+            # never forward the API bearer token across origins.
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def _open_github_request(
+    request: urllib.request.Request,
+    *,
+    timeout: int,
+    allowed_hosts: frozenset[str],
+):
+    """Open a validated GitHub request without permitting an unsafe redirect."""
+    initial_url = _validated_github_url(request.full_url, allowed_hosts=allowed_hosts)
+    opener = urllib.request.build_opener(_GitHubRedirectHandler(allowed_hosts))
+    response = opener.open(request, timeout=timeout)
+    final_url = response.geturl() if hasattr(response, "geturl") else initial_url
+    try:
+        _validated_github_url(final_url, allowed_hosts=allowed_hosts)
+    except Exception:
+        response.close()
+        raise
+    return response
 
 
 def _validated_repository_name(full_name: str) -> str:
@@ -331,7 +400,6 @@ def clone_repo(
     print(f"Downloading zipball fallback for {full_name}...")
     temp_extract_dir = repo_path + "_temp"
     try:
-        import urllib.request
         import zipfile
         import tempfile
 
@@ -346,7 +414,10 @@ def clone_repo(
                 cleanup_workspace(repo_path)
                 cleanup_workspace(temp_extract_dir)
                 encoded_revision = quote(candidate_revision, safe="")
-                url = f"https://api.github.com/repos/{full_name}/zipball/{encoded_revision}"
+                url = _validated_github_url(
+                    f"https://api.github.com/repos/{full_name}/zipball/{encoded_revision}",
+                    allowed_hosts=_GITHUB_ARCHIVE_HOSTS,
+                )
                 req = urllib.request.Request(url)
                 req.add_header("User-Agent", "ZeroOps-AI-Deployment")
                 if token:
@@ -354,7 +425,11 @@ def clone_repo(
 
                 max_archive_bytes = config.MAX_CODE_UPLOAD_MB * 1024 * 1024
                 with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as archive:
-                    with urllib.request.urlopen(req, timeout=60) as response:
+                    with _open_github_request(
+                        req,
+                        timeout=60,
+                        allowed_hosts=_GITHUB_ARCHIVE_HOSTS,
+                    ) as response:
                         content_length = getattr(response, "headers", {}).get("Content-Length")
                         if content_length and int(content_length) > max_archive_bytes:
                             raise RuntimeError("Repository archive exceeds the allowed download size.")
@@ -517,16 +592,22 @@ def get_branches(full_name: str, token: str = None) -> list[str]:
     # Fallback to GitHub API branches endpoint using urllib
     print(f"git ls-remote failed or git missing. Querying branches API for {full_name}...")
     try:
-        import urllib.request
         import json
-        url = f"https://api.github.com/repos/{full_name}/branches?per_page=100"
+        url = _validated_github_url(
+            f"https://api.github.com/repos/{full_name}/branches?per_page=100",
+            allowed_hosts=frozenset({_GITHUB_API_HOST}),
+        )
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "ZeroOps-AI-Deployment")
         req.add_header("Accept", "application/vnd.github+json")
         if token:
             req.add_header("Authorization", f"Bearer {token}")
             
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with _open_github_request(
+            req,
+            timeout=10,
+            allowed_hosts=frozenset({_GITHUB_API_HOST}),
+        ) as response:
             data = json.loads(response.read().decode("utf-8"))
             branches = [b.get("name") for b in data if b.get("name")]
             return branches

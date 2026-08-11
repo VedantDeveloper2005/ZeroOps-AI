@@ -130,13 +130,15 @@ def test_zipball_fallback_uses_only_selected_branch(monkeypatch, tmp_path):
         def __exit__(self, *_):
             self.close()
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, *, timeout, allowed_hosts):
+        assert timeout == 60
+        assert allowed_hosts == git._GITHUB_ARCHIVE_HOSTS
         requested_urls.append(request.full_url)
         return FakeResponse(payload)
 
     monkeypatch.setattr(git, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(git.shutil, "which", lambda _: None)
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(git, "_open_github_request", fake_urlopen)
 
     repo_path = git.clone_repo(
         "owner/repository",
@@ -149,6 +151,78 @@ def test_zipball_fallback_uses_only_selected_branch(monkeypatch, tmp_path):
     ]
     assert (tmp_path / "deployments" / "deployment-123" / "application.txt").read_text() == "real source"
     git.cleanup_workspace(repo_path)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://api.github.com/repos/owner/repository",
+        "https://api.github.com.evil.example/repos/owner/repository",
+        "https://api.github.com@evil.example/repos/owner/repository",
+        "https://127.0.0.1/repos/owner/repository",
+    ],
+)
+def test_github_url_allowlist_rejects_file_and_untrusted_origins(url):
+    with pytest.raises(ValueError, match="approved HTTPS origins"):
+        git._validated_github_url(url, allowed_hosts=git._GITHUB_ARCHIVE_HOSTS)
+
+
+def test_github_request_rejects_redirect_outside_allowlist(monkeypatch):
+    class RedirectedResponse(io.BytesIO):
+        def __init__(self):
+            super().__init__(b"")
+            self.was_closed = False
+
+        def geturl(self):
+            return "file:///etc/passwd"
+
+        def close(self):
+            self.was_closed = True
+            super().close()
+
+    response = RedirectedResponse()
+
+    class FakeOpener:
+        def open(self, request, *, timeout):
+            assert request.full_url == "https://api.github.com/repos/owner/repository/branches"
+            assert timeout == 10
+            return response
+
+    monkeypatch.setattr(git.urllib.request, "build_opener", lambda *_: FakeOpener())
+    request = git.urllib.request.Request(
+        "https://api.github.com/repos/owner/repository/branches"
+    )
+
+    with pytest.raises(ValueError, match="approved HTTPS origins"):
+        git._open_github_request(
+            request,
+            timeout=10,
+            allowed_hosts=frozenset({git._GITHUB_API_HOST}),
+        )
+
+    assert response.was_closed
+
+
+def test_github_archive_redirect_does_not_forward_bearer_token():
+    request = git.urllib.request.Request(
+        "https://api.github.com/repos/owner/repository/zipball/main"
+    )
+    request.add_header("Authorization", "Bearer must-not-cross-origins")
+    handler = git._GitHubRedirectHandler(git._GITHUB_ARCHIVE_HOSTS)
+
+    redirected = handler.redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://codeload.github.com/owner/repository/legacy.zip/main",
+    )
+
+    assert redirected is not None
+    assert redirected.full_url.startswith("https://codeload.github.com/")
+    assert redirected.get_header("Authorization") is None
 
 
 def test_workspace_and_branch_values_cannot_escape_managed_root(monkeypatch, tmp_path):

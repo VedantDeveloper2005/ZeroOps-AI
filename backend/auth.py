@@ -16,9 +16,10 @@ from typing import Optional
 from urllib.parse import quote
 
 import bcrypt
+import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, HTTPException, Request, Response, status
-from jose import JWTError, jwt
+from jwt.exceptions import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 

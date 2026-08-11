@@ -83,7 +83,7 @@ class JobQueue(ABC):
 
 
 class PostgresJobQueue(JobQueue):
-    _UPDATABLE_FIELDS = {
+    _UPDATE_PARAMETER_FIELDS = (
         "terraform_status",
         "deployment_status",
         "estimated_cost",
@@ -99,7 +99,29 @@ class PostgresJobQueue(JobQueue):
         "attempt_count",
         "started_at",
         "completed_at",
-    }
+    )
+    _UPDATABLE_FIELDS = frozenset(_UPDATE_PARAMETER_FIELDS)
+    _UPDATE_JOB_STATUS_SQL = """
+        UPDATE deployment_jobs
+        SET status = %s,
+            terraform_status = CASE WHEN %s THEN %s ELSE terraform_status END,
+            deployment_status = CASE WHEN %s THEN %s ELSE deployment_status END,
+            estimated_cost = CASE WHEN %s THEN %s ELSE estimated_cost END,
+            terraform_path = CASE WHEN %s THEN %s ELSE terraform_path END,
+            logs = CASE WHEN %s THEN %s ELSE logs END,
+            terraform_plan_output = CASE WHEN %s THEN %s ELSE terraform_plan_output END,
+            live_url = CASE WHEN %s THEN %s ELSE live_url END,
+            failure_reason = CASE WHEN %s THEN %s ELSE failure_reason END,
+            worker_id = CASE WHEN %s THEN %s ELSE worker_id END,
+            lease_token = CASE WHEN %s THEN %s ELSE lease_token END,
+            lease_expires_at = CASE WHEN %s THEN %s ELSE lease_expires_at END,
+            heartbeat_at = CASE WHEN %s THEN %s ELSE heartbeat_at END,
+            attempt_count = CASE WHEN %s THEN %s ELSE attempt_count END,
+            started_at = CASE WHEN %s THEN %s ELSE started_at END,
+            completed_at = CASE WHEN %s THEN %s ELSE completed_at END,
+            updated_at = NOW()
+        WHERE id = %s
+    """
 
     def __init__(
         self,
@@ -426,16 +448,12 @@ class PostgresJobQueue(JobQueue):
                 )
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                fields = ["status = %s", "updated_at = NOW()"]
                 params: list[Any] = [status]
-                for key, value in kwargs.items():
-                    fields.append(f"{key} = %s")
-                    params.append(value)
+                for field in self._UPDATE_PARAMETER_FIELDS:
+                    supplied = field in kwargs
+                    params.extend((supplied, kwargs.get(field)))
                 params.append(job_id)
-                cursor.execute(
-                    f"UPDATE deployment_jobs SET {', '.join(fields)} WHERE id = %s",
-                    tuple(params),
-                )
+                cursor.execute(self._UPDATE_JOB_STATUS_SQL, tuple(params))
                 conn.commit()
         except Exception as error:
             if conn:

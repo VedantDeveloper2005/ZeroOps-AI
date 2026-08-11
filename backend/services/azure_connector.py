@@ -54,7 +54,7 @@ def get_credential_secret(user_id: uuid.UUID) -> Optional[str]:
     try:
         return _key_vault_client().get_secret(_get_kv_secret_name(user_id)).value
     except Exception:
-        logger.warning("Azure deployment credential was unavailable for user %s", user_id)
+        logger.warning("The Azure deployment credential was unavailable.")
         return None
 
 
@@ -63,7 +63,7 @@ def delete_credential_from_vault(user_id: uuid.UUID) -> bool:
         _key_vault_client().begin_delete_secret(_get_kv_secret_name(user_id))
         return True
     except Exception:
-        logger.warning("Unable to remove the Azure deployment credential for user %s", user_id)
+        logger.warning("Unable to remove the Azure deployment credential.")
         return False
 
 

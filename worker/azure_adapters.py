@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError
@@ -34,6 +34,102 @@ from worker.contracts import (
 from worker.execution_gate import ExecutionGateError, verify_file_digest
 from worker.history_events import build_workflow_event
 from worker.interfaces import SanitizedArtifactReference
+
+
+_IMDS_COMPUTE_URL = (
+    "http://169.254.169.254/metadata/instance/compute"
+    "?api-version=2021-02-01"
+)
+_ARM_MANAGEMENT_HOST = "management.azure.com"
+_ARM_API_VERSION = "2024-11-01"
+
+
+def _validated_origin_url(url: str, *, scheme: str, hostname: str) -> str:
+    """Require an exact origin and reject credentials, ports, and URL smuggling."""
+    if not isinstance(url, str) or not url:
+        raise ExecutionGateError("Azure request URL is invalid.")
+    parsed = urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ExecutionGateError("Azure request URL has an invalid port.") from error
+    if (
+        parsed.scheme != scheme
+        or parsed.hostname != hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or parsed.path.startswith("//")
+        or "\\" in parsed.path
+        or any(ord(character) < 32 for character in url)
+    ):
+        raise ExecutionGateError("Azure request URL is outside the approved origin.")
+    return url
+
+
+def _validated_imds_compute_url(url: str) -> str:
+    _validated_origin_url(url, scheme="http", hostname="169.254.169.254")
+    if url != _IMDS_COMPUTE_URL:
+        raise ExecutionGateError("VM metadata request is outside the approved endpoint.")
+    return url
+
+
+def _validated_arm_resource_url(url: str) -> str:
+    _validated_origin_url(url, scheme="https", hostname=_ARM_MANAGEMENT_HOST)
+    parsed = urlparse(url)
+    segments = parsed.path.split("/")
+    if (
+        len(segments) != 9
+        or segments[0] != ""
+        or segments[1] != "subscriptions"
+        or not segments[2]
+        or segments[3] != "resourceGroups"
+        or not segments[4]
+        or segments[5:8] != ["providers", "Microsoft.Compute", "virtualMachines"]
+        or not segments[8]
+        or parsed.params
+        or parsed.query != f"api-version={_ARM_API_VERSION}"
+    ):
+        raise ExecutionGateError("ARM request is outside the approved VM endpoint.")
+    return url
+
+
+class _RejectAzureRedirects(urllib.request.HTTPRedirectHandler):
+    """Azure control-plane and IMDS calls must never redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.URLError("Azure endpoint redirects are not permitted.")
+
+
+def _open_approved_azure_request(request, *, timeout: int, validator):
+    """Open one prevalidated Azure URL and verify the response did not move."""
+    initial_url = validator(request.full_url)
+    opener = urllib.request.build_opener(_RejectAzureRedirects())
+    response = opener.open(request, timeout=timeout)
+    final_url = response.geturl() if hasattr(response, "geturl") else initial_url
+    try:
+        if final_url != initial_url:
+            raise ExecutionGateError("Azure endpoint redirects are not permitted.")
+        validator(final_url)
+    except Exception:
+        response.close()
+        raise
+    return response
+
+
+def _encoded_arm_segment(value: str, *, label: str, maximum_length: int) -> str:
+    """Encode an IMDS identifier as one ARM path segment."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > maximum_length
+        or value in {".", ".."}
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ExecutionGateError(f"VM metadata contains an invalid {label}.")
+    return quote(value, safe="")
 
 
 class AzureBlobArtifactStore:
@@ -372,10 +468,7 @@ class AzureBlobStateLeaseFactory:
 class VmssScaleInProtection:
     """Protect the current Flexible VMSS VM through ARM while it owns work."""
 
-    IMDS_URL = (
-        "http://169.254.169.254/metadata/instance/compute"
-        "?api-version=2021-02-01"
-    )
+    IMDS_URL = _IMDS_COMPUTE_URL
 
     def __init__(self, credential):
         self.credential = credential
@@ -390,7 +483,11 @@ class VmssScaleInProtection:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with _open_approved_azure_request(
+                request,
+                timeout=5,
+                validator=_validated_imds_compute_url,
+            ) as response:
                 document = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
             raise ExecutionGateError("VM instance metadata is unavailable.") from error
@@ -408,18 +505,27 @@ class VmssScaleInProtection:
         token = self.credential.get_token(
             "https://management.azure.com/.default"
         ).token
-        resource_url = (
+        subscription_id = _encoded_arm_segment(
+            metadata["subscriptionId"], label="subscription ID", maximum_length=64
+        )
+        resource_group = _encoded_arm_segment(
+            metadata["resourceGroupName"], label="resource group", maximum_length=90
+        )
+        virtual_machine = _encoded_arm_segment(
+            metadata["name"], label="virtual machine name", maximum_length=64
+        )
+        resource_url = _validated_arm_resource_url(
             "https://management.azure.com/subscriptions/"
-            f"{metadata['subscriptionId']}/resourceGroups/"
-            f"{metadata['resourceGroupName']}/providers/Microsoft.Compute/"
-            f"virtualMachines/{metadata['name']}?api-version=2024-11-01"
+            f"{subscription_id}/resourceGroups/"
+            f"{resource_group}/providers/Microsoft.Compute/"
+            f"virtualMachines/{virtual_machine}?api-version={_ARM_API_VERSION}"
         )
         body = json.dumps(
             {
                 "properties": {
                     "protectionPolicy": {
                         "protectFromScaleIn": protected,
-                        "protectFromScaleSetActions": false,
+                        "protectFromScaleSetActions": False,
                     }
                 }
             }
@@ -434,7 +540,11 @@ class VmssScaleInProtection:
             method="PATCH",
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with _open_approved_azure_request(
+                request,
+                timeout=30,
+                validator=_validated_arm_resource_url,
+            ) as response:
                 if response.status not in {200, 201, 202}:
                     raise ExecutionGateError("VMSS scale-in protection update failed.")
         except (OSError, urllib.error.URLError) as error:

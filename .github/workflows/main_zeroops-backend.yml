@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -54,17 +56,17 @@ jobs:
         run: |
           curl --fail --silent --show-error --location \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            --output "${RUNNER_TEMP}/gitleaks.tar.gz"
+            --output "${RUNNER_TEMP}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl --fail --silent --show-error --location \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
             --output "${RUNNER_TEMP}/gitleaks-checksums.txt"
           cd "${RUNNER_TEMP}"
           grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks-checksums.txt | sha256sum --check --strict
-          tar -xzf gitleaks.tar.gz gitleaks
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
           chmod 0755 gitleaks
 
       - name: Scan committed secrets
-        run: "${RUNNER_TEMP}/gitleaks detect --source . --no-git --redact --exit-code 1"
+        run: "${RUNNER_TEMP}/gitleaks git --redact --exit-code 1 ."
 
       - name: Install verified Trivy
         env:
@@ -72,24 +74,28 @@ jobs:
         run: |
           curl --fail --silent --show-error --location \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-            --output "${RUNNER_TEMP}/trivy.tar.gz"
+            --output "${RUNNER_TEMP}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           curl --fail --silent --show-error --location \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" \
             --output "${RUNNER_TEMP}/trivy-checksums.txt"
           cd "${RUNNER_TEMP}"
           grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy-checksums.txt | sha256sum --check --strict
-          tar -xzf trivy.tar.gz trivy
+          tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy
           chmod 0755 trivy
 
-      - name: Scan filesystem dependencies and configuration
-        run: >-
-          ${RUNNER_TEMP}/trivy fs
-          --scanners vuln,misconfig
-          --severity CRITICAL
-          --ignore-unfixed
-          --exit-code 1
-          --no-progress
-          .
+      - name: Scan backend runtime dependencies and configuration
+        run: |
+          # Terraform is validated with the production tfvars in platform-ci;
+          # this App Service workflow scans only the code it packages or runs.
+          for target in backend worker functions; do
+            "${RUNNER_TEMP}/trivy" fs \
+              --scanners vuln,misconfig \
+              --severity CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --no-progress \
+              "$target"
+          done
 
   build:
     runs-on: ubuntu-latest
