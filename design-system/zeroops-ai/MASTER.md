@@ -38,7 +38,8 @@
 - **Body Font:** Geist Sans
 - **Data / code font:** Geist Mono
 - **Mood:** restrained, operational, precise, trustworthy
-- **Loading:** `next/font/google` in `src/app/layout.tsx`; no render-blocking CSS import
+- **Loading:** pinned self-hosted `geist` package in `src/app/layout.tsx`; no
+  build-time Google request or render-blocking CSS import
 
 Use tabular figures for metrics, timestamps, versions, and cost values.
 

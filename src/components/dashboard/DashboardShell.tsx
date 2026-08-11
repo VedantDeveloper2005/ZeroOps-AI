@@ -12,6 +12,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
 
   useEffect(() => {
+    const stored = window.localStorage.getItem("zeroops:sidebar-collapsed");
+    if (stored === "true") setSidebarCollapsed(true);
+  }, []);
+
+  useEffect(() => {
     setMobileNavigationOpen(false);
     if (previousPathname.current === pathname) return;
 
@@ -31,14 +36,22 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     };
   }, [mobileNavigationOpen]);
 
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("zeroops:sidebar-collapsed", String(next));
+      return next;
+    });
+  };
+
   return (
-    <div className="min-h-dvh bg-background text-foreground">
+    <div className="dashboard-shell">
       <div className="flex min-h-dvh">
         <Sidebar
           collapsed={sidebarCollapsed}
           mobileOpen={mobileNavigationOpen}
           onMobileClose={() => setMobileNavigationOpen(false)}
-          onToggle={() => setSidebarCollapsed((current) => !current)}
+          onToggle={toggleSidebar}
         />
 
         {mobileNavigationOpen && (
@@ -50,12 +63,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           />
         )}
 
-        <div className="min-w-0 flex-1">
-          <TopBar onOpenNavigation={() => setMobileNavigationOpen(true)} />
+        <div className="dashboard-main-canvas">
+          <TopBar
+            navigationOpen={mobileNavigationOpen}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+          />
           <main
             id="main-content"
             tabIndex={-1}
-            className="mx-auto w-full max-w-[1600px] px-4 pb-12 pt-6 outline-none sm:px-6 lg:px-8 lg:pt-8"
+            className="dashboard-route px-4 pb-14 pt-6 outline-none sm:px-6 lg:px-8 lg:pt-8 xl:px-10"
           >
             {children}
           </main>

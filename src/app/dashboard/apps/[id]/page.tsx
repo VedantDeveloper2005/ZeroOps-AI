@@ -16,7 +16,10 @@ import {
   Trash2,
 } from "lucide-react";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { MetricCard } from "@/components/ui/MetricCard";
 import { StatePanel } from "@/components/ui/StatePanel";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useNotifications } from "@/lib/NotificationContext";
 import {
   api,
@@ -45,13 +48,6 @@ function safeExternalUrl(value: string | null | undefined) {
   }
 }
 
-function statusClass(status: Deployment["status"] | null) {
-  if (status === "running") return "border-success/25 bg-success-subtle text-success";
-  if (status === "failed" || status === "stopped") return "border-danger/25 bg-danger-subtle text-danger";
-  if (status && activeStatuses.has(status)) return "border-info/25 bg-info-subtle text-info";
-  return "border-border bg-surface-subtle text-foreground-muted";
-}
-
 export default function AppDetailsPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -64,6 +60,8 @@ export default function AppDetailsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmation, setConfirmation] = useState<"deploy" | "delete" | null>(null);
+  const [latestDetailState, setLatestDetailState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
   const loadProject = useCallback(async (background = false) => {
@@ -87,18 +85,23 @@ export default function AppDetailsPage() {
       setProject(projectResult);
       setDeployments(projectDeployments);
       if (projectDeployments[0]) {
+        setLatestDetailState("loading");
         try {
           setLatestDetail(await api.getDeployment(projectDeployments[0].id));
+          setLatestDetailState("ready");
         } catch {
           setLatestDetail(null);
+          setLatestDetailState("error");
         }
       } else {
         setLatestDetail(null);
+        setLatestDetailState("ready");
       }
     } catch (requestError) {
       setProject(null);
       setDeployments([]);
       setLatestDetail(null);
+      setLatestDetailState("error");
       setError(getErrorMessage(requestError, "Project details could not be loaded."));
     } finally {
       setLoading(false);
@@ -112,11 +115,7 @@ export default function AppDetailsPage() {
 
   const startDeployment = async () => {
     if (!project || deploying) return;
-    const confirmed = window.confirm(
-      `Start a deployment from ${project.full_name} on branch ${project.branch || "the saved default"}? This can create or update Azure resources and may incur charges.`,
-    );
-    if (!confirmed) return;
-
+    setConfirmation(null);
     setDeploying(true);
     try {
       const result = await api.startDeployment({
@@ -136,11 +135,7 @@ export default function AppDetailsPage() {
 
   const deleteProject = async () => {
     if (!project || deleting) return;
-    const confirmed = window.confirm(
-      `Delete the ZeroOps project record for “${project.name}”? This cannot be undone. External Azure resources may require separate cleanup.`,
-    );
-    if (!confirmed) return;
-
+    setConfirmation(null);
     setDeleting(true);
     try {
       await api.deleteProject(project.id);
@@ -155,9 +150,10 @@ export default function AppDetailsPage() {
 
   if (loading) {
     return (
-      <div role="status" className="flex min-h-[55vh] items-center justify-center gap-3 rounded-xl border border-border bg-card text-sm text-foreground-muted">
-        <Loader2 size={18} className="animate-spin text-primary" />
-        Loading project record…
+      <div role="status" className="ops-surface flex min-h-[55vh] flex-col items-center justify-center px-6 text-center">
+        <Loader2 size={22} className="animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+        <h1 className="mt-4 text-lg font-semibold text-foreground">Loading project record</h1>
+        <p className="mt-1 text-sm text-foreground-muted">Checking the project and its recorded releases.</p>
       </div>
     );
   }
@@ -169,6 +165,7 @@ export default function AppDetailsPage() {
         title="Project is unavailable"
         description={error || "This project could not be found or you do not have access to it."}
         action={{ label: "Back to projects", href: "/dashboard/projects" }}
+        headingLevel={1}
       />
     );
   }
@@ -178,22 +175,21 @@ export default function AppDetailsPage() {
   const recentLogs = latestDetail?.logs.slice(-8) ?? [];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 pb-12">
+    <div className="mx-auto max-w-6xl space-y-7 pb-12">
       <Link
         href="/dashboard/projects"
-        className="inline-flex min-h-10 items-center gap-1.5 text-xs font-medium text-foreground-muted hover:text-foreground"
+        className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-foreground-muted hover:bg-surface-subtle hover:text-foreground"
       >
         <ArrowLeft size={14} />
         Back to projects
       </Link>
 
-      <header className="flex flex-col gap-5 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
+      <header className="ops-surface relative flex flex-col gap-5 overflow-hidden p-5 sm:p-6 lg:flex-row lg:items-end lg:justify-between">
+        <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-primary" />
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Project</p>
-            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClass(latest?.status ?? null)}`}>
-              {latest?.status ? latest.status.replaceAll("_", " ") : "Not deployed"}
-            </span>
+            <StatusBadge status={latest?.status || "stopped"} label={latest?.status ? undefined : "No deployment recorded"} />
           </div>
           <h1 className="mt-2 truncate text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[2rem]">
             {project.name}
@@ -206,7 +202,7 @@ export default function AppDetailsPage() {
               href={liveUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm hover:bg-surface-raised"
+              className="ops-secondary"
             >
               <ExternalLink size={15} />
               Open recorded URL
@@ -216,16 +212,16 @@ export default function AppDetailsPage() {
             type="button"
             onClick={() => void loadProject(true)}
             disabled={refreshing}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm hover:bg-surface-raised disabled:opacity-50"
+            className="ops-secondary disabled:opacity-50"
           >
             <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
             Refresh
           </button>
           <button
             type="button"
-            onClick={() => void startDeployment()}
+            onClick={() => setConfirmation("deploy")}
             disabled={deploying || (latest ? activeStatuses.has(latest.status) : false)}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-white shadow-sm hover:bg-primary-hover disabled:opacity-50"
+            className="ops-primary disabled:opacity-50"
           >
             {deploying ? <Loader2 size={15} className="animate-spin" /> : <Rocket size={15} />}
             {latest && activeStatuses.has(latest.status) ? "Deployment active" : "Start deployment"}
@@ -242,16 +238,12 @@ export default function AppDetailsPage() {
           { label: "Region", value: project.region || "Not recorded", icon: MapPin },
           { label: "Last deployment", value: formatTimestamp(project.last_deployed_at), icon: Clock3 },
         ].map((item) => (
-          <div key={item.label} className="rounded-xl border border-border bg-card p-4 shadow-sm">
-            <item.icon size={16} className="text-primary" />
-            <p className="mt-3 text-xs font-medium text-foreground-muted">{item.label}</p>
-            <p className="mt-1 break-words text-sm font-semibold text-foreground">{item.value}</p>
-          </div>
+          <MetricCard key={item.label} label={item.label} value={item.value} icon={item.icon} tone="info" />
         ))}
       </section>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        <section className="ops-surface overflow-hidden">
           <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Recent deployments</h2>
@@ -278,13 +270,11 @@ export default function AppDetailsPage() {
                       <p className="truncate text-xs font-semibold text-foreground">
                         {deployment.branch || "Default branch"} · {deployment.environment}
                       </p>
-                      <p className="mt-1 text-[11px] text-foreground-muted">
+                      <p className="mt-1 text-xs text-foreground-muted">
                         {formatTimestamp(deployment.started_at)}
                       </p>
                     </div>
-                    <span className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusClass(deployment.status)}`}>
-                      {deployment.status.replaceAll("_", " ")}
-                    </span>
+                    <StatusBadge status={deployment.status} className="w-fit" />
                   </Link>
                 </li>
               ))}
@@ -292,7 +282,7 @@ export default function AppDetailsPage() {
           )}
         </section>
 
-        <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        <section className="ops-surface overflow-hidden">
           <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Latest saved logs</h2>
@@ -304,8 +294,12 @@ export default function AppDetailsPage() {
               </Link>
             )}
           </div>
-          <div className="min-h-56 bg-[hsl(222_47%_7%)] p-4 font-mono text-[11px] leading-6 text-[hsl(210_40%_92%)]">
-            {recentLogs.length === 0 ? (
+          <div className="min-h-56 bg-[hsl(222_47%_7%)] p-4 font-mono text-xs leading-6 text-[hsl(210_40%_92%)]">
+            {latestDetailState === "loading" ? (
+              <p className="text-[hsl(215_18%_68%)]">Loading saved log records…</p>
+            ) : latestDetailState === "error" ? (
+              <p className="text-[hsl(38_92%_70%)]">Saved logs could not be verified for the latest deployment.</p>
+            ) : recentLogs.length === 0 ? (
               <p className="text-[hsl(215_18%_68%)]">No log entries are saved for the latest deployment.</p>
             ) : (
               recentLogs.map((log, index) => (
@@ -321,21 +315,39 @@ export default function AppDetailsPage() {
         </section>
       </div>
 
-      <section className="rounded-xl border border-danger/25 bg-card p-5 shadow-sm">
+      <section className="ops-surface border-danger/25 p-5">
         <h2 className="text-sm font-semibold text-danger">Delete project record</h2>
         <p className="mt-2 max-w-3xl text-xs leading-5 text-foreground-muted">
           This removes the project and its linked ZeroOps records. It does not guarantee deletion of resources already created in your Azure account; review those resources separately.
         </p>
         <button
           type="button"
-          onClick={() => void deleteProject()}
+          onClick={() => setConfirmation("delete")}
           disabled={deleting}
-          className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg bg-danger px-4 text-xs font-semibold text-white hover:bg-danger-hover disabled:opacity-50"
+          className="ops-danger mt-4 disabled:opacity-50"
         >
           {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
           Delete project
         </button>
       </section>
+
+      <ConfirmDialog
+        open={confirmation !== null}
+        title={confirmation === "delete" ? "Delete this project record?" : "Start a production deployment?"}
+        description={
+          confirmation === "delete"
+            ? `This permanently removes the ZeroOps record for ${project.name}. Azure resources already created may require separate cleanup.`
+            : `This queues the saved ${project.branch || "default"} branch from ${project.full_name}. The workflow can create or update Azure resources and may incur charges.`
+        }
+        confirmLabel={confirmation === "delete" ? "Delete project record" : "Start deployment"}
+        tone={confirmation === "delete" ? "danger" : "warning"}
+        busy={confirmation === "delete" ? deleting : deploying}
+        onClose={() => setConfirmation(null)}
+        onConfirm={() => {
+          if (confirmation === "delete") void deleteProject();
+          if (confirmation === "deploy") void startDeployment();
+        }}
+      />
     </div>
   );
 }

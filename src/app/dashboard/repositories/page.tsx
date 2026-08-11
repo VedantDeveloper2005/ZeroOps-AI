@@ -83,6 +83,7 @@ export default function RepositoriesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const githubConnected = user?.github_connected === true;
+  const currentStep = review ? 3 : selectedRepo || uploadFile ? 2 : 1;
 
   const loadRepos = useCallback(
     async (query = "") => {
@@ -270,6 +271,49 @@ export default function RepositoriesPage() {
         description="Choose a GitHub repository and branch, or upload a ZIP. ZeroOps will inspect the selected source and generate a plan for your review."
       />
 
+      <nav aria-label="Project import progress" className="mb-6 rounded-xl border border-border bg-card p-3 shadow-sm sm:p-4">
+        <ol className="grid gap-2 sm:grid-cols-3">
+          {[
+            [1, "Choose source", "GitHub or ZIP"],
+            [2, "Inspect snapshot", "Repository evidence"],
+            [3, "Review plan", "Approval stays separate"],
+          ].map(([step, label, detail]) => {
+            const stepNumber = Number(step);
+            const complete = currentStep > stepNumber;
+            const active = currentStep === stepNumber;
+            return (
+              <li
+                key={stepNumber}
+                aria-current={active ? "step" : undefined}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-3 transition-colors ${
+                  active
+                    ? "border-primary/30 bg-primary-subtle"
+                    : complete
+                      ? "border-success/25 bg-success-subtle"
+                      : "border-transparent bg-surface-subtle"
+                }`}
+              >
+                <span
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-semibold ${
+                    complete
+                      ? "border-success/25 bg-card text-success"
+                      : active
+                        ? "border-primary/25 bg-card text-primary"
+                        : "border-border bg-card text-foreground-subtle"
+                  }`}
+                >
+                  {complete ? <CheckCircle2 size={15} aria-hidden="true" /> : stepNumber}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-foreground">{label}</span>
+                  <span className="mt-0.5 block text-[11px] text-foreground-muted">{detail}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
       {error && (
         <div
           role="alert"
@@ -289,12 +333,22 @@ export default function RepositoriesPage() {
 
       {!review ? (
         <div className="space-y-5">
-          <section aria-label="Source options" className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+          <section aria-labelledby="source-options-heading">
+            <div className="mb-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Step one</p>
+              <h2 id="source-options-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+                Bring in one source snapshot
+              </h2>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-foreground-muted">
+                Both paths create the same review flow. Nothing is deployed from this screen.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-border-hover hover:shadow-md sm:p-6">
               <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary-subtle text-primary">
                 <GitBranch size={20} aria-hidden="true" />
               </div>
-              <h2 className="mt-4 text-base font-semibold text-foreground">GitHub repository</h2>
+              <h3 className="mt-4 text-base font-semibold text-foreground">GitHub repository</h3>
               <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
                 Select one repository and a branch available to the connected GitHub account.
               </p>
@@ -310,11 +364,11 @@ export default function RepositoriesPage() {
               )}
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-border-hover hover:shadow-md sm:p-6">
               <div className="grid h-10 w-10 place-items-center rounded-lg bg-surface-subtle text-foreground">
                 <FileArchive size={20} aria-hidden="true" />
               </div>
-              <h2 className="mt-4 text-base font-semibold text-foreground">ZIP archive</h2>
+              <h3 className="mt-4 text-base font-semibold text-foreground">ZIP archive</h3>
               <p className="mt-1.5 text-xs leading-5 text-foreground-muted">
                 Upload a source archive. The backend enforces the configured upload size limit and safe extraction checks.
               </p>
@@ -338,7 +392,7 @@ export default function RepositoriesPage() {
                     className="ops-primary min-w-0 flex-1 disabled:opacity-60"
                   >
                     {isUploading ? (
-                      <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                      <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                     ) : (
                       <ArrowRight size={15} aria-hidden="true" />
                     )}
@@ -348,6 +402,7 @@ export default function RepositoriesPage() {
                   </button>
                 )}
               </div>
+            </div>
             </div>
           </section>
 
@@ -384,7 +439,7 @@ export default function RepositoriesPage() {
 
               {loadingRepos ? (
                 <div role="status" className="flex min-h-44 items-center justify-center">
-                  <Loader2 size={20} className="animate-spin text-primary" aria-hidden="true" />
+                  <Loader2 size={20} className="animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
                   <span className="ml-2 text-xs text-foreground-muted">Loading repositories…</span>
                 </div>
               ) : repos.length === 0 ? (
@@ -483,7 +538,7 @@ export default function RepositoriesPage() {
                       >
                         {isReviewing ? (
                           <>
-                            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                            <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                             Reviewing…
                           </>
                         ) : (
@@ -506,16 +561,16 @@ export default function RepositoriesPage() {
           )}
         </div>
       ) : (
-        <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-7">
+        <section aria-labelledby="source-review-heading" className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-7">
           <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success-subtle px-2.5 py-1 text-[10px] font-semibold text-success">
                 <CheckCircle2 size={12} aria-hidden="true" />
                 Plan generated
               </span>
-              <h1 className="mt-3 break-words text-xl font-semibold text-foreground">
+              <h2 id="source-review-heading" className="mt-3 break-words text-xl font-semibold tracking-tight text-foreground">
                 {sourceName || "Imported source"}
-              </h1>
+              </h2>
               <p className="mt-1 text-sm leading-6 text-foreground-muted">
                 Repository evidence and a proposed infrastructure plan are ready for review.
               </p>
@@ -560,39 +615,43 @@ export default function RepositoriesPage() {
             </div>
           )}
 
-          <div className="mt-4 rounded-lg border border-border bg-surface-subtle p-4">
-            <h2 className="text-xs font-semibold text-foreground">
-              Environment variable names
-            </h2>
-            {review.environmentVariables.length > 0 ? (
-              <>
-                <p className="mt-1 text-xs leading-5 text-foreground-muted">
-                  Values are not shown here. Add required values through project settings.
+          <details className="group mt-4 rounded-lg border border-border bg-surface-subtle">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+              <span>Environment variable names ({review.environmentVariables.length})</span>
+              <ChevronDown size={15} className="transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-border px-4 py-4">
+              {review.environmentVariables.length > 0 ? (
+                <>
+                  <p className="text-xs leading-5 text-foreground-muted">
+                    Values are not shown here. Add required values through project settings.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {review.environmentVariables.map((variable) => (
+                      <code
+                        key={variable}
+                        className="rounded-md border border-border bg-card px-2 py-1 text-[11px] text-foreground"
+                      >
+                        {variable}
+                      </code>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs leading-5 text-foreground-muted">
+                  No environment variable names were found in the analysis response.
                 </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {review.environmentVariables.map((variable) => (
-                    <code
-                      key={variable}
-                      className="rounded-md border border-border bg-card px-2 py-1 text-[11px] text-foreground"
-                    >
-                      {variable}
-                    </code>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <p className="mt-1 text-xs leading-5 text-foreground-muted">
-                No environment variable names were found in the analysis response.
-              </p>
-            )}
-          </div>
+              )}
+            </div>
+          </details>
 
           {infrastructurePlan && (
-            <div className="mt-4 rounded-lg border border-border p-4">
-              <h2 className="text-xs font-semibold text-foreground">
-                Proposed infrastructure components
-              </h2>
-              <div className="mt-3 flex flex-wrap gap-2">
+            <details className="group mt-4 rounded-lg border border-border">
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+                <span>Proposed infrastructure components ({infrastructurePlan.plan.components.length})</span>
+                <ChevronDown size={15} className="transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
+              </summary>
+              <div className="flex flex-wrap gap-2 border-t border-border p-4">
                 {infrastructurePlan.plan.components.length > 0 ? (
                   infrastructurePlan.plan.components.slice(0, 8).map((component) => (
                     <span
@@ -608,7 +667,7 @@ export default function RepositoriesPage() {
                   </span>
                 )}
               </div>
-            </div>
+            </details>
           )}
 
           <div className="mt-6 flex flex-col gap-4 rounded-xl border border-success/25 bg-success-subtle p-5 sm:flex-row sm:items-center sm:justify-between">

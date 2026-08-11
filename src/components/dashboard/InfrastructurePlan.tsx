@@ -326,7 +326,7 @@ export function InfrastructurePlan({
                         onClick={() => void saveComponent(component)}
                         className="ops-primary min-h-11 flex-1 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                        {busy && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
                         Save
                       </button>
                       <button
@@ -495,7 +495,7 @@ export function InfrastructurePlan({
                   className="ops-primary min-h-11 shrink-0 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy ? (
-                    <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                    <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                   ) : (
                     <CheckCircle2 size={16} aria-hidden="true" />
                   )}

@@ -37,14 +37,34 @@ const tabs = [
     matches: (pathname: string) => pathname.startsWith("/dashboard/monitoring"),
   },
   {
+    label: "Logs",
+    path: (id: string) => `/dashboard/logs?project=${id}`,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/logs"),
+  },
+  {
     label: "Security",
     path: (id: string) => `/dashboard/security?project=${id}`,
     matches: (pathname: string) => pathname.startsWith("/dashboard/security"),
   },
   {
+    label: "Incidents",
+    path: (id: string) => `/dashboard/incidents?project=${id}`,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/incidents"),
+  },
+  {
     label: "Activity",
     path: (id: string) => `/dashboard/activity?project=${id}`,
     matches: (pathname: string) => pathname.startsWith("/dashboard/activity"),
+  },
+  {
+    label: "Cost",
+    path: (id: string) => `/dashboard/cost-optimization?project=${id}`,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/cost-optimization"),
+  },
+  {
+    label: "Capacity",
+    path: (id: string) => `/dashboard/autoscaling?project=${id}`,
+    matches: (pathname: string) => pathname.startsWith("/dashboard/autoscaling"),
   },
   {
     label: "Settings",
@@ -71,7 +91,7 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
 
   return (
     <>
-      <label className="block rounded-xl border border-border bg-card p-3 shadow-sm sm:hidden">
+      <label className="ops-surface block p-3 sm:hidden">
         <span className="mb-1.5 block text-xs font-semibold text-foreground-muted">
           Project section
         </span>
@@ -79,7 +99,7 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
           aria-label="Project section"
           value={activeTab?.path(projectId) ?? tabs[0].path(projectId)}
           onChange={(event) => router.push(event.target.value)}
-          className="min-h-11 w-full rounded-lg border border-border bg-surface-subtle px-3 text-sm font-medium text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+          className="ops-input bg-surface-subtle font-medium"
         >
           {tabs.map((tab) => {
             const href = tab.path(projectId);
@@ -92,8 +112,8 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
         </select>
       </label>
 
-      <nav aria-label="Project sections" className="hidden sm:block">
-        <ul className="flex flex-wrap gap-x-1 border-b border-border">
+      <nav aria-label="Project sections" className="ops-surface no-scrollbar hidden overflow-x-auto p-1.5 sm:block">
+        <ul className="flex min-w-max gap-1">
           {tabs.map((tab) => {
             const href = tab.path(projectId);
             const active = activeTab?.label === tab.label;
@@ -103,19 +123,13 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
                   href={href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative flex min-h-11 items-center px-3 text-xs font-medium transition-colors",
+                    "relative flex min-h-11 items-center rounded-lg px-3 text-xs font-semibold transition-colors",
                     active
-                      ? "text-primary"
-                      : "text-foreground-muted hover:text-foreground",
+                      ? "bg-primary-subtle text-primary shadow-sm"
+                      : "text-foreground-muted hover:bg-surface-subtle hover:text-foreground",
                   )}
                 >
                   {tab.label}
-                  {active && (
-                    <span
-                      aria-hidden="true"
-                      className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary"
-                    />
-                  )}
                 </Link>
               </li>
             );

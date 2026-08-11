@@ -38,8 +38,8 @@ export function PublicFooter() {
         <div className="max-w-sm">
           <BrandMark />
           <p className="mt-3 text-sm leading-6 text-foreground-muted">
-            A review-first path from repository evidence to an approved Azure
-            App Service deployment.
+            A review-first path from repository evidence to an exact, approved
+            Azure App Service release record.
           </p>
         </div>
 

@@ -133,15 +133,17 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
     )
     monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
 
-    result = ai.analyze_repository(
+    outcome = ai.analyze_repository(
         {
             "files_context": {
                 "package.json": '{"dependencies":{"next":"16.0.0"}}',
             },
             "files_list": ["package.json"],
             "repo_tree": "package.json",
-        }
+        },
+        include_provenance=True,
     )
+    result = outcome.analysis
 
     assert primary_configuration.api_key == "repository-route-key"
     assert fallback_configuration.api_key == "repository-fallback-route-key"
@@ -149,6 +151,10 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
     assert not hasattr(ai, "NVIDIA_API_KEY")
     assert captured["output_contract"] is ai.RepositoryReviewContract
     assert result["explanation"] == "The source facts describe a bounded app."
+    assert isinstance(outcome, ai.RepositoryAnalysisOutcome)
+    assert outcome.ai_used is True
+    assert outcome.provider == "nvidia"
+    assert outcome.model == "z-ai/glm-5.2"
 
 
 def test_nvidia_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
@@ -168,6 +174,20 @@ def test_nvidia_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
     )
     assert result["framework"] == "Unknown"
     assert result["recommendations"] == []
+
+
+def test_production_repository_analysis_does_not_claim_model_usage(monkeypatch):
+    monkeypatch.setattr(ai, "IS_PRODUCTION", True)
+
+    outcome = ai.analyze_repository(
+        {"files_context": {}, "files_list": [], "repo_tree": ""},
+        include_provenance=True,
+    )
+
+    assert isinstance(outcome, ai.RepositoryAnalysisOutcome)
+    assert outcome.ai_used is False
+    assert outcome.provider == "none"
+    assert outcome.model == "deterministic-repository-scanner"
 
 
 def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
@@ -249,3 +269,59 @@ def test_failure_review_uses_local_analysis_after_both_routes_are_missing(
 
     assert result["severity"] == "critical"
     assert "DATABASE_URL" in result["failure_summary"]
+
+
+def test_failure_review_provenance_identifies_real_model_result(monkeypatch):
+    class FakeGateway:
+        def generate_structured(self, **_):
+            return SimpleNamespace(
+                value=ai.FailureReviewContract.model_validate(
+                    {
+                        "failure_summary": "The model identified a build failure.",
+                        "root_cause": "The bounded compiler evidence reports an error.",
+                        "severity": "error",
+                        "recommended_fix": "Correct the reported compiler error.",
+                        "step_by_step_resolution": ["Run the production build locally."],
+                    }
+                ),
+                provenance=fake_provenance(provider="groq", model="openai/gpt-oss-120b"),
+                degraded_reason=None,
+            )
+
+    monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
+
+    outcome = ai.analyze_failure_nemotron(
+        ["compiler error"],
+        ["build failed"],
+        include_provenance=True,
+    )
+
+    assert isinstance(outcome, ai.FailureAnalysisOutcome)
+    assert outcome.ai_used is True
+    assert outcome.provider == "groq"
+    assert outcome.model == "openai/gpt-oss-120b"
+    assert outcome.input_tokens == 10
+    assert outcome.output_tokens == 5
+
+
+def test_failure_review_provenance_marks_deterministic_fallback_unavailable(monkeypatch):
+    class UnavailableGateway:
+        def generate_structured(self, **_):
+            return SimpleNamespace(
+                value=None,
+                provenance=fake_provenance(provider="none", model="deterministic-scanner"),
+                degraded_reason="provider_not_configured",
+            )
+
+    monkeypatch.setattr(ai, "_repository_model_gateway", lambda: UnavailableGateway())
+
+    outcome = ai.analyze_failure_nemotron(
+        ["DATABASE_URL missing"],
+        ["database connection refused"],
+        include_provenance=True,
+    )
+
+    assert isinstance(outcome, ai.FailureAnalysisOutcome)
+    assert outcome.ai_used is False
+    assert outcome.unavailable_reason == "provider_not_configured"
+    assert outcome.analysis["severity"] == "critical"

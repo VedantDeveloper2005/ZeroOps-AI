@@ -15,8 +15,10 @@ export default function DashboardError({
   }, [error]);
 
   return (
-    <div role="alert" className="mx-auto max-w-xl rounded-xl border border-danger/25 bg-card px-6 py-10 text-center shadow-sm">
-      <AlertTriangle size={26} className="mx-auto text-danger" />
+    <div role="alert" className="ops-surface mx-auto max-w-xl border-danger/25 px-6 py-12 text-center">
+      <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-danger/20 bg-danger-subtle">
+        <AlertTriangle size={23} className="text-danger" aria-hidden="true" />
+      </span>
       <h1 className="mt-4 text-lg font-semibold text-foreground">Workspace data could not be loaded</h1>
       <p className="mt-2 text-sm leading-6 text-foreground-muted">
         Retry this view. No changes were made while the route was unavailable.
@@ -24,9 +26,9 @@ export default function DashboardError({
       <button
         type="button"
         onClick={reset}
-        className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-white hover:bg-primary-hover"
+        className="ops-primary mt-5"
       >
-        <RefreshCw size={15} />
+        <RefreshCw size={15} aria-hidden="true" />
         Try again
       </button>
     </div>

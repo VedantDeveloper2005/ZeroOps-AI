@@ -244,6 +244,10 @@ function InfrastructureWorkspace() {
   };
 
   const selectProject = (projectId: string) => {
+    setPlan(null);
+    setPreflight(null);
+    setPlanMissing(false);
+    setLoadingPlan(true);
     setSelectedProjectId(projectId);
     const nextSearchParams = new URLSearchParams(searchParams.toString());
     nextSearchParams.set("project", projectId);
@@ -256,21 +260,34 @@ function InfrastructureWorkspace() {
 
   if (projects.length === 0) {
     return (
-      <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border border-dashed border-border bg-card px-6 py-16 text-center">
-        <FolderGit2 size={38} className="text-primary" aria-hidden="true" />
-        <h1 className="mt-5 text-xl font-bold text-foreground">Start with a repository</h1>
-        <p className="mt-2 text-sm leading-6 text-foreground-muted">
-          Connect GitHub or upload a ZIP so ZeroOps can record source evidence before proposing an
-          infrastructure plan.
-        </p>
-        <Link href="/dashboard/repositories" className="ops-primary mt-6 min-h-11 px-5">
-          Connect application <ArrowRight size={16} aria-hidden="true" />
-        </Link>
+      <div className="mx-auto max-w-7xl">
+        <PageHeader
+          eyebrow="AI Architect"
+          title="Review an Azure deployment plan"
+          description="Start from recorded repository evidence, then review and approve a saved deployment proposal."
+        />
+        <div className="mx-auto flex max-w-xl flex-col items-center rounded-2xl border border-dashed border-border bg-card px-6 py-14 text-center shadow-sm">
+          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary-subtle text-primary">
+            <FolderGit2 size={26} aria-hidden="true" />
+          </span>
+          <h2 className="mt-5 text-xl font-semibold tracking-tight text-foreground">Start with a repository</h2>
+          <p className="mt-2 text-sm leading-6 text-foreground-muted">
+            Connect GitHub or upload a ZIP so ZeroOps can record source evidence before proposing an
+            infrastructure plan.
+          </p>
+          <Link href="/dashboard/repositories" className="ops-primary mt-6 min-h-11 px-5">
+            Connect application <ArrowRight size={16} aria-hidden="true" />
+          </Link>
+        </div>
       </div>
     );
   }
 
   const busy = planAction !== null;
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const approvalRecorded = Boolean(
+    plan && ["approved", "provisioning", "deployed"].includes(plan.status),
+  );
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -295,6 +312,47 @@ function InfrastructureWorkspace() {
       />
 
       {selectedProjectId && <ProjectTabs projectId={selectedProjectId} />}
+
+      {selectedProject && (
+        <section aria-labelledby="plan-workflow-heading" className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="border-b border-border px-4 py-4 sm:px-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Review workspace</p>
+            <h2 id="plan-workflow-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+              Evidence, checks, and approval at a glance
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-foreground-muted">
+              These states describe saved ZeroOps records only; they do not imply live Azure readiness.
+            </p>
+          </div>
+          <dl className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+            <PlanContextItem label="Source" value={selectedProject.name} detail={selectedProject.branch || "Branch not recorded"} tone="complete" />
+            <PlanContextItem
+              label="Saved plan"
+              value={plan ? `Revision ${plan.revision}` : planMissing ? "Not generated" : "Status pending"}
+              detail={plan ? plan.status.replaceAll("_", " ") : "No plan state is assumed"}
+              tone={
+                plan?.status === "approved" || plan?.status === "deployed"
+                  ? "complete"
+                  : plan
+                    ? "attention"
+                    : "neutral"
+              }
+            />
+            <PlanContextItem
+              label="Pre-deployment checks"
+              value={preflight ? preflight.status.replaceAll("_", " ") : "Not run"}
+              detail={preflight ? `Applies to revision ${preflight.plan_revision ?? "not recorded"}` : "No result is inferred"}
+              tone={preflight?.status === "ready" ? "complete" : preflight ? "attention" : "neutral"}
+            />
+            <PlanContextItem
+              label="Human approval"
+              value={approvalRecorded && plan ? `Revision ${plan.revision} approved` : "Required before release"}
+              detail={approvalRecorded ? "Deployment still reruns prerequisites" : "No approval is assumed"}
+              tone={approvalRecorded ? "complete" : "attention"}
+            />
+          </dl>
+        </section>
+      )}
 
       {error && (
         <div
@@ -368,7 +426,7 @@ function InfrastructureWorkspace() {
                 className="ops-primary min-h-11 shrink-0 px-5 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {planAction === "deploy" ? (
-                  <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                  <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 ) : (
                   <Rocket size={16} aria-hidden="true" />
                 )}
@@ -394,7 +452,7 @@ function InfrastructureWorkspace() {
             className="ops-primary mt-6 min-h-11 px-5 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {planAction === "generate" ? (
-              <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
             ) : (
               <Sparkles size={16} aria-hidden="true" />
             )}
@@ -402,6 +460,34 @@ function InfrastructureWorkspace() {
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function PlanContextItem({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "complete" | "attention" | "neutral";
+}) {
+  const indicatorClassName =
+    tone === "complete"
+      ? "bg-success"
+      : tone === "attention"
+        ? "bg-warning"
+        : "bg-foreground-subtle";
+
+  return (
+    <div className="relative bg-card px-4 py-4 sm:px-5">
+      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${indicatorClassName}`} />
+      <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+      <dd className="mt-1 text-[11px] leading-4 text-foreground-muted">{detail}</dd>
     </div>
   );
 }
@@ -516,7 +602,7 @@ function ArchitectChatPanel({
             <div
               className={`max-w-[90%] rounded-2xl p-3 leading-5 ${
                 message.sender === "user"
-                  ? "bg-primary text-white"
+                  ? "bg-primary text-primary-foreground"
                   : message.sender === "status"
                     ? "border border-danger/25 bg-danger/10 text-foreground"
                     : "bg-background-secondary/60 text-foreground-muted"
@@ -529,7 +615,7 @@ function ArchitectChatPanel({
         {busy && (
           <div className="flex justify-start">
             <div className="flex max-w-[90%] items-center gap-1.5 rounded-2xl bg-background-secondary/60 p-3 text-foreground-muted">
-              <Loader2 className="animate-spin text-primary" size={12} aria-hidden="true" />
+              <Loader2 className="animate-spin text-primary motion-reduce:animate-none" size={12} aria-hidden="true" />
               Reviewing the saved planâ€¦
             </div>
           </div>
@@ -568,7 +654,7 @@ function InfrastructurePlanLoading({ label = "Preparing architecture workspaceâ€
       role="status"
       className="flex min-h-[50vh] items-center justify-center gap-3 text-sm font-semibold text-foreground-muted"
     >
-      <Loader2 className="animate-spin text-primary" size={18} aria-hidden="true" />
+      <Loader2 className="animate-spin text-primary motion-reduce:animate-none" size={18} aria-hidden="true" />
       {label}
     </div>
   );

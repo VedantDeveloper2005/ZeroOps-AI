@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     BigInteger, Column, String, DateTime, Text, Integer, Float, Boolean,
     CheckConstraint, ForeignKey, JSON, Enum as SAEnum, Index, UniqueConstraint
@@ -123,6 +123,25 @@ class DeploymentJobStatus(str, enum.Enum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+
+
+class ExecutionStatus(str, enum.Enum):
+    """Fail-closed lifecycle shared by durable pipeline work records."""
+
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+    blocked = "blocked"
+    unavailable = "unavailable"
+    cancelled = "cancelled"
+
+
+def utc_now() -> datetime:
+    """Return an aware UTC timestamp for new production workflow records."""
+
+    return datetime.now(timezone.utc)
 
 
 # ──────────────────────────────────────────────
@@ -847,11 +866,21 @@ class DeploymentMetric(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
-    cpu_utilization = Column(Float, default=0.0)
-    memory_utilization = Column(Float, default=0.0)
-    request_count = Column(Integer, default=0)
-    error_rate = Column(Float, default=0.0)
-    response_time_ms = Column(Integer, default=0)
+    # Missing telemetry is NULL. Zero is a real observed value and must not be
+    # manufactured by an ORM default when a source omits a measurement.
+    cpu_utilization = Column(Float, nullable=True)
+    memory_utilization = Column(Float, nullable=True)
+    request_count = Column(Integer, nullable=True)
+    error_rate = Column(Float, nullable=True)
+    response_time_ms = Column(Integer, nullable=True)
+    request_rate = Column(Float, nullable=True)
+    availability_percent = Column(Float, nullable=True)
+    pod_restarts = Column(Integer, nullable=True)
+    pods_ready = Column(Integer, nullable=True)
+    replica_count = Column(Integer, nullable=True)
+    failed_pods = Column(Integer, nullable=True)
+    source = Column(Text, nullable=True)
+    deployment_health = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -860,6 +889,27 @@ class DeploymentMetric(Base):
     __table_args__ = (
         Index("ix_deployment_metrics_deployment_id", "deployment_id"),
         Index("ix_deployment_metrics_project_id", "project_id"),
+        CheckConstraint(
+            "request_rate IS NULL OR request_rate >= 0",
+            name="ck_deployment_metrics_request_rate",
+        ),
+        CheckConstraint(
+            "availability_percent IS NULL OR "
+            "(availability_percent >= 0 AND availability_percent <= 100)",
+            name="ck_deployment_metrics_availability",
+        ),
+        CheckConstraint(
+            "(pod_restarts IS NULL OR pod_restarts >= 0) AND "
+            "(pods_ready IS NULL OR pods_ready >= 0) AND "
+            "(replica_count IS NULL OR replica_count >= 0) AND "
+            "(failed_pods IS NULL OR failed_pods >= 0)",
+            name="ck_deployment_metrics_pod_counts",
+        ),
+        CheckConstraint(
+            "deployment_health IS NULL OR deployment_health IN "
+            "('healthy', 'degraded', 'unhealthy', 'rollout_failed', 'unavailable', 'unknown')",
+            name="ck_deployment_metrics_health",
+        ),
     )
 
 
@@ -1009,7 +1059,9 @@ class PendingApproval(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     action_type = Column(Text, nullable=False)
     parameters = Column(JSON, default=dict)  # Secrets MUST be redacted
-    raw_parameters = Column(JSON, default=dict)  # Real unredacted parameters for execution
+    # Compatibility name retained for existing databases. New writes contain
+    # only a versioned ciphertext envelope and are erased after execution.
+    raw_parameters = Column(JSON, default=dict)
     risk_tier = Column(Text, default=RiskTier.high.value)
     status = Column(Text, default=ApprovalStatus.pending.value)  # pending, approved, denied
     decided_by = Column(UUID(as_uuid=True), nullable=True)
@@ -1242,5 +1294,867 @@ class DeploymentJob(Base):
         Index("ix_deployment_jobs_status", "status"),
         Index("ix_deployment_jobs_lease", "status", "lease_expires_at"),
         Index("ix_deployment_jobs_project_id", "project_id"),
+    )
+
+
+# ----------------------------------------------------------------
+# DURABLE DEVSECOPS PIPELINE DOMAIN
+# ----------------------------------------------------------------
+
+
+class ProjectPipelineConfiguration(Base):
+    """Versioned, project-owned controls for deterministic pipeline execution."""
+
+    __tablename__ = "project_pipeline_configurations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    enabled = Column(Boolean, nullable=False, default=True)
+    trigger_mode = Column(String(16), nullable=False, default="manual")
+    tracked_branch = Column(Text, nullable=False, default="main")
+    auto_deploy = Column(Boolean, nullable=False, default=False)
+    deployment_mode = Column(String(32), nullable=False, default="require_approval")
+    require_production_approval = Column(Boolean, nullable=False, default=True)
+    require_infrastructure_approval = Column(Boolean, nullable=False, default=True)
+    run_dependency_install = Column(Boolean, nullable=False, default=True)
+    run_code_quality = Column(Boolean, nullable=False, default=True)
+    run_unit_tests = Column(Boolean, nullable=False, default=True)
+    run_sast = Column(Boolean, nullable=False, default=True)
+    run_dependency_scan = Column(Boolean, nullable=False, default=True)
+    run_secret_scan = Column(Boolean, nullable=False, default=True)
+    run_container_scan = Column(Boolean, nullable=False, default=True)
+    run_iac_scan = Column(Boolean, nullable=False, default=True)
+    generate_sbom = Column(Boolean, nullable=False, default=False)
+    ai_failure_diagnosis = Column(Boolean, nullable=False, default=True)
+    auto_retry_transient_failures = Column(Boolean, nullable=False, default=False)
+    auto_rollback_enabled = Column(Boolean, nullable=False, default=False)
+    config_digest = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
+    updated_by_user = relationship("User", foreign_keys=[updated_by_user_id])
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "version",
+            name="uq_pipeline_config_tenant_project_version",
+        ),
+        Index("ix_pipeline_config_project_version", "project_id", "version"),
+        CheckConstraint("version >= 1", name="ck_pipeline_config_version"),
+        CheckConstraint(
+            "trigger_mode IN ('manual', 'push', 'manual_and_push', 'disabled')",
+            name="ck_pipeline_config_trigger_mode",
+        ),
+        CheckConstraint(
+            "deployment_mode IN ('validate_only', 'deploy_after_checks', 'require_approval')",
+            name="ck_pipeline_config_deployment_mode",
+        ),
+        CheckConstraint(
+            "config_digest IS NULL OR config_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_pipeline_config_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class PipelineRun(Base):
+    """One immutable-source pipeline execution with an idempotent trigger."""
+
+    __tablename__ = "pipeline_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    operation_run_id = Column(UUID(as_uuid=True), ForeignKey("operation_runs.id", ondelete="SET NULL"), nullable=True)
+    configuration_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("project_pipeline_configurations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    requested_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    trigger_type = Column(String(16), nullable=False, default="manual")
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    branch = Column(Text, nullable=False)
+    source_revision = Column(String(64), nullable=False)
+    previous_successful_revision = Column(String(64), nullable=True)
+    target_type = Column(String(32), nullable=False, default="undecided")
+    configuration_version = Column(Integer, nullable=False, default=1)
+    current_stage_key = Column(String(64), nullable=True)
+    repository_ai_required = Column(Boolean, nullable=False, default=False)
+    repository_ai_used = Column(Boolean, nullable=False, default=False)
+    approval_required = Column(Boolean, nullable=False, default=False)
+    status_reason = Column(Text, nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    redacted_failure = Column(Text, nullable=True)
+    queued_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    operation_run = relationship("OperationRun")
+    configuration = relationship("ProjectPipelineConfiguration")
+    requested_by_user = relationship("User")
+    stage_attempts = relationship(
+        "PipelineStageAttempt",
+        back_populates="pipeline_run",
+        cascade="all, delete-orphan",
+        order_by="PipelineStageAttempt.stage_order, PipelineStageAttempt.attempt_number",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_pipeline_runs_tenant_idempotency"),
+        Index("ix_pipeline_runs_project_created", "project_id", "created_at"),
+        Index("ix_pipeline_runs_deployment_id", "deployment_id"),
+        Index("ix_pipeline_runs_tenant_status", "tenant_id", "status"),
+        CheckConstraint("configuration_version >= 1", name="ck_pipeline_runs_config_version"),
+        CheckConstraint(
+            "trigger_type IN ('manual', 'push', 'retry', 'api', 'remediation')",
+            name="ck_pipeline_runs_trigger_type",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_pipeline_runs_status",
+        ),
+        CheckConstraint(
+            "status NOT IN ('failed', 'skipped', 'blocked', 'unavailable', 'cancelled') "
+            "OR status_reason IS NOT NULL",
+            name="ck_pipeline_runs_terminal_reason",
+        ),
+    )
+
+
+class PipelineStageAttempt(Base):
+    """A normalized attempt for one stage; core lifecycle never lives in JSON."""
+
+    __tablename__ = "pipeline_stage_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="CASCADE"), nullable=False)
+    log_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    output_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    stage_key = Column(String(64), nullable=False)
+    display_name = Column(Text, nullable=False)
+    stage_order = Column(Integer, nullable=False)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    is_required = Column(Boolean, nullable=False, default=True)
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    tool_name = Column(String(128), nullable=True)
+    tool_version = Column(String(128), nullable=True)
+    status_reason = Column(Text, nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=list)
+    result_metadata = Column(POSTGRES_JSON, nullable=False, default=dict)
+    queued_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun", back_populates="stage_attempts")
+    log_artifact = relationship("Artifact", foreign_keys=[log_artifact_id])
+    output_artifact = relationship("Artifact", foreign_keys=[output_artifact_id])
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "stage_key",
+            "attempt_number",
+            name="uq_pipeline_stage_attempt_run_stage_attempt",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_pipeline_stage_attempt_tenant_idempotency"),
+        Index("ix_pipeline_stage_attempts_run_order", "pipeline_run_id", "stage_order"),
+        Index("ix_pipeline_stage_attempts_deployment_id", "deployment_id"),
+        Index("ix_pipeline_stage_attempts_status", "status"),
+        CheckConstraint("stage_order >= 1", name="ck_pipeline_stage_attempt_order"),
+        CheckConstraint("attempt_number >= 1", name="ck_pipeline_stage_attempt_number"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_pipeline_stage_attempt_status",
+        ),
+        CheckConstraint(
+            "status NOT IN ('failed', 'skipped', 'blocked', 'unavailable', 'cancelled') "
+            "OR status_reason IS NOT NULL",
+            name="ck_pipeline_stage_attempt_terminal_reason",
+        ),
+    )
+
+
+class RepositoryAnalysisSnapshot(Base):
+    """Redacted, fingerprinted repository facts for reuse across revisions."""
+
+    __tablename__ = "repository_analysis_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    reused_from_snapshot_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("repository_analysis_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    idempotency_key = Column(String(128), nullable=False)
+    source_revision = Column(String(64), nullable=False)
+    repository_fingerprint = Column(String(64), nullable=False)
+    architecture_fingerprint = Column(String(64), nullable=False)
+    dependency_files_hash = Column(String(64), nullable=False)
+    dockerfile_hash = Column(String(64), nullable=False)
+    infrastructure_files_hash = Column(String(64), nullable=False)
+    kubernetes_manifests_hash = Column(String(64), nullable=False)
+    important_configuration_files_hash = Column(String(64), nullable=False)
+    fingerprint_version = Column(String(64), nullable=False)
+    analyzer_version = Column(String(64), nullable=False)
+    analysis_mode = Column(String(16), nullable=False, default="deterministic")
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    ai_required = Column(Boolean, nullable=False, default=False)
+    ai_used = Column(Boolean, nullable=False, default=False)
+    application_framework = Column(Text, nullable=True)
+    detected_services = Column(POSTGRES_JSON, nullable=False, default=list)
+    environment_variable_names = Column(POSTGRES_JSON, nullable=False, default=list)
+    summary = Column(POSTGRES_JSON, nullable=False, default=dict)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=list)
+    error_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+    reused_from_snapshot = relationship("RepositoryAnalysisSnapshot", remote_side=[id])
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_repository_snapshots_tenant_idempotency"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "source_revision",
+            "repository_fingerprint",
+            name="uq_repository_snapshots_revision_fingerprint",
+        ),
+        Index("ix_repository_snapshots_project_created", "project_id", "created_at"),
+        Index("ix_repository_snapshots_architecture_fingerprint", "architecture_fingerprint"),
+        CheckConstraint(
+            "analysis_mode IN ('deterministic', 'model', 'reused')",
+            name="ck_repository_snapshots_analysis_mode",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_repository_snapshots_status",
+        ),
+        CheckConstraint(
+            "repository_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_repository_fingerprint",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "architecture_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_architecture_fingerprint",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "dependency_files_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_dependency_hash",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "dockerfile_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_dockerfile_hash",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "infrastructure_files_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_infrastructure_hash",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "kubernetes_manifests_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_kubernetes_hash",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "important_configuration_files_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_repository_snapshots_configuration_hash",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class ChangeAnalysis(Base):
+    """Deterministic source-diff classification used to decide analysis reuse."""
+
+    __tablename__ = "change_analyses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    baseline_snapshot_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("repository_analysis_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    idempotency_key = Column(String(128), nullable=False)
+    baseline_revision = Column(String(64), nullable=True)
+    target_revision = Column(String(64), nullable=False)
+    changed_paths_digest = Column(String(64), nullable=False)
+    change_fingerprint = Column(String(64), nullable=False)
+    classifier_version = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    changed_file_count = Column(Integer, nullable=False, default=0)
+    application_source_changed = Column(Boolean, nullable=False, default=False)
+    dependencies_changed = Column(Boolean, nullable=False, default=False)
+    deployment_config_changed = Column(Boolean, nullable=False, default=False)
+    infrastructure_changed = Column(Boolean, nullable=False, default=False)
+    kubernetes_changed = Column(Boolean, nullable=False, default=False)
+    security_policy_changed = Column(Boolean, nullable=False, default=False)
+    architecture_changed = Column(Boolean, nullable=False, default=False)
+    documentation_only = Column(Boolean, nullable=False, default=False)
+    deployment_relevant = Column(Boolean, nullable=False, default=False)
+    repository_ai_required = Column(Boolean, nullable=False, default=False)
+    decision_reason = Column(Text, nullable=False)
+    category_counts = Column(POSTGRES_JSON, nullable=False, default=dict)
+    sampled_paths = Column(POSTGRES_JSON, nullable=False, default=list)
+    error_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+    baseline_snapshot = relationship("RepositoryAnalysisSnapshot")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_change_analyses_tenant_idempotency"),
+        Index("ix_change_analyses_project_created", "project_id", "created_at"),
+        Index("ix_change_analyses_pipeline_run_id", "pipeline_run_id"),
+        Index(
+            "ix_change_analyses_target_fingerprint",
+            "tenant_id",
+            "project_id",
+            "target_revision",
+            "change_fingerprint",
+        ),
+        CheckConstraint("changed_file_count >= 0", name="ck_change_analyses_file_count"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_change_analyses_status",
+        ),
+        CheckConstraint(
+            "changed_paths_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_change_analyses_paths_digest",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "change_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_change_analyses_fingerprint",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class SecurityScan(Base):
+    """One deterministic scanner invocation and its policy outcome."""
+
+    __tablename__ = "security_scans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    stage_attempt_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("pipeline_stage_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    result_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    scan_type = Column(String(32), nullable=False)
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    policy_status = Column(String(16), nullable=False, default="pending")
+    blocking_enabled = Column(Boolean, nullable=False, default=True)
+    tool_name = Column(String(128), nullable=False)
+    tool_version = Column(String(128), nullable=True)
+    target_kind = Column(String(32), nullable=False)
+    target_revision = Column(String(128), nullable=True)
+    target_digest = Column(String(64), nullable=True)
+    finding_count = Column(Integer, nullable=False, default=0)
+    critical_count = Column(Integer, nullable=False, default=0)
+    high_count = Column(Integer, nullable=False, default=0)
+    medium_count = Column(Integer, nullable=False, default=0)
+    low_count = Column(Integer, nullable=False, default=0)
+    info_count = Column(Integer, nullable=False, default=0)
+    result_digest = Column(String(64), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    summary = Column(POSTGRES_JSON, nullable=False, default=dict)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+    stage_attempt = relationship("PipelineStageAttempt")
+    result_artifact = relationship("Artifact")
+    findings = relationship(
+        "SecurityFinding",
+        back_populates="security_scan",
+        cascade="all, delete-orphan",
+        order_by="SecurityFinding.created_at",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_security_scans_tenant_idempotency"),
+        Index("ix_security_scans_project_created", "project_id", "created_at"),
+        Index("ix_security_scans_pipeline_type", "pipeline_run_id", "scan_type"),
+        Index("ix_security_scans_status", "status"),
+        CheckConstraint(
+            "scan_type IN ('sast', 'dependency', 'secret', 'container', 'iac', "
+            "'kubernetes', 'sbom')",
+            name="ck_security_scans_type",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_security_scans_status",
+        ),
+        CheckConstraint(
+            "policy_status IN ('pending', 'passed', 'warning', 'blocked', 'unavailable')",
+            name="ck_security_scans_policy_status",
+        ),
+        CheckConstraint(
+            "finding_count >= 0 AND critical_count >= 0 AND high_count >= 0 "
+            "AND medium_count >= 0 AND low_count >= 0 AND info_count >= 0",
+            name="ck_security_scans_counts",
+        ),
+        CheckConstraint(
+            "target_digest IS NULL OR target_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_security_scans_target_digest",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "result_digest IS NULL OR result_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_security_scans_result_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class SecurityFinding(Base):
+    """A deduplicated finding; secret evidence must remain masked or hashed."""
+
+    __tablename__ = "security_findings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    security_scan_id = Column(UUID(as_uuid=True), ForeignKey("security_scans.id", ondelete="CASCADE"), nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    rule_id = Column(String(256), nullable=False)
+    category = Column(String(64), nullable=False)
+    severity = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False, default="open")
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    remediation = Column(Text, nullable=True)
+    location_path = Column(Text, nullable=True)
+    line_start = Column(Integer, nullable=True)
+    line_end = Column(Integer, nullable=True)
+    package_name = Column(Text, nullable=True)
+    package_version = Column(Text, nullable=True)
+    fixed_version = Column(Text, nullable=True)
+    is_blocking = Column(Boolean, nullable=False, default=False)
+    masked_evidence = Column(Text, nullable=True)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    security_scan = relationship("SecurityScan", back_populates="findings")
+
+    __table_args__ = (
+        UniqueConstraint("security_scan_id", "fingerprint", name="uq_security_findings_scan_fingerprint"),
+        Index("ix_security_findings_project_severity", "project_id", "severity"),
+        Index("ix_security_findings_scan_id", "security_scan_id"),
+        CheckConstraint(
+            "severity IN ('critical', 'high', 'medium', 'low', 'info')",
+            name="ck_security_findings_severity",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'accepted_risk', 'resolved', 'false_positive')",
+            name="ck_security_findings_status",
+        ),
+        CheckConstraint(
+            "line_start IS NULL OR line_start >= 1",
+            name="ck_security_findings_line_start",
+        ),
+        CheckConstraint(
+            "line_end IS NULL OR (line_start IS NOT NULL AND line_end >= line_start)",
+            name="ck_security_findings_line_end",
+        ),
+        CheckConstraint(
+            "fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_security_findings_fingerprint",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class WebhookDelivery(Base):
+    """Digest-only GitHub delivery record; raw payloads/signatures are not stored."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    provider = Column(String(32), nullable=False, default="github")
+    external_delivery_id = Column(String(128), nullable=False)
+    event_type = Column(String(64), nullable=False)
+    event_action = Column(String(64), nullable=True)
+    signature_status = Column(String(16), nullable=False, default="unverified")
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    repository_external_id = Column(String(128), nullable=True)
+    branch = Column(Text, nullable=True)
+    source_revision = Column(String(64), nullable=True)
+    payload_digest = Column(String(64), nullable=False)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    failure_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    received_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "external_delivery_id",
+            name="uq_webhook_deliveries_provider_delivery",
+        ),
+        Index("ix_webhook_deliveries_project_received", "project_id", "received_at"),
+        Index("ix_webhook_deliveries_status", "status"),
+        CheckConstraint(
+            "signature_status IN ('unverified', 'verified', 'invalid', 'unavailable')",
+            name="ck_webhook_deliveries_signature_status",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_webhook_deliveries_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_webhook_deliveries_attempt_count"),
+        CheckConstraint(
+            "payload_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_webhook_deliveries_payload_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class Incident(Base):
+    """A durable anomaly or deployment incident with an explicit lifecycle."""
+
+    __tablename__ = "incidents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    stage_attempt_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("pipeline_stage_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    acknowledged_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    resolved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    status = Column(String(16), nullable=False, default="open")
+    severity = Column(String(16), nullable=False)
+    detection_source = Column(String(64), nullable=False)
+    rule_key = Column(String(128), nullable=False)
+    title = Column(Text, nullable=False)
+    redacted_summary = Column(Text, nullable=False)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=list)
+    first_observed_at = Column(DateTime(timezone=True), nullable=False)
+    last_observed_at = Column(DateTime(timezone=True), nullable=False)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    mitigated_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+    stage_attempt = relationship("PipelineStageAttempt")
+    acknowledged_by_user = relationship("User", foreign_keys=[acknowledged_by_user_id])
+    resolved_by_user = relationship("User", foreign_keys=[resolved_by_user_id])
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_incidents_tenant_idempotency"),
+        Index("ix_incidents_project_status", "project_id", "status"),
+        Index("ix_incidents_deployment_id", "deployment_id"),
+        Index("ix_incidents_last_observed", "tenant_id", "last_observed_at"),
+        CheckConstraint(
+            "status IN ('open', 'investigating', 'mitigated', 'resolved', 'dismissed')",
+            name="ck_incidents_status",
+        ),
+        CheckConstraint(
+            "severity IN ('critical', 'high', 'medium', 'low', 'info')",
+            name="ck_incidents_severity",
+        ),
+        CheckConstraint("last_observed_at >= first_observed_at", name="ck_incidents_observed_order"),
+    )
+
+
+class AIInvestigation(Base):
+    """Structured, provenance-bearing diagnosis over redacted evidence only."""
+
+    __tablename__ = "ai_investigations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    pipeline_run_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True)
+    stage_attempt_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("pipeline_stage_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True)
+    requested_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    trigger_type = Column(String(32), nullable=False)
+    failed_stage_key = Column(String(64), nullable=True)
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    model_provider = Column(String(64), nullable=False)
+    model_name = Column(String(128), nullable=False)
+    model_version = Column(String(128), nullable=True)
+    prompt_version = Column(String(64), nullable=False)
+    evidence_digest = Column(String(64), nullable=False)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=list)
+    failure_summary = Column(Text, nullable=True)
+    root_cause = Column(Text, nullable=True)
+    severity = Column(String(16), nullable=True)
+    recommended_fix = Column(Text, nullable=True)
+    resolution_steps = Column(POSTGRES_JSON, nullable=False, default=list)
+    confidence = Column(Integer, nullable=True)
+    safe_action_available = Column(Boolean, nullable=False, default=False)
+    requires_user_action = Column(Boolean, nullable=False, default=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    model_cost_microusd = Column(BigInteger, nullable=True)
+    error_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    pipeline_run = relationship("PipelineRun")
+    stage_attempt = relationship("PipelineStageAttempt")
+    incident = relationship("Incident")
+    requested_by_user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_ai_investigations_tenant_idempotency"),
+        Index("ix_ai_investigations_project_created", "project_id", "created_at"),
+        Index("ix_ai_investigations_incident_id", "incident_id"),
+        Index("ix_ai_investigations_pipeline_run_id", "pipeline_run_id"),
+        CheckConstraint(
+            "trigger_type IN ('pipeline_failure', 'security_failure', 'terraform_failure', "
+            "'test_failure', 'incident', 'architecture_change', 'manual')",
+            name="ck_ai_investigations_trigger_type",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_ai_investigations_status",
+        ),
+        CheckConstraint(
+            "severity IS NULL OR severity IN ('critical', 'high', 'medium', 'low', 'info')",
+            name="ck_ai_investigations_severity",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 100)",
+            name="ck_ai_investigations_confidence",
+        ),
+        CheckConstraint(
+            "evidence_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_ai_investigations_evidence_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class RemediationProposal(Base):
+    """A redacted, risk-classified action proposal that cannot self-authorize."""
+
+    __tablename__ = "remediation_proposals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True)
+    investigation_id = Column(UUID(as_uuid=True), ForeignKey("ai_investigations.id", ondelete="SET NULL"), nullable=True)
+    parameter_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    proposed_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decided_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    action_type = Column(String(128), nullable=False)
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=False)
+    risk_tier = Column(String(16), nullable=False)
+    status = Column(String(24), nullable=False, default="proposed")
+    approval_required = Column(Boolean, nullable=False, default=True)
+    parameter_digest = Column(String(64), nullable=False)
+    redacted_parameters = Column(POSTGRES_JSON, nullable=False, default=dict)
+    rationale = Column(Text, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    incident = relationship("Incident")
+    investigation = relationship("AIInvestigation")
+    parameter_artifact = relationship("Artifact")
+    proposed_by_user = relationship("User", foreign_keys=[proposed_by_user_id])
+    decided_by_user = relationship("User", foreign_keys=[decided_by_user_id])
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_remediation_proposals_tenant_idempotency"),
+        Index("ix_remediation_proposals_project_status", "project_id", "status"),
+        Index("ix_remediation_proposals_incident_id", "incident_id"),
+        CheckConstraint("risk_tier IN ('low', 'medium', 'high')", name="ck_remediation_proposals_risk_tier"),
+        CheckConstraint(
+            "status IN ('proposed', 'pending_approval', 'approved', 'denied', "
+            "'expired', 'cancelled', 'executed')",
+            name="ck_remediation_proposals_status",
+        ),
+        CheckConstraint(
+            "risk_tier <> 'high' OR approval_required",
+            name="ck_remediation_proposals_high_risk_approval",
+        ),
+        CheckConstraint(
+            "status NOT IN ('approved', 'denied') OR "
+            "(decided_by_user_id IS NOT NULL AND decided_at IS NOT NULL)",
+            name="ck_remediation_proposals_decision_actor",
+        ),
+        CheckConstraint(
+            "parameter_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_remediation_proposals_parameter_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class RemediationExecution(Base):
+    """An idempotent execution attempt for an authorized remediation proposal."""
+
+    __tablename__ = "remediation_executions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="SET NULL"), nullable=True)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True)
+    proposal_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("remediation_proposals.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    result_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    idempotency_key = Column(String(128), nullable=False)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    executor_kind = Column(String(32), nullable=False)
+    executor_name = Column(String(128), nullable=False)
+    status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    verification_status = Column(String(16), nullable=False, default=ExecutionStatus.queued.value)
+    result_summary = Column(Text, nullable=True)
+    evidence = Column(POSTGRES_JSON, nullable=False, default=list)
+    failure_code = Column(String(64), nullable=True)
+    redacted_error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    deployment = relationship("Deployment")
+    incident = relationship("Incident")
+    proposal = relationship("RemediationProposal")
+    requested_by_user = relationship("User")
+    result_artifact = relationship("Artifact")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_remediation_executions_tenant_idempotency"),
+        UniqueConstraint("proposal_id", "attempt_number", name="uq_remediation_executions_proposal_attempt"),
+        Index("ix_remediation_executions_project_status", "project_id", "status"),
+        Index("ix_remediation_executions_incident_id", "incident_id"),
+        CheckConstraint("attempt_number >= 1", name="ck_remediation_executions_attempt_number"),
+        CheckConstraint(
+            "executor_kind IN ('deterministic', 'operator', 'automation')",
+            name="ck_remediation_executions_executor_kind",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_remediation_executions_status",
+        ),
+        CheckConstraint(
+            "verification_status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', "
+            "'blocked', 'unavailable', 'cancelled')",
+            name="ck_remediation_executions_verification_status",
+        ),
     )
 

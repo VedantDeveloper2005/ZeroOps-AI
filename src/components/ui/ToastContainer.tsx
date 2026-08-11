@@ -21,7 +21,7 @@ const toastStyles = {
   warning: {
     label: "Warning",
     panel: "border-warning/25",
-    iconTone: "bg-warning-subtle text-warning",
+    iconTone: "bg-warning-subtle text-warning-hover",
     icon: AlertTriangle,
   },
   info: {
@@ -70,7 +70,7 @@ export function ToastContainer() {
               }
               transition={{ duration: shouldReduceMotion ? 0 : 0.2, ease: "easeOut" }}
               className={cn(
-                "pointer-events-auto flex items-start gap-3 rounded-xl border bg-card p-3 shadow-xl",
+                "pointer-events-auto flex items-start gap-3 rounded-2xl border bg-card p-3 shadow-xl",
                 style.panel,
               )}
             >

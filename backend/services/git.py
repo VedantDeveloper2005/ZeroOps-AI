@@ -18,6 +18,7 @@ _GITHUB_REPOSITORY_PATTERN = re.compile(
 )
 _WORKSPACE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
 _GITHUB_COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+_MAX_CHANGED_PATHS = 25_000
 
 
 def _validated_repository_name(full_name: str) -> str:
@@ -60,8 +61,34 @@ def _validated_workspace_key(workspace_key: str) -> str:
 
 def _git_environment(token: str | None) -> dict[str, str]:
     """Supply an OAuth token without placing it in the git command line."""
-    environment = os.environ.copy()
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+    allowed = {
+        "COMSPEC",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PATHEXT",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "WINDIR",
+    }
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in allowed
+    }
+    environment.update(
+        {
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_LFS_SKIP_SMUDGE": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
     if token:
         credentials = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
         environment["GIT_CONFIG_COUNT"] = "1"
@@ -96,6 +123,50 @@ def _safe_extract(zip_file, destination: str) -> None:
         ):
             raise RuntimeError("Repository archive contains an unsafe compression ratio.")
     zip_file.extractall(destination_root)
+
+
+def _validate_source_tree(path: str) -> None:
+    """Reject links, special files, and oversized repository trees.
+
+    Repository scanners and build planners must never be able to follow a
+    tenant-controlled link into worker storage.  Archive extraction already
+    rejects links, but native Git checkouts and uploaded directories need the
+    same boundary before they are handed to any downstream tool.
+    """
+
+    root = os.path.abspath(path)
+    if os.path.islink(root) or not os.path.isdir(root):
+        raise RuntimeError("Repository source must be a regular directory without symbolic links.")
+
+    maximum_entries = int(config.MAX_UPLOAD_ARCHIVE_FILES)
+    maximum_bytes = int(config.MAX_UPLOAD_UNCOMPRESSED_MB) * 1024 * 1024
+    entries_seen = 0
+    bytes_seen = 0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    entries_seen += 1
+                    if entries_seen > maximum_entries:
+                        raise RuntimeError("Repository source contains too many filesystem entries.")
+                    if entry.is_symlink():
+                        raise RuntimeError("Repository source contains an unsupported symbolic link.")
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        raise RuntimeError("Repository source contains an unsupported special file.")
+                    bytes_seen += entry.stat(follow_symlinks=False).st_size
+                    if bytes_seen > maximum_bytes:
+                        raise RuntimeError("Repository source exceeds the allowed expanded size.")
+        except RuntimeError:
+            raise
+        except OSError as error:
+            raise RuntimeError(
+                f"Repository source could not be validated: {type(error).__name__}."
+            ) from error
 
 
 def get_repo_path(full_name: str, workspace_key: str | None = None) -> str:
@@ -142,14 +213,21 @@ def cleanup_workspace(path: str) -> None:
 
 def prepare_local_source(source_path: str, workspace_key: str) -> str:
     """Copy uploaded source into an isolated, disposable deployment workspace."""
+    if os.path.islink(os.path.abspath(source_path)):
+        raise RuntimeError("Uploaded source path must not be a symbolic link.")
     source = os.path.realpath(source_path)
     if not os.path.isdir(source):
         raise RuntimeError("Uploaded source path is missing or is not a directory.")
+    _validate_source_tree(source)
     destination = get_repo_path("local/upload", workspace_key)
     cleanup_workspace(destination)
     os.makedirs(os.path.dirname(destination), exist_ok=True)
     try:
+        # Preserve any link that appears in the small validation/copy race so
+        # the destination validation rejects it instead of following it into
+        # an external worker path.
         shutil.copytree(source, destination, symlinks=True)
+        _validate_source_tree(destination)
     except Exception:
         cleanup_workspace(destination)
         raise
@@ -209,6 +287,11 @@ def clone_repo(
                         break
                 verified_revision = results[-1].stdout.strip().lower() if len(results) == len(commands) else ""
                 if len(results) == len(commands) and verified_revision == selected_commit:
+                    try:
+                        _validate_source_tree(repo_path)
+                    except Exception:
+                        cleanup_workspace(repo_path)
+                        raise
                     print(f"Checked out immutable commit {selected_commit} to {repo_path}")
                     return repo_path
                 exit_code = results[-1].returncode if results else "unknown"
@@ -230,6 +313,11 @@ def clone_repo(
                     env=environment,
                 )
                 if res.returncode == 0:
+                    try:
+                        _validate_source_tree(repo_path)
+                    except Exception:
+                        cleanup_workspace(repo_path)
+                        raise
                     print(f"Cloned successfully to {repo_path}")
                     return repo_path
                 print(f"git clone failed with exit code {res.returncode}. Trying zipball fallback.")
@@ -296,6 +384,7 @@ def clone_repo(
                     raise RuntimeError("GitHub archive did not contain one repository root.")
                 src_dir = os.path.join(temp_extract_dir, subdirs[0])
                 shutil.copytree(src_dir, repo_path)
+                _validate_source_tree(repo_path)
                 cleanup_workspace(temp_extract_dir)
                 print(f"Successfully extracted zipball to {repo_path}")
                 return repo_path
@@ -311,6 +400,88 @@ def clone_repo(
         cleanup_workspace(repo_path)
         cleanup_workspace(temp_extract_dir)
         raise RuntimeError(f"Unable to fetch repository '{full_name}' via clone or zipball: {e}") from e
+
+
+def get_changed_files(
+    repo_path: str,
+    baseline_sha: str,
+    current_sha: str,
+    token: str | None = None,
+    *,
+    max_paths: int = _MAX_CHANGED_PATHS,
+) -> tuple[str, ...] | None:
+    """Return a bounded immutable Git diff, or ``None`` when Git metadata is absent.
+
+    A ZIP source archive intentionally has no Git object database.  Callers
+    must treat ``None`` as unavailable evidence and use repository fingerprints
+    rather than silently claiming that no files changed.
+    """
+
+    target = _assert_managed_path(repo_path)
+    baseline = _validated_commit_sha(baseline_sha)
+    current = _validated_commit_sha(current_sha)
+    if max_paths < 1:
+        raise ValueError("max_paths must be positive")
+    if not os.path.isdir(os.path.join(target, ".git")):
+        return None
+    executable = shutil.which("git")
+    if not executable:
+        return None
+
+    environment = _git_environment(token)
+    exists = subprocess.run(
+        [executable, "-C", target, "cat-file", "-e", f"{baseline}^{{commit}}"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        env=environment,
+        check=False,
+    )
+    if exists.returncode != 0:
+        fetched = subprocess.run(
+            [executable, "-C", target, "fetch", "--depth", "1", "origin", baseline],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            env=environment,
+            check=False,
+        )
+        if fetched.returncode != 0:
+            return None
+
+    result = subprocess.run(
+        [
+            executable,
+            "-C",
+            target,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            baseline,
+            current,
+            "--",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=60,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    paths = tuple(sorted({line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}))
+    if len(paths) > max_paths:
+        raise RuntimeError("Git diff contains more paths than the change detector can safely represent.")
+    if any(path.startswith("/") or ".." in path.split("/") or "\x00" in path for path in paths):
+        raise RuntimeError("Git returned an unsafe repository-relative path.")
+    return paths
 
 def get_branches(full_name: str, token: str = None) -> list[str]:
     """Fetch remote branches for a repository."""

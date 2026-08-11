@@ -21,7 +21,7 @@ export function ProjectSelector({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-h-11 w-full rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+        className="ops-input font-medium"
       >
         {projects.map((project) => (
           <option key={project.id} value={project.id}>

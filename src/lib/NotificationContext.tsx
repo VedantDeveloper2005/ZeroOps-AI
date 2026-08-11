@@ -12,8 +12,11 @@ export interface Toast {
   type: "info" | "success" | "warning" | "error";
 }
 
+export type WorkspaceDataState = "idle" | "loading" | "ready" | "error";
+
 interface NotificationContextProps {
   notifications: Notification[];
+  notificationsState: WorkspaceDataState;
   unreadCount: number;
   addNotification: (notification: Omit<Notification, "id" | "created_at" | "read">) => void;
   markAsRead: (id: string) => void;
@@ -23,9 +26,11 @@ interface NotificationContextProps {
   addToast: (message: string, type?: Toast["type"]) => void;
   removeToast: (id: string) => void;
   projects: Project[];
+  projectsState: WorkspaceDataState;
   refreshProjects: () => Promise<void>;
   hasDeployed: boolean;
   dashboardStats: DashboardStats | null;
+  dashboardStatsState: WorkspaceDataState;
   refreshStats: () => Promise<void>;
   refreshNotifications: () => Promise<void>;
   isLoading: boolean;
@@ -42,9 +47,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const pathname = usePathname();
   const isDashboardRoute = pathname.startsWith("/dashboard");
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsState, setNotificationsState] =
+    useState<WorkspaceDataState>("idle");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsState, setProjectsState] =
+    useState<WorkspaceDataState>("idle");
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [dashboardStatsState, setDashboardStatsState] =
+    useState<WorkspaceDataState>("idle");
   const [isLoading, setIsLoading] = useState(true);
 
   const hasDeployed = projects.some(
@@ -62,6 +73,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       // Skip API calls when no session exists — prevents 3× 401 cascades
       // that hit the rate limiter and pollute the browser console.
       setIsLoading(true);
+      setNotificationsState("loading");
+      setProjectsState("loading");
+      setDashboardStatsState("loading");
       try {
         const [notifData, projectData, statsData] = await Promise.allSettled([
           api.getNotifications(),
@@ -73,14 +87,28 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
         if (notifData.status === "fulfilled") {
           setNotifications(notifData.value);
+          setNotificationsState("ready");
+        } else {
+          setNotificationsState("error");
         }
         if (projectData.status === "fulfilled") {
           setProjects(projectData.value);
+          setProjectsState("ready");
+        } else {
+          setProjectsState("error");
         }
         if (statsData.status === "fulfilled") {
           setDashboardStats(statsData.value);
+          setDashboardStatsState("ready");
+        } else {
+          setDashboardStatsState("error");
         }
       } catch {
+        if (!cancelled) {
+          setNotificationsState("error");
+          setProjectsState("error");
+          setDashboardStatsState("error");
+        }
         // User may not be authenticated yet — that's OK
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -104,24 +132,36 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   // ── Refresh helpers ──
   const refreshProjects = useCallback(async () => {
+    setProjectsState("loading");
     try {
       const data = await api.getProjects();
       setProjects(data);
-    } catch { /* ignore if not authenticated */ }
+      setProjectsState("ready");
+    } catch {
+      setProjectsState("error");
+    }
   }, []);
 
   const refreshStats = useCallback(async () => {
+    setDashboardStatsState("loading");
     try {
       const data = await api.getDashboardStats();
       setDashboardStats(data);
-    } catch { /* ignore */ }
+      setDashboardStatsState("ready");
+    } catch {
+      setDashboardStatsState("error");
+    }
   }, []);
 
   const refreshNotifications = useCallback(async () => {
+    setNotificationsState("loading");
     try {
       const data = await api.getNotifications();
       setNotifications(data);
-    } catch { /* ignore */ }
+      setNotificationsState("ready");
+    } catch {
+      setNotificationsState("error");
+    }
   }, []);
 
   // ── Notification actions ──
@@ -174,6 +214,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     <NotificationContext.Provider
       value={{
         notifications,
+        notificationsState,
         unreadCount,
         addNotification,
         markAsRead,
@@ -183,9 +224,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         addToast,
         removeToast,
         projects,
+        projectsState,
         refreshProjects,
         hasDeployed,
         dashboardStats,
+        dashboardStatsState,
         refreshStats,
         refreshNotifications,
         isLoading,

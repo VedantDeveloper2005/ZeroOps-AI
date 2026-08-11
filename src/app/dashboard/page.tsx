@@ -28,7 +28,7 @@ import {
 } from "@/lib/api";
 
 const activeStatuses = new Set(["queued", "building", "deploying"]);
-const successfulStatuses = new Set(["running", "completed", "success", "active"]);
+const successfulStatuses = new Set(["running"]);
 
 function formatDate(value?: string | null) {
   if (!value) return "Not recorded";
@@ -44,7 +44,10 @@ function formatDate(value?: string | null) {
 
 function projectState(status?: string | null) {
   if (successfulStatuses.has(status || "")) {
-    return { label: "Healthy release", className: "border-success/25 bg-success-subtle text-success" };
+    return {
+      label: "Deployment running",
+      className: "border-success/25 bg-success-subtle text-success",
+    };
   }
   if (activeStatuses.has(status || "")) {
     return { label: "In progress", className: "border-info/25 bg-info-subtle text-info" };
@@ -65,6 +68,7 @@ export default function DashboardHome() {
   } = useNotifications();
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [draftPlanProjectIds, setDraftPlanProjectIds] = useState<Set<string>>(new Set());
+  const [unknownPlanProjectIds, setUnknownPlanProjectIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +78,7 @@ export default function DashboardHome() {
     async function loadOverview() {
       setLoading(true);
       setError(null);
+      setUnknownPlanProjectIds(new Set());
       try {
         const deploymentData = await api.getDeployments(50);
         if (cancelled) return;
@@ -84,15 +89,19 @@ export default function DashboardHome() {
         );
         if (cancelled) return;
         const awaitingApproval = new Set<string>();
+        const unavailablePlans = new Set<string>();
         planResults.forEach((result, index) => {
           if (
             result.status === "fulfilled" &&
             (result.value as InfrastructurePlan).status === "draft"
           ) {
             awaitingApproval.add(projects[index].id);
+          } else if (result.status === "rejected") {
+            unavailablePlans.add(projects[index].id);
           }
         });
         setDraftPlanProjectIds(awaitingApproval);
+        setUnknownPlanProjectIds(unavailablePlans);
       } catch (loadError) {
         if (!cancelled) {
           setError(getErrorMessage(loadError, "The workspace overview could not be loaded."));
@@ -135,6 +144,19 @@ export default function DashboardHome() {
         description: "Review the resource plan, estimate status, and preflight evidence before deployment.",
         href: `/dashboard/infrastructure?project=${projectId}`,
         action: "Review plan",
+      };
+    }),
+    ...Array.from(unknownPlanProjectIds).map((projectId) => {
+      const project = projects.find((item) => item.id === projectId);
+      return {
+        id: `plan-unavailable-${projectId}`,
+        icon: AlertCircle,
+        tone: "warning",
+        title: `${project?.name || "Project"} plan status is unavailable`,
+        description:
+          "ZeroOps could not read the saved plan, so no approval or readiness state is being assumed.",
+        href: `/dashboard/infrastructure?project=${projectId}`,
+        action: "Check plan",
       };
     }),
     ...failedDeployments.slice(0, 3).map((deployment) => ({
@@ -206,13 +228,16 @@ export default function DashboardHome() {
       ) : (
         <>
           <section aria-labelledby="attention-heading" className="mb-8">
-            <div className="mb-3 flex items-end justify-between gap-4">
+            <div className="mb-4 flex items-end justify-between gap-4">
               <div>
-                <h2 id="attention-heading" className="text-base font-semibold text-foreground">
-                  Attention required
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">
+                  Decision queue
+                </p>
+                <h2 id="attention-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+                  What needs you now
                 </h2>
                 <p className="mt-1 text-xs text-foreground-muted">
-                  Only actions that need a decision or recovery step appear here.
+                  Approval, recovery, and unreadable plan states stay visible until they can be reviewed.
                 </p>
               </div>
               {attentionItems.length > 0 && (
@@ -220,11 +245,13 @@ export default function DashboardHome() {
               )}
             </div>
             {attentionItems.length === 0 ? (
-              <div className="flex items-center gap-3 rounded-xl border border-success/25 bg-success-subtle px-4 py-4">
+              <div className="flex items-center gap-3 rounded-xl border border-success/25 bg-success-subtle px-4 py-5">
                 <CheckCircle2 size={19} className="shrink-0 text-success" />
                 <div>
-                  <p className="text-sm font-medium text-foreground">No approval or recovery actions are open</p>
-                  <p className="mt-0.5 text-xs text-foreground-muted">New findings and failed releases will appear here.</p>
+                  <p className="text-sm font-medium text-foreground">No recorded actions in this view</p>
+                  <p className="mt-0.5 text-xs text-foreground-muted">
+                    No failed releases, pending plan approvals, or critical notifications were returned. This is not a health signal.
+                  </p>
                 </div>
               </div>
             ) : (
@@ -232,7 +259,7 @@ export default function DashboardHome() {
                 {attentionItems.map((item) => {
                   const Icon = item.icon;
                   return (
-                    <div key={item.id} className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+                    <article key={item.id} className="flex flex-col gap-4 p-4 transition-colors hover:bg-surface-subtle sm:flex-row sm:items-center sm:p-5">
                       <span
                         className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${
                           item.tone === "danger"
@@ -252,7 +279,7 @@ export default function DashboardHome() {
                       >
                         {item.action} <ArrowRight size={13} />
                       </Link>
-                    </div>
+                    </article>
                   );
                 })}
               </div>
@@ -260,19 +287,25 @@ export default function DashboardHome() {
           </section>
 
           {activeDeployments.length > 0 && (
-            <section aria-labelledby="active-deployments-heading" className="mb-8">
-              <div className="mb-3">
-                <h2 id="active-deployments-heading" className="text-base font-semibold text-foreground">
+            <section aria-labelledby="active-deployments-heading" className="mb-8 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
+              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-info">Live queue state</p>
+                <h2 id="active-deployments-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
                   Active deployments
                 </h2>
                 <p className="mt-1 text-xs text-foreground-muted">Current state reported by the deployment queue.</p>
+                </div>
+                <Link href="/dashboard/deployments" className="text-xs font-semibold text-primary hover:text-primary-hover">
+                  Open deployment center
+                </Link>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
                 {activeDeployments.slice(0, 4).map((deployment) => (
                   <Link
                     key={deployment.id}
                     href={`/dashboard/deployments?id=${deployment.id}`}
-                    className="group rounded-xl border border-info/25 bg-card p-4 shadow-sm transition-colors hover:border-info/50"
+                    className="group rounded-lg border border-info/25 bg-surface-subtle p-4 transition-colors hover:border-info/50 hover:bg-card"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -284,7 +317,7 @@ export default function DashboardHome() {
                         </p>
                       </div>
                       <span className="inline-flex items-center gap-1.5 rounded-full border border-info/25 bg-info-subtle px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-info">
-                        <Loader2 size={11} className="animate-spin" />
+                        <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
                         {deployment.status}
                       </span>
                     </div>
@@ -301,13 +334,19 @@ export default function DashboardHome() {
           )}
 
           <section aria-labelledby="health-summary-heading" className="mb-8">
-            <div className="mb-3">
-              <h2 id="health-summary-heading" className="text-base font-semibold text-foreground">
-                Platform summary
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Workspace pulse</p>
+              <h2 id="health-summary-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+                Recorded operational state
               </h2>
               <p className="mt-1 text-xs text-foreground-muted">
                 Recorded workspace state—not inferred uptime or security guarantees.
               </p>
+              </div>
+              <Link href="/dashboard/activity" className="inline-flex min-h-10 items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary-hover">
+                Review audit history <ArrowRight size={13} aria-hidden="true" />
+              </Link>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard
@@ -329,12 +368,12 @@ export default function DashboardHome() {
                 value={String(dashboardStats?.failed_deployments ?? failedDeployments.length)}
                 supportingText="Recorded release failures"
                 icon={AlertCircle}
-                tone={failedDeployments.length > 0 ? "danger" : "neutral"}
+                tone={(dashboardStats?.failed_deployments ?? failedDeployments.length) > 0 ? "danger" : "neutral"}
               />
               <MetricCard
                 label="Incident records"
                 value={String(incidentNotifications.length)}
-                supportingText="Backend incident notifications; read state is not resolution"
+                supportingText="Notifications only; read state is not resolution"
                 icon={ShieldAlert}
                 tone={incidentNotifications.length > 0 ? "warning" : "neutral"}
               />
@@ -355,7 +394,7 @@ export default function DashboardHome() {
               {projects.slice(0, 6).map((project) => {
                 const deployment = latestByProject.get(project.id);
                 const state = projectState(
-                  deployment?.status || project.latest_deployment_status || project.status,
+                  deployment?.status || project.latest_deployment_status,
                 );
                 return (
                   <article

@@ -149,6 +149,13 @@ export function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+export function isCapabilityUnavailable(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    [405, 501, 503].includes(error.status)
+  );
+}
+
 // ──────────────────────────────────────────────
 // TYPES
 // ──────────────────────────────────────────────
@@ -372,6 +379,363 @@ export interface TelemetryMetric {
   request_count: number;
 }
 
+export type PipelineStageStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "blocked"
+  | "unavailable"
+  | "cancelled";
+
+export type PipelineRunStatus =
+  | PipelineStageStatus
+  | "waiting_for_approval"
+  | "completed";
+
+export type PipelineApprovalStatus =
+  | "not_required"
+  | "required"
+  | "pending"
+  | "approved"
+  | "approved_consumed"
+  | "rejected";
+
+export type PipelineTrigger =
+  | "manual"
+  | "github_push"
+  | "push"
+  | "retry"
+  | "api"
+  | "remediation";
+
+export type DeploymentProvider = "azure-app-service" | "azure-aks";
+
+export interface PipelineEvidence {
+  id?: string;
+  label: string;
+  value: string;
+  kind?: "text" | "commit" | "artifact" | "policy" | "log" | "url";
+  url?: string | null;
+  sensitive?: boolean;
+}
+
+export interface PipelineStageAttempt {
+  id: string;
+  pipeline_run_id?: string;
+  stage_key: string;
+  name: string;
+  description?: string | null;
+  order: number;
+  attempt: number;
+  status: PipelineStageStatus;
+  required: boolean;
+  tool?: string | null;
+  reason?: string | null;
+  summary?: string | null;
+  evidence?: PipelineEvidence[];
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_seconds?: number | null;
+  duration_label?: string | null;
+  logs_available?: boolean;
+  log_count?: number;
+  ai_used?: boolean;
+  approval_required?: boolean;
+}
+
+export type ChangeClassification =
+  | "NO_RELEVANT_CHANGE"
+  | "APPLICATION_CODE_CHANGE"
+  | "DEPENDENCY_CHANGE"
+  | "DEPLOYMENT_CONFIG_CHANGE"
+  | "INFRASTRUCTURE_CHANGE"
+  | "KUBERNETES_CHANGE"
+  | "SECURITY_RELEVANT_CHANGE"
+  | "MAJOR_ARCHITECTURE_CHANGE";
+
+export interface ChangeAnalysis {
+  id: string;
+  project_id: string;
+  deployment_id?: string | null;
+  previous_commit_sha?: string | null;
+  current_commit_sha: string;
+  classifications: ChangeClassification[];
+  changed_paths?: string[];
+  architecture_analysis_required: boolean;
+  architecture_analysis_reason: string;
+  ai_used: boolean;
+  decision_source: string;
+  created_at: string | null;
+}
+
+export type PipelineDeploymentMode =
+  | "validate_only"
+  | "deploy_after_checks"
+  | "require_approval";
+
+export interface PipelineConfiguration {
+  // API presentation DTO. The backend adapter maps these names to the
+  // versioned ProjectPipelineConfiguration persistence fields.
+  project_id: string;
+  automatic_deployment: boolean;
+  branch: string;
+  deployment_mode: PipelineDeploymentMode;
+  run_tests: boolean;
+  sast_enabled: boolean;
+  dependency_scan_enabled: boolean;
+  secret_scan_enabled: boolean;
+  container_scan_enabled: boolean;
+  iac_scan_enabled: boolean;
+  production_approval_required: boolean;
+  ai_failure_diagnosis_enabled: boolean;
+  auto_retry_transient_failures: boolean;
+  auto_rollback_enabled: boolean;
+  github_webhook_configured: boolean;
+  updated_at: string | null;
+}
+
+export type PipelineConfigurationUpdate = Omit<
+  PipelineConfiguration,
+  "project_id" | "github_webhook_configured" | "updated_at"
+>;
+
+export interface GitHubWebhookSecretResponse {
+  webhook_url: string;
+  secret: string;
+  warning: string;
+}
+
+export type SecuritySeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export type SecurityScanCategory =
+  | "sast"
+  | "dependency"
+  | "secret"
+  | "container"
+  | "iac"
+  | "kubernetes"
+  | "sbom";
+
+export interface SecurityFinding {
+  id: string;
+  category: string;
+  severity: SecuritySeverity;
+  title: string;
+  description?: string | null;
+  scanner: string;
+  rule_id?: string | null;
+  file_path?: string | null;
+  line_number?: number | null;
+  remediation?: string | null;
+  blocking: boolean;
+  redacted: boolean;
+}
+
+export interface SecurityToolResult {
+  category: SecurityScanCategory;
+  tool: string;
+  status: PipelineStageStatus;
+  reason?: string | null;
+  blocking_findings: number;
+  finding_count: number;
+  completed_at?: string | null;
+}
+
+export interface SecurityScan {
+  id: string;
+  project_id: string;
+  deployment_id?: string | null;
+  commit_sha?: string | null;
+  status: PipelineStageStatus;
+  policy_result: "pending" | "passed" | "warning" | "blocked" | "unavailable";
+  blocking_findings: number;
+  finding_counts: Partial<Record<SecuritySeverity, number>>;
+  tools: SecurityToolResult[];
+  findings: SecurityFinding[];
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ProjectSecurityOverview {
+  project_id: string;
+  latest_scan: SecurityScan | null;
+  key_vault_status: "configured" | "not_configured" | "unavailable";
+  rbac_status: "configured" | "not_configured" | "unavailable";
+}
+
+export interface AIInvestigation {
+  id: string;
+  project_id: string;
+  deployment_id?: string | null;
+  incident_id?: string | null;
+  failed_stage_attempt_id?: string | null;
+  status: PipelineStageStatus;
+  failure_summary?: string | null;
+  probable_root_cause?: string | null;
+  confidence?: number | null;
+  evidence?: PipelineEvidence[];
+  recommended_fix?: string | null;
+  safe_automatic_action_available: boolean;
+  requires_user_action: boolean;
+  resolution_steps?: string[];
+  sanitized_context: boolean;
+  unavailable_reason?: string | null;
+  created_at: string | null;
+  completed_at?: string | null;
+}
+
+export type IncidentSeverity = "critical" | "high" | "medium" | "low" | "info";
+export type IncidentStatus =
+  | "open"
+  | "investigating"
+  | "awaiting_approval"
+  | "remediating"
+  | "mitigated"
+  | "resolved"
+  | "dismissed";
+
+export interface IncidentEvidence {
+  id?: string;
+  source: string;
+  summary: string;
+  recorded_at?: string | null;
+}
+
+export interface Incident {
+  id: string;
+  project_id: string;
+  deployment_id?: string | null;
+  deployment_revision?: string | null;
+  title: string;
+  summary: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  rule: string;
+  detected_at: string;
+  acknowledged_at?: string | null;
+  resolved_at?: string | null;
+  evidence: IncidentEvidence[];
+  investigation?: AIInvestigation | null;
+  remediation_proposals?: RemediationProposal[];
+}
+
+export type RemediationRisk = "low" | "medium" | "high";
+export type RemediationStatus =
+  | "proposed"
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "execution_queued"
+  | "executing"
+  | "executed"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "unavailable";
+
+export interface RemediationProposal {
+  id: string;
+  incident_id?: string | null;
+  deployment_id?: string | null;
+  title: string;
+  description: string;
+  action_type: string;
+  risk: RemediationRisk;
+  status: RemediationStatus;
+  requires_approval: boolean;
+  safe_automatic_action: boolean;
+  evidence?: PipelineEvidence[];
+  created_at: string | null;
+}
+
+export interface RemediationExecution {
+  id: string;
+  proposal_id: string;
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "unavailable"
+    | "cancelled";
+  requested_by: string;
+  verification_status?: PipelineStageStatus;
+  attempt?: number;
+  executor_kind?: "deterministic" | "operator" | "automation";
+  executor_name?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  verification_summary?: string | null;
+  error?: string | null;
+}
+
+export interface PipelineRun {
+  id: string;
+  project_id: string;
+  deployment_id: string | null;
+  status: PipelineRunStatus;
+  trigger: PipelineTrigger;
+  branch: string;
+  commit_sha?: string | null;
+  target_provider?: DeploymentProvider | null;
+  progress_percent: number;
+  reason?: string | null;
+  failure_code?: string | null;
+  approval_required: boolean;
+  approval_status: PipelineApprovalStatus;
+  approved_deployment_id?: string | null;
+  approved_pipeline_run_id?: string | null;
+  stages: PipelineStageAttempt[];
+  change_analysis?: ChangeAnalysis | null;
+  security_scan?: SecurityScan | null;
+  investigation?: AIInvestigation | null;
+  created_at: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface PipelineApprovalDecisionResponse {
+  status: "approved" | "rejected";
+  approval_status: "approved_consumed" | "rejected";
+  idempotent?: boolean;
+  validation_pipeline_run_id: string;
+  deployment_id: string;
+  pipeline_run_id?: string;
+}
+
+export type MonitoringWindow = "live" | "1h" | "6h" | "24h";
+
+export interface MonitoringSample {
+  recorded_at: string;
+  cpu_percent?: number | null;
+  memory_percent?: number | null;
+  request_rate?: number | null;
+  response_latency_ms?: number | null;
+  http_error_rate_percent?: number | null;
+  availability_percent?: number | null;
+  pod_restarts?: number | null;
+  pods_ready?: number | null;
+  replica_count?: number | null;
+  failed_pods?: number | null;
+}
+
+export interface ProjectMonitoring {
+  project_id: string;
+  window: MonitoringWindow;
+  available_windows?: MonitoringWindow[];
+  availability: "available" | "no_telemetry" | "unavailable";
+  source?: string | null;
+  target_provider?: DeploymentProvider | null;
+  deployment_revision?: string | null;
+  deployment_health?: string | null;
+  latest_incidents?: Incident[];
+  samples: MonitoringSample[];
+  message?: string | null;
+}
+
 export interface SecurityStatus {
   securityScore: number | null;
   firewallStatus: string;
@@ -419,17 +783,29 @@ export interface AzureConnection {
   resource_group?: string | null;
   acr_login_server?: string | null;
   app_service_plan?: string | null;
+  aks_cluster_name?: string | null;
   namespace_prefix?: string | null;
 }
 
 export interface DeploymentTargetStatus {
-  provider: "azure-app-service";
+  provider: DeploymentProvider;
   label: string;
   ready: boolean;
   missing: string[];
   region?: string | null;
   plan_name?: string | null;
   registry?: string | null;
+  cluster_name?: string | null;
+}
+
+export interface AKSDeploymentTargetStatus extends DeploymentTargetStatus {
+  provider: "azure-aks";
+  namespace?: string | null;
+  workload?: string | null;
+  image_digest?: string | null;
+  deployment_revision?: string | null;
+  service_endpoint?: string | null;
+  rollout_status?: string | null;
 }
 
 export interface DeploymentTargetsStatus {
@@ -654,13 +1030,29 @@ export const api = {
     project_id: string;
     branch?: string;
     environment?: string;
-    target_provider?: "auto" | "azure" | "azure-app-service";
+    target_provider?: "auto" | "azure" | DeploymentProvider;
   }) => request<{ status: string; deployment_id: string; project_id: string }>(
     "/api/deployments/deploy",
     { method: "POST", body: JSON.stringify(data) }
   ),
 
   getDeployment: (id: string) => request<DeploymentDetail>(`/api/deployments/${id}`),
+
+  getDeploymentPipeline: (id: string) =>
+    request<PipelineRun>(`/api/deployments/${id}/pipeline`),
+
+  approvePipelineRun: (id: string) =>
+    request<PipelineApprovalDecisionResponse>(`/api/pipeline-runs/${id}/approve`, {
+      method: "POST",
+    }),
+
+  rejectPipelineRun: (id: string) =>
+    request<PipelineApprovalDecisionResponse>(`/api/pipeline-runs/${id}/reject`, {
+      method: "POST",
+    }),
+
+  getProjectChangeAnalysis: (projectId: string) =>
+    request<ChangeAnalysis[]>(`/api/projects/${projectId}/change-analysis`),
 
   // ── Notifications ──
   getNotifications: (category?: string, limit = 50) => {
@@ -779,6 +1171,21 @@ export const api = {
   updateSettings: (data: Partial<UserSettings>) =>
     request<UserSettings>("/api/user/settings", { method: "PUT", body: JSON.stringify(data) }),
 
+  getPipelineConfiguration: (projectId: string) =>
+    request<PipelineConfiguration>(`/api/projects/${projectId}/pipeline-config`),
+
+  updatePipelineConfiguration: (projectId: string, data: PipelineConfigurationUpdate) =>
+    request<PipelineConfiguration>(`/api/projects/${projectId}/pipeline-config`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  regenerateGitHubWebhookSecret: (projectId: string) =>
+    request<GitHubWebhookSecretResponse>(
+      `/api/projects/${projectId}/github-webhook-secret/regenerate`,
+      { method: "POST" },
+    ),
+
   resetOnboarding: () =>
     request<{ status: string; message: string }>("/api/user/reset", { method: "POST" }),
 
@@ -794,6 +1201,7 @@ export const api = {
     resource_group?: string;
     acr_login_server?: string;
     app_service_plan?: string;
+    aks_cluster_name?: string;
     namespace_prefix?: string;
   }) =>
     request<AzureConnection>("/api/azure/connection", {
@@ -801,7 +1209,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // ── Google GKE Deployment Target ──
+  // ── Verified deployment targets ──
   getDeploymentTargets: () => request<DeploymentTargetsStatus>("/api/deployment-targets"),
 
   // ── GitHub OAuth ──
@@ -861,9 +1269,48 @@ export const api = {
     return request<RuntimeResourceMetrics>(`/api/monitoring/metrics${params}`);
   },
 
+  getProjectMonitoring: (projectId: string, window: MonitoringWindow = "live") =>
+    request<ProjectMonitoring>(
+      `/api/projects/${projectId}/monitoring?window=${encodeURIComponent(window)}`,
+    ),
+
   // ── Security ──
   getSecurityStatus: (projectId: string) =>
     request<SecurityStatus>(`/api/security/status/${projectId}`),
+
+  getProjectSecurityScans: (projectId: string) =>
+    request<SecurityScan[]>(`/api/projects/${projectId}/security-scans`),
+
+  // â”€â”€ Incidents & controlled remediation â”€â”€
+  getProjectIncidents: (projectId: string) =>
+    request<Incident[]>(`/api/projects/${projectId}/incidents`),
+
+  getIncident: (incidentId: string) =>
+    request<Incident>(`/api/incidents/${incidentId}`),
+
+  acknowledgeIncident: (incidentId: string) =>
+    request<Incident>(`/api/incidents/${incidentId}/acknowledge`, { method: "POST" }),
+
+  dismissIncident: (incidentId: string) =>
+    request<Incident>(`/api/incidents/${incidentId}/dismiss`, { method: "POST" }),
+
+  requestIncidentInvestigation: (incidentId: string) =>
+    request<AIInvestigation>(`/api/incidents/${incidentId}/investigate`, { method: "POST" }),
+
+  approveRemediationProposal: (proposalId: string) =>
+    request<RemediationProposal>(`/api/remediation-proposals/${proposalId}/approve`, {
+      method: "POST",
+    }),
+
+  rejectRemediationProposal: (proposalId: string) =>
+    request<RemediationProposal>(`/api/remediation-proposals/${proposalId}/reject`, {
+      method: "POST",
+    }),
+
+  executeRemediationProposal: (proposalId: string) =>
+    request<RemediationExecution>(`/api/remediation-proposals/${proposalId}/execute`, {
+      method: "POST",
+    }),
 
   // ── Autoscaling ──
   // ── Project Metrics & Env Vars ──

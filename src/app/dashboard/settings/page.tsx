@@ -9,14 +9,17 @@ import {
   Bell,
   CheckCircle2,
   Cloud,
+  Copy,
   Eye,
   EyeOff,
+  GitBranch,
   KeyRound,
   Loader2,
   Save,
   ShieldCheck,
   Trash2,
   UserRound,
+  Workflow,
 } from "lucide-react";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
@@ -24,13 +27,24 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { StatePanel } from "@/components/ui/StatePanel";
 import { useNotifications } from "@/lib/NotificationContext";
 import {
+  ApiError,
   api,
   getErrorMessage,
   type AzureConnection,
   type EnvVar,
+  type GitHubWebhookSecretResponse,
+  type PipelineConfiguration,
+  type PipelineConfigurationUpdate,
 } from "@/lib/api";
 
-type SettingsSection = "workspace" | "azure" | "variables";
+type SettingsSection = "workspace" | "pipeline" | "azure" | "variables";
+type PipelineSettingsState =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "no_record"
+  | "unavailable"
+  | "error";
 
 type AzureForm = {
   tenant_id: string;
@@ -41,6 +55,7 @@ type AzureForm = {
   resource_group: string;
   acr_login_server: string;
   app_service_plan: string;
+  aks_cluster_name: string;
   namespace_prefix: string;
 };
 
@@ -53,6 +68,7 @@ const emptyAzureForm: AzureForm = {
   resource_group: "",
   acr_login_server: "",
   app_service_plan: "",
+  aks_cluster_name: "",
   namespace_prefix: "",
 };
 
@@ -67,6 +83,12 @@ const sections: {
     label: "Workspace",
     description: "Account and project context",
     icon: UserRound,
+  },
+  {
+    id: "pipeline",
+    label: "Pipeline",
+    description: "Checks and GitHub automation",
+    icon: Workflow,
   },
   {
     id: "azure",
@@ -111,6 +133,16 @@ function SettingsWorkspace() {
   const [section, setSection] = useState<SettingsSection>("workspace");
   const [selectedProjectId, setSelectedProjectId] = useState("");
 
+  const [pipelineConfiguration, setPipelineConfiguration] =
+    useState<PipelineConfiguration | null>(null);
+  const [pipelineState, setPipelineState] =
+    useState<PipelineSettingsState>("idle");
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
+  const [savingPipeline, setSavingPipeline] = useState(false);
+  const [webhookSetup, setWebhookSetup] =
+    useState<GitHubWebhookSecretResponse | null>(null);
+  const [regeneratingWebhook, setRegeneratingWebhook] = useState(false);
+
   const [azureConnection, setAzureConnection] = useState<AzureConnection | null>(null);
   const [azureForm, setAzureForm] = useState<AzureForm>(emptyAzureForm);
   const [loadingAzure, setLoadingAzure] = useState(true);
@@ -143,7 +175,9 @@ function SettingsWorkspace() {
 
   useEffect(() => {
     const requestedSection = searchParams.get("tab");
-    if (requestedSection === "azure") {
+    if (requestedSection === "pipeline") {
+      setSection("pipeline");
+    } else if (requestedSection === "azure") {
       setSection("azure");
     } else if (requestedSection === "security" || requestedSection === "variables") {
       setSection("variables");
@@ -165,6 +199,7 @@ function SettingsWorkspace() {
         resource_group: connection.resource_group || "",
         acr_login_server: connection.acr_login_server || "",
         app_service_plan: connection.app_service_plan || "",
+        aks_cluster_name: connection.aks_cluster_name || "",
         namespace_prefix: connection.namespace_prefix || "",
       });
     } catch (error) {
@@ -177,6 +212,42 @@ function SettingsWorkspace() {
   useEffect(() => {
     void loadAzureConnection();
   }, [loadAzureConnection]);
+
+  const loadPipelineConfiguration = useCallback(async () => {
+    if (!selectedProjectId) {
+      setPipelineConfiguration(null);
+      setPipelineState("idle");
+      setPipelineError(null);
+      return;
+    }
+
+    setPipelineState("loading");
+    setPipelineError(null);
+    try {
+      const configuration = await api.getPipelineConfiguration(selectedProjectId);
+      setPipelineConfiguration(configuration);
+      setPipelineState("ready");
+    } catch (error) {
+      setPipelineConfiguration(null);
+      if (error instanceof ApiError && error.status === 404) {
+        setPipelineState("no_record");
+        return;
+      }
+      if (error instanceof ApiError && error.status === 503) {
+        setPipelineState("unavailable");
+      } else {
+        setPipelineState("error");
+      }
+      setPipelineError(
+        getErrorMessage(error, "Pipeline configuration could not be loaded."),
+      );
+    }
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    setWebhookSetup(null);
+    void loadPipelineConfiguration();
+  }, [loadPipelineConfiguration]);
 
   const loadVariables = useCallback(async () => {
     if (!selectedProjectId) {
@@ -245,6 +316,7 @@ function SettingsWorkspace() {
         resource_group: azureForm.resource_group.trim(),
         acr_login_server: azureForm.acr_login_server.trim().replace(/\/+$/, ""),
         app_service_plan: azureForm.app_service_plan.trim(),
+        aks_cluster_name: azureForm.aks_cluster_name.trim() || undefined,
         namespace_prefix: azureForm.namespace_prefix.trim() || undefined,
       });
       setAzureConnection({
@@ -258,6 +330,7 @@ function SettingsWorkspace() {
         resource_group: azureForm.resource_group.trim(),
         acr_login_server: azureForm.acr_login_server.trim().replace(/\/+$/, ""),
         app_service_plan: azureForm.app_service_plan.trim(),
+        aks_cluster_name: azureForm.aks_cluster_name.trim() || null,
         namespace_prefix: azureForm.namespace_prefix.trim() || null,
       });
       setAzureForm((current) => ({ ...current, client_secret: "" }));
@@ -268,6 +341,95 @@ function SettingsWorkspace() {
       addToast(message, "error");
     } finally {
       setSavingAzure(false);
+    }
+  }
+
+  function updatePipelineField<K extends keyof PipelineConfigurationUpdate>(
+    field: K,
+    value: PipelineConfigurationUpdate[K],
+  ) {
+    setPipelineConfiguration((current) =>
+      current ? { ...current, [field]: value } : current,
+    );
+  }
+
+  async function savePipelineConfiguration(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId || !pipelineConfiguration || !pipelineConfiguration.branch.trim()) {
+      return;
+    }
+
+    const update: PipelineConfigurationUpdate = {
+      automatic_deployment: pipelineConfiguration.automatic_deployment,
+      branch: pipelineConfiguration.branch.trim(),
+      deployment_mode: pipelineConfiguration.deployment_mode,
+      run_tests: pipelineConfiguration.run_tests,
+      sast_enabled: pipelineConfiguration.sast_enabled,
+      dependency_scan_enabled: pipelineConfiguration.dependency_scan_enabled,
+      secret_scan_enabled: pipelineConfiguration.secret_scan_enabled,
+      container_scan_enabled: pipelineConfiguration.container_scan_enabled,
+      iac_scan_enabled: pipelineConfiguration.iac_scan_enabled,
+      production_approval_required: pipelineConfiguration.production_approval_required,
+      ai_failure_diagnosis_enabled: pipelineConfiguration.ai_failure_diagnosis_enabled,
+      auto_retry_transient_failures: pipelineConfiguration.auto_retry_transient_failures,
+      auto_rollback_enabled: pipelineConfiguration.auto_rollback_enabled,
+    };
+
+    setSavingPipeline(true);
+    setPipelineError(null);
+    try {
+      const saved = await api.updatePipelineConfiguration(selectedProjectId, update);
+      setPipelineConfiguration(saved);
+      setPipelineState("ready");
+      addToast("Pipeline configuration was saved.", "success");
+    } catch (error) {
+      const message = getErrorMessage(error, "Pipeline configuration could not be saved.");
+      setPipelineError(message);
+      addToast(message, "error");
+    } finally {
+      setSavingPipeline(false);
+    }
+  }
+
+  async function regenerateWebhookSecret() {
+    if (!selectedProjectId) return;
+    if (
+      pipelineConfiguration?.github_webhook_configured &&
+      !window.confirm(
+        "Regenerate the GitHub webhook secret? The existing secret will stop working after you update the webhook in GitHub.",
+      )
+    ) {
+      return;
+    }
+
+    setRegeneratingWebhook(true);
+    try {
+      const setup = await api.regenerateGitHubWebhookSecret(selectedProjectId);
+      setWebhookSetup(setup);
+      addToast("A webhook secret was generated. Copy it to GitHub now; it will not be shown again.", "success");
+      try {
+        const refreshed = await api.getPipelineConfiguration(selectedProjectId);
+        setPipelineConfiguration(refreshed);
+        setPipelineState("ready");
+      } catch {
+        addToast(
+          "The secret was generated, but webhook status could not be refreshed. Keep the displayed values and reload after configuring GitHub.",
+          "error",
+        );
+      }
+    } catch (error) {
+      addToast(getErrorMessage(error, "The GitHub webhook secret could not be generated."), "error");
+    } finally {
+      setRegeneratingWebhook(false);
+    }
+  }
+
+  async function copyWebhookValue(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      addToast(`${label} copied.`, "success");
+    } catch {
+      addToast("Clipboard access was not available.", "error");
     }
   }
 
@@ -320,7 +482,7 @@ function SettingsWorkspace() {
       <PageHeader
         eyebrow="Configuration"
         title="Settings"
-        description="Manage the verified Azure deployment target and production runtime values used by your projects."
+        description="Manage project pipeline policy, verified Azure targets, and production runtime values."
         actions={
           !projectsLoading && projects.length > 0 ? (
             <ProjectSelector
@@ -334,14 +496,25 @@ function SettingsWorkspace() {
       />
 
       {activeProject && (
-        <div className="mb-6">
+        <section aria-label="Selected project settings" className="mb-6 rounded-xl border border-border bg-card px-3 pt-3 shadow-sm sm:px-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+            <p className="text-xs font-medium text-foreground-muted">
+              Configuring <span className="font-semibold text-foreground">{activeProject.name}</span>
+            </p>
+            <p className="font-mono text-xs text-foreground-subtle">
+              {activeProject.branch || "Default branch"}
+            </p>
+          </div>
           <ProjectTabs projectId={activeProject.id} />
-        </div>
+        </section>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-        <nav aria-label="Settings sections">
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+        <nav aria-label="Settings sections" className="rounded-xl border border-border bg-card p-2 shadow-sm lg:sticky lg:top-24 lg:self-start">
+          <p className="hidden px-3 pb-2 pt-1 text-xs font-semibold text-foreground-muted lg:block">
+            Settings areas
+          </p>
+          <div className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
             {sections.map((item) => {
               const Icon = item.icon;
               const selected = item.id === section;
@@ -349,7 +522,7 @@ function SettingsWorkspace() {
                 <button
                   key={item.id}
                   type="button"
-                  aria-current={selected ? "page" : undefined}
+                  aria-pressed={selected}
                   onClick={() => setSection(item.id)}
                   className={`flex min-h-12 min-w-max items-center gap-3 rounded-lg border px-3 text-left transition-colors lg:w-full ${
                     selected
@@ -357,10 +530,12 @@ function SettingsWorkspace() {
                       : "border-transparent text-foreground-muted hover:border-border hover:bg-card hover:text-foreground"
                   }`}
                 >
-                  <Icon size={17} aria-hidden="true" />
+                  <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${selected ? "bg-card text-primary shadow-sm" : "bg-surface-subtle text-foreground-muted"}`}>
+                    <Icon size={16} aria-hidden="true" />
+                  </span>
                   <span>
                     <span className="block text-xs font-semibold">{item.label}</span>
-                    <span className="mt-0.5 hidden text-[10px] text-foreground-subtle lg:block">
+                    <span className="mt-0.5 hidden text-xs leading-5 text-foreground-subtle lg:block">
                       {item.description}
                     </span>
                   </span>
@@ -390,6 +565,26 @@ function SettingsWorkspace() {
               onChange={updateAzureField}
               onSave={saveAzureConnection}
               onRetry={() => void loadAzureConnection()}
+            />
+          )}
+
+          {section === "pipeline" && (
+            <PipelineSettings
+              hasProjects={projects.length > 0}
+              loadingProjects={projectsLoading}
+              projectName={activeProject?.name}
+              configuration={pipelineConfiguration}
+              state={pipelineState}
+              error={pipelineError}
+              saving={savingPipeline}
+              webhookSetup={webhookSetup}
+              regeneratingWebhook={regeneratingWebhook}
+              onChange={updatePipelineField}
+              onSave={savePipelineConfiguration}
+              onRegenerateWebhook={() => void regenerateWebhookSecret()}
+              onCopyWebhookValue={(value, label) => void copyWebhookValue(value, label)}
+              onClearWebhookSetup={() => setWebhookSetup(null)}
+              onRetry={() => void loadPipelineConfiguration()}
             />
           )}
 
@@ -487,7 +682,7 @@ function WorkspaceSettings({
         <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">
                 Selected project
               </p>
               <h2 className="mt-2 text-base font-semibold text-foreground">{activeProject.name}</h2>
@@ -508,7 +703,7 @@ function WorkspaceSettings({
             </div>
             <div>
               <dt className="text-foreground-subtle">Configured branch</dt>
-              <dd className="mt-1 font-mono text-[11px] font-medium text-foreground">
+              <dd className="mt-1 font-mono text-xs font-medium text-foreground">
                 {activeProject.branch || "Not recorded"}
               </dd>
             </div>
@@ -520,6 +715,312 @@ function WorkspaceSettings({
         </section>
       )}
     </div>
+  );
+}
+
+function PipelineSettings({
+  hasProjects,
+  loadingProjects,
+  projectName,
+  configuration,
+  state,
+  error,
+  saving,
+  webhookSetup,
+  regeneratingWebhook,
+  onChange,
+  onSave,
+  onRegenerateWebhook,
+  onCopyWebhookValue,
+  onClearWebhookSetup,
+  onRetry,
+}: {
+  hasProjects: boolean;
+  loadingProjects: boolean;
+  projectName?: string;
+  configuration: PipelineConfiguration | null;
+  state: PipelineSettingsState;
+  error: string | null;
+  saving: boolean;
+  webhookSetup: GitHubWebhookSecretResponse | null;
+  regeneratingWebhook: boolean;
+  onChange: <K extends keyof PipelineConfigurationUpdate>(
+    field: K,
+    value: PipelineConfigurationUpdate[K],
+  ) => void;
+  onSave: (event: React.FormEvent<HTMLFormElement>) => void;
+  onRegenerateWebhook: () => void;
+  onCopyWebhookValue: (value: string, label: string) => void;
+  onClearWebhookSetup: () => void;
+  onRetry: () => void;
+}) {
+  if (loadingProjects || state === "loading") {
+    return <SettingsLoading label="Loading pipeline configuration…" />;
+  }
+
+  if (!hasProjects) {
+    return (
+      <StatePanel
+        title="No project pipeline to configure"
+        description="Connect a repository before configuring validation and deployment behavior."
+        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+      />
+    );
+  }
+
+  if (state === "no_record") {
+    return (
+      <StatePanel
+        title="No pipeline configuration is stored"
+        description="The backend returned no configuration for this project, so ZeroOps is not displaying assumed defaults."
+        action={{ label: "Check again", onClick: onRetry }}
+      />
+    );
+  }
+
+  if (state === "unavailable") {
+    return (
+      <StatePanel
+        variant="disconnected"
+        title="Pipeline configuration service unavailable"
+        description={error || "The backend cannot currently provide project pipeline policy. Existing behavior has not been inferred."}
+        action={{ label: "Try again", onClick: onRetry }}
+      />
+    );
+  }
+
+  if (!configuration) {
+    return (
+      <StatePanel
+        variant="error"
+        title="Pipeline configuration could not be loaded"
+        description={error || "No configuration response was returned."}
+        action={{ label: "Try again", onClick: onRetry }}
+      />
+    );
+  }
+
+  return (
+    <form onSubmit={onSave} className="space-y-5">
+      <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-3 border-b border-border pb-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Workflow size={17} className="text-primary" aria-hidden="true" />
+              <h2 className="text-base font-semibold text-foreground">Pipeline policy</h2>
+            </div>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-foreground-muted">
+              Stored execution settings for {projectName || "the selected project"}. Irrelevant stages may still be skipped by change and target detection.
+            </p>
+          </div>
+          <span className="rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-semibold text-foreground-muted">
+            {configuration.github_webhook_configured
+              ? "GitHub webhook configured"
+              : "GitHub webhook not configured"}
+          </span>
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-4 rounded-lg border border-danger/25 bg-danger-subtle px-3 py-2 text-xs text-danger">
+            {error}
+          </p>
+        )}
+
+        <fieldset className="mt-5">
+          <legend className="text-sm font-semibold text-foreground">GitHub automation</legend>
+          <p className="mt-1 text-xs leading-5 text-foreground-muted">
+            Push-triggered execution works only after the backend confirms a webhook for this project.
+          </p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label htmlFor="pipeline-branch">
+              <span className="mb-1.5 flex items-center gap-2 text-xs font-medium text-foreground-muted">
+                <GitBranch size={14} aria-hidden="true" /> Branch
+              </span>
+              <input
+                id="pipeline-branch"
+                value={configuration.branch}
+                onChange={(event) => onChange("branch", event.target.value)}
+                required
+                autoComplete="off"
+                className="ops-input"
+              />
+            </label>
+            <label htmlFor="pipeline-mode">
+              <span className="mb-1.5 block text-xs font-medium text-foreground-muted">
+                Push behavior
+              </span>
+              <select
+                id="pipeline-mode"
+                value={configuration.deployment_mode}
+                onChange={(event) =>
+                  onChange(
+                    "deployment_mode",
+                    event.target.value as PipelineConfiguration["deployment_mode"],
+                  )
+                }
+                className="ops-input"
+              >
+                <option value="validate_only">Validate only; deploy manually</option>
+                <option value="deploy_after_checks">Deploy after required checks</option>
+                <option value="require_approval">Require approval before deploy</option>
+              </select>
+            </label>
+          </div>
+          <div className="mt-4">
+            <PipelineToggle
+              id="pipeline-auto-deploy"
+              label="Automatic deployment on push"
+              description={
+                configuration.github_webhook_configured
+                  ? "Run the stored pipeline when the configured branch receives a push."
+                  : "Unavailable until a GitHub webhook is configured for this project."
+              }
+              checked={configuration.automatic_deployment}
+              disabled={!configuration.github_webhook_configured}
+              onChange={(checked) => onChange("automatic_deployment", checked)}
+            />
+          </div>
+
+          <div className="mt-4 rounded-lg border border-border bg-surface-subtle p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold text-foreground">GitHub webhook credential</p>
+                <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                  Generate a project-specific signing secret, then add the returned URL and secret to the repository webhook settings in GitHub.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onRegenerateWebhook}
+                disabled={regeneratingWebhook}
+                className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground hover:bg-surface-raised disabled:opacity-50"
+              >
+                {regeneratingWebhook ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <KeyRound size={14} aria-hidden="true" />}
+                {regeneratingWebhook
+                  ? "Generating…"
+                  : configuration.github_webhook_configured
+                    ? "Regenerate secret"
+                    : "Generate secret"}
+              </button>
+            </div>
+
+            {webhookSetup && (
+              <div role="status" className="mt-3 space-y-3 rounded-lg border border-warning/25 bg-warning-subtle p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold text-warning">Shown once — copy these values now</p>
+                  <button
+                    type="button"
+                    onClick={onClearWebhookSetup}
+                    className="min-h-11 rounded-md px-2 text-xs font-semibold text-foreground-muted hover:bg-card hover:text-foreground"
+                  >
+                    Hide secret
+                  </button>
+                </div>
+                <p className="text-xs leading-5 text-foreground-muted">{webhookSetup.warning}</p>
+                {[
+                  ["Payload URL", webhookSetup.webhook_url],
+                  ["Webhook secret", webhookSetup.secret],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <p className="text-xs font-semibold text-foreground-subtle">{label}</p>
+                    <div className="mt-1 flex gap-2">
+                      <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-card px-2.5 py-2 text-xs text-foreground">{value}</code>
+                      <button
+                        type="button"
+                        onClick={() => onCopyWebhookValue(value, label)}
+                        aria-label={`Copy ${label.toLowerCase()}`}
+                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-border bg-card text-foreground hover:bg-surface-raised"
+                      >
+                        <Copy size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </fieldset>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+        <fieldset>
+          <legend className="text-sm font-semibold text-foreground">Deterministic checks</legend>
+          <p className="mt-1 text-xs leading-5 text-foreground-muted">
+            Enabling a check requests the corresponding recorded stage. A missing required scanner must be reported as unavailable or blocked, never passed.
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <PipelineToggle id="pipeline-tests" label="Unit tests" description="Run the detected project test command." checked={configuration.run_tests} onChange={(checked) => onChange("run_tests", checked)} />
+            <PipelineToggle id="pipeline-sast" label="SAST" description="Run the configured source-code scanner." checked={configuration.sast_enabled} onChange={(checked) => onChange("sast_enabled", checked)} />
+            <PipelineToggle id="pipeline-dependencies" label="Dependency scan" description="Inspect supported package dependencies." checked={configuration.dependency_scan_enabled} onChange={(checked) => onChange("dependency_scan_enabled", checked)} />
+            <PipelineToggle id="pipeline-secrets" label="Secret scan" description="Scan for exposed credential patterns; values remain redacted." checked={configuration.secret_scan_enabled} onChange={(checked) => onChange("secret_scan_enabled", checked)} />
+            <PipelineToggle id="pipeline-container" label="Container scan" description="Runs only when the selected target produces a container." checked={configuration.container_scan_enabled} onChange={(checked) => onChange("container_scan_enabled", checked)} />
+            <PipelineToggle id="pipeline-iac" label="IaC scan" description="Runs only when infrastructure files are relevant." checked={configuration.iac_scan_enabled} onChange={(checked) => onChange("iac_scan_enabled", checked)} />
+          </div>
+        </fieldset>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
+        <fieldset>
+          <legend className="text-sm font-semibold text-foreground">Failure and approval policy</legend>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <PipelineToggle id="pipeline-production-approval" label="Production approval required" description="Block production deployment until an approval is recorded." checked={configuration.production_approval_required} onChange={(checked) => onChange("production_approval_required", checked)} />
+            <PipelineToggle id="pipeline-ai-diagnosis" label="AI failure diagnosis" description="Allow sanitized failure context to be investigated after a failed stage." checked={configuration.ai_failure_diagnosis_enabled} onChange={(checked) => onChange("ai_failure_diagnosis_enabled", checked)} />
+            <PipelineToggle id="pipeline-auto-retry" label="Retry transient failures" description="Allow only policy-classified transient operations to be retried." checked={configuration.auto_retry_transient_failures} onChange={(checked) => onChange("auto_retry_transient_failures", checked)} />
+            <PipelineToggle id="pipeline-auto-rollback" label="Automatic rollback" description="Permit rollback only where backend policy marks it safe and authorized." checked={configuration.auto_rollback_enabled} onChange={(checked) => onChange("auto_rollback_enabled", checked)} />
+          </div>
+        </fieldset>
+
+        <div className="mt-5 flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-foreground-muted">
+            Last saved: {configuration.updated_at ? formatDate(configuration.updated_at) : "not recorded"}
+          </p>
+          <button
+            type="submit"
+            disabled={saving || !configuration.branch.trim()}
+            className="ops-primary sm:shrink-0"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <Save size={15} aria-hidden="true" />}
+            {saving ? "Saving…" : "Save pipeline policy"}
+          </button>
+        </div>
+      </section>
+    </form>
+  );
+}
+
+function PipelineToggle({
+  id,
+  label,
+  description,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className="flex min-h-20 cursor-pointer items-start gap-3 rounded-lg border border-border bg-surface-subtle px-3 py-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary/30 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
+    >
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+      />
+      <span>
+        <span className="block text-xs font-semibold text-foreground">{label}</span>
+        <span className="mt-1 block text-xs leading-5 text-foreground-muted">{description}</span>
+      </span>
+    </label>
   );
 }
 
@@ -563,9 +1064,9 @@ function AzureSettings({
       <section className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-base font-semibold text-foreground">Azure App Service target</h2>
+            <h2 className="text-base font-semibold text-foreground">Azure deployment targets</h2>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-foreground-muted">
-              ZeroOps validates the service principal and resource group with Azure before saving the connection.
+              App Service remains the active managed-web target. You may record an existing AKS cluster for Kubernetes readiness checks, but AKS release mutation is currently blocked.
             </p>
           </div>
           <span
@@ -664,14 +1165,24 @@ function AzureSettings({
               required
             />
             <SettingsField
+              id="azure-aks-cluster"
+              label="Existing AKS cluster (optional)"
+              value={form.aks_cluster_name}
+              onChange={(value) => onChange("aks_cluster_name", value)}
+              autoComplete="off"
+            />
+            <SettingsField
               id="azure-prefix"
               label="Application name prefix (optional)"
               value={form.namespace_prefix}
               onChange={(value) => onChange("namespace_prefix", value)}
               autoComplete="off"
-              className="sm:col-span-2"
             />
           </div>
+
+          <p className="rounded-lg border border-warning/25 bg-warning-subtle px-3 py-2.5 text-xs leading-5 text-foreground-muted">
+            Saving an AKS cluster name records an existing target only. This form does not create a cluster or prove workload readiness. AKS deployment remains unavailable until hardened Service/Ingress verification is implemented.
+          </p>
 
           <div className="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-foreground-muted">
@@ -865,7 +1376,7 @@ function VariablesSettings({
           </div>
 
           <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface-subtle p-3 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex min-h-10 cursor-pointer items-center gap-3">
+            <label className="flex min-h-11 cursor-pointer items-center gap-3">
               <input
                 type="checkbox"
                 checked={isSecret}
@@ -874,7 +1385,7 @@ function VariablesSettings({
               />
               <span>
                 <span className="block text-xs font-semibold text-foreground">Sensitive value</span>
-                <span className="mt-0.5 block text-[11px] text-foreground-muted">
+                <span className="mt-0.5 block text-xs text-foreground-muted">
                   {isSecret ? "Store in Azure Key Vault" : "Store as plain database value"}
                 </span>
               </span>
@@ -946,14 +1457,14 @@ function VariablesSettings({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="break-all text-xs font-semibold text-foreground">{variable.key}</code>
-                      <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-foreground-muted">
+                      <span className="rounded-full border border-border bg-surface-subtle px-2.5 py-1 text-xs font-medium text-foreground-muted">
                         {variable.is_secret ? "Key Vault secret" : "Plain value"}
                       </span>
                     </div>
-                    <p className="mt-1 truncate font-mono text-[11px] text-foreground-subtle">
+                    <p className="mt-1 truncate font-mono text-xs text-foreground-subtle">
                       {variable.is_secret ? "Value is masked and cannot be retrieved" : variable.value}
                     </p>
-                    <p className="mt-1 text-[10px] text-foreground-subtle">
+                    <p className="mt-1 text-xs text-foreground-subtle">
                       Added {formatDate(variable.created_at)}
                     </p>
                   </div>
@@ -962,7 +1473,7 @@ function VariablesSettings({
                     onClick={() => onRequestDelete(variable)}
                     disabled={Boolean(deletingVariableId)}
                     aria-label={`Delete ${variable.key}`}
-                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-border px-3 text-xs font-medium text-danger transition-colors hover:border-danger/30 hover:bg-danger-subtle disabled:cursor-not-allowed disabled:opacity-50 sm:shrink-0"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-border px-3 text-xs font-medium text-danger transition-colors hover:border-danger/30 hover:bg-danger-subtle disabled:cursor-not-allowed disabled:opacity-50 sm:shrink-0"
                   >
                     <Trash2 size={14} aria-hidden="true" />
                     Delete
@@ -998,7 +1509,7 @@ function VariablesSettings({
                             type="button"
                             onClick={onConfirmDelete}
                             disabled={deletingVariableId === variable.id}
-                            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-danger px-3 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-danger px-3 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {deletingVariableId === variable.id ? (
                               <Loader2 size={14} className="animate-spin" aria-hidden="true" />

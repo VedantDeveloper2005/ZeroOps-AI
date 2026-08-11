@@ -44,7 +44,7 @@ function formatDeployment(deployment: Deployment) {
 
 export default function LogsPage() {
   return (
-    <Suspense fallback={<LogsLoading />}>
+    <Suspense fallback={<LogsPageLoading />}>
       <LogsWorkspace />
     </Suspense>
   );
@@ -203,15 +203,22 @@ function LogsWorkspace() {
     });
   };
 
-  if (projectsLoading) return <LogsLoading />;
+  if (projectsLoading) return <LogsPageLoading />;
 
   if (projects.length === 0) {
     return (
-      <StatePanel
-        title="No deployment logs"
-        description="Connect a project and start a deployment before reviewing build and runtime output."
-        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
-      />
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Diagnostics"
+          title="Deployment logs"
+          description="Persisted worker output is shown only for recorded deployment runs."
+        />
+        <StatePanel
+          title="No deployment logs"
+          description="Connect a project and start a deployment before reviewing build and runtime output."
+          action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+        />
+      </div>
     );
   }
 
@@ -237,30 +244,36 @@ function LogsWorkspace() {
         }
       />
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <ProjectSelector projects={projects} value={selectedProjectId} onChange={setSelectedProjectId} />
-        <label>
-          <span className="mb-1.5 block text-xs font-medium text-foreground-muted">Deployment</span>
-          <select
-            value={selectedDeploymentId}
-            onChange={(event) => setSelectedDeploymentId(event.target.value)}
-            disabled={deployments.length === 0}
-            className="min-h-11 w-full rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60"
-          >
-            {deployments.length === 0 ? (
-              <option value="">No deployments recorded</option>
-            ) : (
-              deployments.map((deployment) => (
-                <option key={deployment.id} value={deployment.id}>
-                  {formatDeployment(deployment)}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
-      </div>
+      <section aria-label="Log context" className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
+        <div className="grid gap-4 md:grid-cols-2">
+          <ProjectSelector projects={projects} value={selectedProjectId} onChange={setSelectedProjectId} />
+          <label>
+            <span className="mb-1.5 block text-xs font-medium text-foreground-muted">Deployment</span>
+            <select
+              value={selectedDeploymentId}
+              onChange={(event) => setSelectedDeploymentId(event.target.value)}
+              disabled={deployments.length === 0}
+              className="min-h-11 w-full rounded-lg border border-border bg-surface-subtle px-3 text-sm font-medium text-foreground outline-none transition-colors focus:border-primary focus:bg-card focus:ring-2 focus:ring-primary/15 disabled:opacity-60"
+            >
+              {deployments.length === 0 ? (
+                <option value="">No deployments recorded</option>
+              ) : (
+                deployments.map((deployment) => (
+                  <option key={deployment.id} value={deployment.id}>
+                    {formatDeployment(deployment)}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+        </div>
 
-      {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+        {selectedProject && (
+          <div className="mt-5">
+            <ProjectTabs projectId={selectedProject.id} />
+          </div>
+        )}
+      </section>
 
       {error ? (
         <StatePanel
@@ -281,7 +294,7 @@ function LogsWorkspace() {
         <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
           <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
             <label className="flex min-h-11 flex-1 items-center gap-2 rounded-lg border border-border bg-surface-subtle px-3">
-              <Search size={15} className="text-foreground-muted" />
+              <Search size={15} className="text-foreground-muted" aria-hidden="true" />
               <span className="sr-only">Search deployment logs</span>
               <input
                 value={search}
@@ -297,7 +310,7 @@ function LogsWorkspace() {
                   type="button"
                   aria-pressed={activeLevels.has(level)}
                   onClick={() => toggleLevel(level)}
-                  className={`min-h-10 rounded-lg border px-3 text-[10px] font-semibold uppercase tracking-wide ${
+                  className={`min-h-11 rounded-lg border px-3 text-xs font-semibold capitalize transition-colors ${
                     activeLevels.has(level)
                       ? "border-primary/25 bg-primary-subtle text-primary"
                       : "border-border bg-card text-foreground-muted"
@@ -309,7 +322,10 @@ function LogsWorkspace() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-subtle px-4 py-3 text-[11px] text-foreground-muted">
+          <div
+            aria-live="polite"
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-subtle px-4 py-3 text-xs text-foreground-muted"
+          >
             <span>{filteredLogs.length} of {logs.length} recorded entries</span>
             <span>
               {streamState === "connected"
@@ -322,7 +338,7 @@ function LogsWorkspace() {
             </span>
           </div>
 
-          <div className="max-h-[560px] min-h-64 overflow-auto bg-[hsl(222_47%_7%)] p-3 font-mono text-[11px] leading-6 text-[hsl(210_40%_92%)] sm:p-4">
+          <div className="max-h-[560px] min-h-64 overflow-auto bg-[hsl(222_47%_7%)] p-3 font-mono text-xs leading-6 text-[hsl(210_40%_92%)] sm:p-4">
             {filteredLogs.length === 0 ? (
               <div className="flex min-h-56 flex-col items-center justify-center text-center text-[hsl(215_18%_68%)]">
                 <FileText size={24} />
@@ -334,7 +350,7 @@ function LogsWorkspace() {
                 return (
                   <div
                     key={`${logKey(log)}:${index}`}
-                    className="grid gap-x-3 rounded px-2 py-0.5 hover:bg-white/5 sm:grid-cols-[86px_64px_1fr]"
+                    className="grid gap-x-3 rounded px-2 py-1 transition-colors hover:bg-white/5 sm:grid-cols-[86px_64px_1fr]"
                   >
                     <span className="text-[hsl(215_14%_58%)]">
                       {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}
@@ -372,6 +388,19 @@ function LogsLoading({ compact = false }: { compact?: boolean }) {
     >
       <Loader2 size={18} className="animate-spin text-primary" />
       Loading deployment logs…
+    </div>
+  );
+}
+
+function LogsPageLoading() {
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Diagnostics"
+        title="Deployment logs"
+        description="Persisted worker output is shown only for recorded deployment runs."
+      />
+      <LogsLoading />
     </div>
   );
 }

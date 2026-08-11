@@ -59,6 +59,65 @@ def assert_http_error(coroutine, expected_status):
     return error.value
 
 
+def test_production_startup_refuses_unavailable_key_vault_for_legacy_secret_migration(
+    monkeypatch,
+):
+    class NoSession:
+        def __call__(self):
+            raise AssertionError("The database must not be opened without the production secret store.")
+
+    monkeypatch.setattr(main.config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(main.vault, "HAS_AZURE_KV", False)
+    monkeypatch.setattr(main, "AsyncSessionLocal", NoSession())
+
+    with pytest.raises(RuntimeError, match="Key Vault is unavailable"):
+        asyncio.run(main.migrate_legacy_environment_secrets())
+
+
+def test_stale_ai_investigation_is_finalized_as_unavailable(monkeypatch):
+    record = SimpleNamespace(
+        status="running",
+        model_provider="pending",
+        model_name="pending",
+        error_code=None,
+        redacted_error=None,
+        completed_at=None,
+    )
+
+    class Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [record]
+
+    class Session:
+        commits = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def execute(self, _query):
+            return Result()
+
+        async def commit(self):
+            self.commits += 1
+
+    session = Session()
+    monkeypatch.setattr(main, "AsyncSessionLocal", lambda: session)
+
+    count = asyncio.run(main.reconcile_stale_ai_investigations())
+
+    assert count == 1
+    assert session.commits == 1
+    assert record.status == "unavailable"
+    assert record.error_code == "AI_INVESTIGATION_INTERRUPTED"
+    assert record.completed_at is not None
+
+
 def test_unsupported_paid_operation_is_rejected_before_database_or_checkout():
     class NoTouchSession:
         async def execute(self, _):

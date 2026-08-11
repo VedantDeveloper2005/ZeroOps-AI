@@ -17,6 +17,21 @@ def test_repository_name_rejects_urls_and_path_traversal():
             git.get_repo_path(invalid_name)
 
 
+def test_git_environment_does_not_inherit_worker_credentials(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://credentialed-worker")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "azure-secret")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+
+    environment = git._git_environment("github-token")
+
+    assert "DATABASE_URL" not in environment
+    assert "AZURE_CLIENT_SECRET" not in environment
+    assert all("github-token" not in str(value) for value in environment.values())
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert environment["GIT_LFS_SKIP_SMUDGE"] == "1"
+
+
 def test_safe_extract_rejects_archive_path_traversal(tmp_path):
     archive_data = io.BytesIO()
     with zipfile.ZipFile(archive_data, "w") as archive:
@@ -161,6 +176,8 @@ def test_clone_checks_out_the_resolved_commit_detached(monkeypatch, tmp_path):
 
     def fake_run(command, **_kwargs):
         commands.append(command)
+        if command[1] == "init":
+            os.makedirs(command[2], exist_ok=True)
         if command[-2:] == ["rev-parse", "HEAD"]:
             return Result(commit_sha + "\n")
         return Result()
@@ -209,3 +226,33 @@ def test_uploaded_source_is_copied_into_disposable_deployment_workspace(monkeypa
     git.cleanup_workspace(deployment_path)
     assert not os.path.exists(deployment_path)
     assert (source_root / "application.py").is_file()
+
+
+def test_uploaded_source_rejects_symbolic_links_before_copy(monkeypatch, tmp_path):
+    managed_root = tmp_path / "managed"
+    source_root = tmp_path / "uploaded-source"
+    source_root.mkdir()
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("must not be scanned", encoding="utf-8")
+    link = source_root / "linked-secret.txt"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symbolic links are unavailable in this test environment")
+    monkeypatch.setattr(git, "WORKSPACE_DIR", str(managed_root))
+
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        git.prepare_local_source(str(source_root), "deployment-upload")
+
+    assert not (managed_root / "deployments" / "deployment-upload").exists()
+
+
+def test_source_tree_limits_are_enforced_before_downstream_tools(monkeypatch, tmp_path):
+    source_root = tmp_path / "repository"
+    source_root.mkdir()
+    (source_root / "one.txt").write_text("one", encoding="utf-8")
+    (source_root / "two.txt").write_text("two", encoding="utf-8")
+    monkeypatch.setattr(git.config, "MAX_UPLOAD_ARCHIVE_FILES", 1)
+
+    with pytest.raises(RuntimeError, match="too many filesystem entries"):
+        git._validate_source_tree(str(source_root))

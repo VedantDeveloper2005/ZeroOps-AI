@@ -1,15 +1,19 @@
 import logging
+import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy.future import select
 
 try:
     from backend import models
-    from backend.services import azure_connector, risk_classifier
+    from backend.services import azure_connector, github_oauth, risk_classifier
+    from backend.services.redaction import redact_sensitive_text
 except ImportError:
     import models
-    from services import azure_connector, risk_classifier
+    from services import azure_connector, github_oauth, risk_classifier
+    from services.redaction import redact_sensitive_text
 
 logger = logging.getLogger("zeroops.action_gateway")
 
@@ -25,6 +29,30 @@ ACTION_DISPATCHER = {
     "list_resources": azure_connector.list_resources,
     "inject_dependency": azure_connector.inject_dependency_impl
 }
+
+
+def encrypt_action_parameters(parameters: dict[str, Any]) -> dict[str, str]:
+    """Encrypt executor-only parameters before they reach the database."""
+
+    serialized = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+    return {
+        "version": "fernet-v1",
+        "ciphertext": github_oauth.encrypt_token(serialized),
+    }
+
+
+def decrypt_action_parameters(payload: Any) -> dict[str, Any]:
+    """Decrypt a current payload; legacy plaintext records fail closed."""
+
+    if not isinstance(payload, dict) or payload.get("version") != "fernet-v1":
+        raise ValueError("Pending action parameters use an unsupported or insecure storage format.")
+    ciphertext = payload.get("ciphertext")
+    if not isinstance(ciphertext, str) or not ciphertext:
+        raise ValueError("Pending action parameters are unavailable.")
+    decoded = json.loads(github_oauth.decrypt_token(ciphertext))
+    if not isinstance(decoded, dict):
+        raise ValueError("Pending action parameters are invalid.")
+    return decoded
 
 def redact_secrets(data: Any) -> Any:
     """Recursively redacts secret-like values from parameter structures."""
@@ -76,7 +104,9 @@ async def execute_azure_action(
             user_id=user_id,
             action_type=action_type,
             parameters=clean_params,
-            raw_parameters=parameters,  # Unredacted copy for SDK execution
+            # The compatibility column stores ciphertext only.  Raw values
+            # exist in memory for the active request and are never persisted.
+            raw_parameters=encrypt_action_parameters(parameters),
             risk_tier=risk_tier.value,
             status=models.ApprovalStatus.pending.value
         )
@@ -102,10 +132,13 @@ async def execute_azure_action(
         try:
             res = await func(user_id, parameters, db)
         except Exception as e:
-            res = {"success": False, "error": str(e)}
+            res = {"success": False, "error": redact_sensitive_text(str(e), maximum_length=2_000)}
             
     audit_entry.result_status = models.AuditResultStatus.success.value if res.get("success") else models.AuditResultStatus.failed.value
-    audit_entry.result_detail = res.get("detail") or res.get("error")
+    audit_entry.result_detail = redact_sensitive_text(
+        res.get("detail") or res.get("error") or "Action completed without detail.",
+        maximum_length=2_000,
+    )
     await db.commit()
     
     return res
@@ -135,7 +168,8 @@ async def decide_pending_action(
     if decision == "denied":
         pending.status = models.ApprovalStatus.denied.value
         pending.decided_by = decided_by
-        pending.decided_at = models.datetime.utcnow()
+        pending.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        pending.raw_parameters = {}
         
         if audit:
             audit.approval_status = models.ApprovalStatus.denied.value
@@ -149,7 +183,7 @@ async def decide_pending_action(
     elif decision == "approved":
         pending.status = models.ApprovalStatus.approved.value
         pending.decided_by = decided_by
-        pending.decided_at = models.datetime.utcnow()
+        pending.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
         
         if audit:
             audit.approval_status = models.ApprovalStatus.approved.value
@@ -157,16 +191,21 @@ async def decide_pending_action(
             
         await db.commit()
         
-        # Execute the action now
+        # Decrypt only for the approved execution and erase the ciphertext
+        # after the attempt. Legacy plaintext approvals are intentionally
+        # rejected rather than replayed insecurely.
         logger.info(f"Approved action '{pending.action_type}' (Approval: {pending.id}) executing.")
         func = ACTION_DISPATCHER.get(pending.action_type)
+        encrypted_parameters = pending.raw_parameters
+        pending.raw_parameters = {}
         if not func:
             res = {"success": False, "error": f"Unsupported action type: {pending.action_type}"}
         else:
             try:
-                res = await func(pending.user_id, pending.raw_parameters, db)
+                execution_parameters = decrypt_action_parameters(encrypted_parameters)
+                res = await func(pending.user_id, execution_parameters, db)
             except Exception as e:
-                res = {"success": False, "error": str(e)}
+                res = {"success": False, "error": redact_sensitive_text(str(e), maximum_length=2_000)}
                 
         # Re-fetch audit to avoid session desync
         result_audit = await db.execute(
@@ -175,7 +214,10 @@ async def decide_pending_action(
         audit = result_audit.scalars().first()
         if audit:
             audit.result_status = models.AuditResultStatus.success.value if res.get("success") else models.AuditResultStatus.failed.value
-            audit.result_detail = res.get("detail") or res.get("error")
+            audit.result_detail = redact_sensitive_text(
+                res.get("detail") or res.get("error") or "Action completed without detail.",
+                maximum_length=2_000,
+            )
             
         await db.commit()
         return res

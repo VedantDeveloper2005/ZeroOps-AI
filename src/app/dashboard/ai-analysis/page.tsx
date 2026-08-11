@@ -4,8 +4,10 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  ArrowRight,
   Box,
   Braces,
+  ChevronDown,
   Clock3,
   Code2,
   FileSearch,
@@ -121,15 +123,29 @@ function AnalysisWorkspace() {
     }
   };
 
+  const selectProject = (projectId: string) => {
+    setAnalyses([]);
+    setError(null);
+    setLoading(true);
+    setSelectedProjectId(projectId);
+  };
+
   if (projectsLoading) return <AnalysisLoading />;
 
   if (projects.length === 0) {
     return (
-      <StatePanel
-        title="No repository to analyze"
-        description="Connect GitHub or upload a ZIP so ZeroOps can inspect real source files."
-        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
-      />
+      <div>
+        <PageHeader
+          eyebrow="Project intelligence"
+          title="Repository analysis"
+          description="Inspect saved repository evidence without implying a live runtime audit or complete vulnerability scan."
+        />
+        <StatePanel
+          title="No repository to analyze"
+          description="Connect GitHub or upload a ZIP so ZeroOps can inspect real source files."
+          action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+        />
+      </div>
     );
   }
 
@@ -155,9 +171,9 @@ function AnalysisWorkspace() {
               type="button"
               onClick={() => void runAnalysis()}
               disabled={running || !selectedProjectId}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
             >
-              <RefreshCw size={15} className={running ? "animate-spin" : ""} />
+              <RefreshCw size={15} className={running ? "animate-spin motion-reduce:animate-none" : ""} />
               {running ? "Analyzing…" : latest ? "Run again" : "Run analysis"}
             </button>
           </>
@@ -167,11 +183,46 @@ function AnalysisWorkspace() {
       <ProjectSelector
         projects={projects}
         value={selectedProjectId}
-        onChange={setSelectedProjectId}
+        onChange={selectProject}
         className="block max-w-sm"
       />
 
       {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+
+      {selectedProject && !loading && (
+        <section aria-label="Analysis workflow context" className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="grid gap-px bg-border sm:grid-cols-3">
+            <div className="bg-card px-4 py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">Source snapshot</p>
+              <p className="mt-1 truncate text-sm font-semibold text-foreground">{selectedProject.name}</p>
+              <p className="mt-1 truncate font-mono text-[11px] text-foreground-muted">
+                {selectedProject.branch || "Branch not recorded"}
+              </p>
+            </div>
+            <div className="bg-card px-4 py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">Latest saved result</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {latest ? formatTimestamp(latest.created_at) : "Not recorded"}
+              </p>
+              <p className="mt-1 text-[11px] text-foreground-muted">{analyses.length} durable {analyses.length === 1 ? "run" : "runs"}</p>
+            </div>
+            <div className="bg-primary-subtle px-4 py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">Next review gate</p>
+              {latest ? (
+                <Link
+                  href={`/dashboard/infrastructure?project=${selectedProject.id}`}
+                  className="mt-1 inline-flex min-h-8 items-center gap-1.5 text-sm font-semibold text-primary hover:text-primary-hover"
+                >
+                  Review deployment plan <ArrowRight size={13} aria-hidden="true" />
+                </Link>
+              ) : (
+                <p className="mt-1 text-sm font-semibold text-foreground-muted">Run analysis first</p>
+              )}
+              <p className="mt-1 text-[11px] text-foreground-muted">Analysis does not approve or deploy changes.</p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {error && (
         <StatePanel
@@ -236,7 +287,7 @@ function AnalysisWorkspace() {
                   ["Build command", latest.build_commands],
                   ["Start command", latest.start_commands],
                   ["Detected port", latest.port],
-                  ["Deployment strategy", latest.deployment_strategy],
+                  ["Detected deployment shape", latest.deployment_strategy],
                   ["Monorepo structure", latest.monorepo_structure],
                 ].map(([label, value]) => (
                   <div key={label} className="grid gap-1 px-4 py-3 sm:grid-cols-[160px_1fr] sm:gap-4">
@@ -276,26 +327,36 @@ function AnalysisWorkspace() {
             </section>
           </div>
 
-          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
-            <div className="flex items-center gap-2">
-              <Play size={17} className="text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">Detected dependencies</h2>
+          <details className="group rounded-xl border border-border bg-card shadow-sm">
+            <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary-subtle text-primary">
+                <Play size={16} aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-foreground">Detected dependencies</span>
+                <span className="mt-0.5 block text-xs text-foreground-muted">
+                  {latest.dependencies.length} names stored with this analysis
+                </span>
+              </span>
+              <ChevronDown size={16} className="shrink-0 text-foreground-subtle transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-border px-5 py-4">
+              {latest.dependencies.length > 0 ? (
+                <ul className="flex flex-wrap gap-2">
+                  {latest.dependencies.map((dependency) => (
+                    <li
+                      key={dependency}
+                      className="rounded-md border border-border bg-surface-subtle px-2.5 py-1.5 font-mono text-[11px] text-foreground"
+                    >
+                      {dependency}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-foreground-muted">No dependency names were saved.</p>
+              )}
             </div>
-            {latest.dependencies.length > 0 ? (
-              <ul className="mt-4 flex flex-wrap gap-2">
-                {latest.dependencies.map((dependency) => (
-                  <li
-                    key={dependency}
-                    className="rounded-md border border-border bg-surface-subtle px-2.5 py-1.5 font-mono text-[11px] text-foreground"
-                  >
-                    {dependency}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-3 text-xs text-foreground-muted">No dependency names were saved.</p>
-            )}
-          </section>
+          </details>
         </>
       )}
     </div>
@@ -310,7 +371,7 @@ function AnalysisLoading({ compact = false }: { compact?: boolean }) {
         compact ? "min-h-52" : "min-h-[55vh]"
       }`}
     >
-      <Loader2 size={18} className="animate-spin text-primary" />
+      <Loader2 size={18} className="animate-spin text-primary motion-reduce:animate-none" />
       Loading saved analysis…
     </div>
   );

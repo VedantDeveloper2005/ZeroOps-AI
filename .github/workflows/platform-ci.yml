@@ -7,12 +7,23 @@ on:
     paths:
       - "ai-specs/**"
       - "backend/contracts/**"
-      - "backend/services/model_gateway.py"
-      - "backend/services/terraform_ai.py"
+      - "backend/migrations/**"
+      - "backend/routes/devsecops.py"
+      - "backend/services/**"
+      - "backend/tests/**"
       - "functions/**"
       - "infra/**"
       - "scripts/package_functions.py"
+      - "scripts/dashboard-contract.test.mjs"
+      - "src/app/dashboard/**"
+      - "src/components/dashboard/**"
+      - "src/components/ui/**"
+      - "src/lib/NotificationContext.tsx"
+      - "src/app/globals.css"
+      - "package.json"
+      - "package-lock.json"
       - "worker/**"
+      - ".dockerignore"
       - ".github/workflows/platform-ci.yml"
   push:
     branches:
@@ -20,30 +31,62 @@ on:
     paths:
       - "ai-specs/**"
       - "backend/contracts/**"
-      - "backend/services/model_gateway.py"
-      - "backend/services/terraform_ai.py"
+      - "backend/migrations/**"
+      - "backend/routes/devsecops.py"
+      - "backend/services/**"
+      - "backend/tests/**"
       - "functions/**"
       - "infra/**"
       - "scripts/package_functions.py"
+      - "scripts/dashboard-contract.test.mjs"
+      - "src/app/dashboard/**"
+      - "src/components/dashboard/**"
+      - "src/components/ui/**"
+      - "src/lib/NotificationContext.tsx"
+      - "src/app/globals.css"
+      - "package.json"
+      - "package-lock.json"
       - "worker/**"
+      - ".dockerignore"
       - ".github/workflows/platform-ci.yml"
   workflow_dispatch:
+
+concurrency:
+  group: zeroops-platform-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  dashboard-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.x"
+
+      - name: Validate dashboard truth and accessibility contracts
+        run: npm run test:dashboard
+
   contracts-and-packages:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       APP_ENV: test
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
           cache: pip
@@ -76,6 +119,26 @@ jobs:
       - name: Validate VMSS execution gates
         run: python -m unittest discover -s worker/tests -v
 
+      - name: Validate DevSecOps domain and runtime services
+        run: |
+          python -m pytest \
+            backend/tests/test_aks_deployment.py \
+            backend/tests/test_app_service_endpoint_verification.py \
+            backend/tests/test_change_analysis_retry_migration.py \
+            backend/tests/test_change_detection.py \
+            backend/tests/test_devsecops_domain_models.py \
+            backend/tests/test_devsecops_routes.py \
+            backend/tests/test_git_security.py \
+            backend/tests/test_incident_detection.py \
+            backend/tests/test_pipeline_evidence.py \
+            backend/tests/test_pipeline_records_runtime.py \
+            backend/tests/test_pipeline_runtime.py \
+            backend/tests/test_pipeline_state.py \
+            backend/tests/test_repository_checks.py \
+            backend/tests/test_repository_snapshot.py \
+            backend/tests/test_secure_pending_approval_migration.py \
+            backend/tests/test_security_scanner.py
+
       - name: Build deterministic Function packages
         run: |
           python scripts/package_functions.py --output dist/functions-first
@@ -97,7 +160,7 @@ jobs:
           done
 
       - name: Publish immutable Function packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: zeroops-function-packages-${{ github.sha }}
           path: |
@@ -108,13 +171,14 @@ jobs:
 
   terraform:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3.1.2
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.15.8"
           terraform_wrapper: false
@@ -131,7 +195,7 @@ jobs:
         run: terraform validate -no-color
 
       - name: Set up TFLint
-        uses: terraform-linters/setup-tflint@v6.2.2
+        uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6.2.2
         with:
           tflint_version: "v0.64.0"
 
@@ -141,7 +205,7 @@ jobs:
           tflint --chdir=infra --recursive
 
       - name: Set up Checkov
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
           cache: pip
@@ -158,12 +222,13 @@ jobs:
 
   runner-image:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs:
       - contracts-and-packages
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build immutable runner image
         run: |
@@ -180,3 +245,31 @@ jobs:
               --format '{{json .Config.Cmd}}'
           )"
           test "$entrypoint" = '["python","-m","worker.vmss_main"]'
+
+  pipeline-worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs:
+      - contracts-and-packages
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build deterministic pipeline worker image
+        run: |
+          docker build \
+            --file worker/Dockerfile.pipeline \
+            --tag zeroops-pipeline-worker:${GITHUB_SHA} \
+            .
+
+      - name: Verify pipeline worker tools and entry point
+        run: |
+          entrypoint="$(
+            docker image inspect \
+              zeroops-pipeline-worker:${GITHUB_SHA} \
+              --format '{{json .Config.Cmd}}'
+          )"
+          test "$entrypoint" = '["python","-m","worker.main"]'
+          docker run --rm --entrypoint sh zeroops-pipeline-worker:${GITHUB_SHA} -c \
+            'terraform version && tflint --version && checkov --version && semgrep --version && gitleaks version && trivy --version && kubeconform -v && syft version && helm version --short && kubectl version --client=true'

@@ -29,41 +29,48 @@ type StatePanelProps = {
   };
   compact?: boolean;
   className?: string;
+  headingLevel?: 1 | 2 | 3;
 };
 
 const variants: Record<
   StatePanelVariant,
-  { icon: LucideIcon; iconClassName: string; panelClassName: string }
+  { icon: LucideIcon; iconClassName: string; panelClassName: string; iconSurface: string }
 > = {
   empty: {
     icon: CircleOff,
     iconClassName: "text-foreground-subtle",
     panelClassName: "border-border bg-card",
+    iconSurface: "border-border bg-surface-subtle",
   },
   error: {
     icon: AlertCircle,
     iconClassName: "text-danger",
-    panelClassName: "border-danger/25 bg-danger-subtle",
+    panelClassName: "border-danger/25 bg-card",
+    iconSurface: "border-danger/20 bg-danger-subtle",
   },
   info: {
     icon: Info,
     iconClassName: "text-info",
-    panelClassName: "border-info/25 bg-info-subtle",
+    panelClassName: "border-info/25 bg-card",
+    iconSurface: "border-info/20 bg-info-subtle",
   },
   success: {
     icon: CheckCircle2,
     iconClassName: "text-success",
-    panelClassName: "border-success/25 bg-success-subtle",
+    panelClassName: "border-success/25 bg-card",
+    iconSurface: "border-success/20 bg-success-subtle",
   },
   permission: {
     icon: LockKeyhole,
-    iconClassName: "text-warning",
-    panelClassName: "border-warning/25 bg-warning-subtle",
+    iconClassName: "text-warning-hover",
+    panelClassName: "border-warning/25 bg-card",
+    iconSurface: "border-warning/20 bg-warning-subtle",
   },
   disconnected: {
     icon: PlugZap,
-    iconClassName: "text-warning",
-    panelClassName: "border-warning/25 bg-warning-subtle",
+    iconClassName: "text-warning-hover",
+    panelClassName: "border-warning/25 bg-card",
+    iconSurface: "border-warning/20 bg-warning-subtle",
   },
 };
 
@@ -74,25 +81,28 @@ export function StatePanel({
   action,
   compact = false,
   className,
+  headingLevel = 2,
 }: StatePanelProps) {
   const config = variants[variant];
   const Icon = config.icon;
-  const actionClassName =
-    "mt-4 inline-flex min-h-10 items-center justify-center rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-surface-raised";
+  const Heading = `h${headingLevel}` as "h1" | "h2" | "h3";
+  const actionClassName = "ops-secondary mt-5";
 
   return (
     <div
       role={variant === "error" ? "alert" : variant === "success" ? "status" : undefined}
       className={cn(
-        "rounded-xl border text-center",
-        compact ? "px-5 py-6" : "px-6 py-10",
+        "rounded-2xl border text-center shadow-sm",
+        compact ? "px-5 py-6" : "px-6 py-10 sm:px-10 sm:py-12",
         config.panelClassName,
         className,
       )}
     >
-      <Icon size={compact ? 22 : 28} className={cn("mx-auto", config.iconClassName)} />
-      <h2 className="mt-3 text-sm font-semibold text-foreground">{title}</h2>
-      <p className="mx-auto mt-1.5 max-w-lg text-xs leading-5 text-foreground-muted">{description}</p>
+      <span className={cn("mx-auto grid place-items-center rounded-xl border", compact ? "h-10 w-10" : "h-12 w-12", config.iconSurface)}>
+        <Icon size={compact ? 20 : 23} className={config.iconClassName} aria-hidden="true" />
+      </span>
+      <Heading className={cn("mt-4 font-semibold tracking-[-0.02em] text-foreground", headingLevel === 1 ? "text-xl sm:text-2xl" : "text-base")}>{title}</Heading>
+      <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-foreground-muted">{description}</p>
       {action?.href ? (
         <Link href={action.href} className={actionClassName}>
           {action.label}

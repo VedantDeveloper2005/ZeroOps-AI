@@ -40,10 +40,12 @@ RUN python3 -m venv /opt/zeroops \
     && checkov --version
 
 RUN useradd --create-home --uid 10001 --shell /sbin/nologin zeroops \
-    && install -d -o zeroops -g zeroops -m 0700 /app /work
+    && install -d -o root -g root -m 0755 /app \
+    && install -d -o zeroops -g zeroops -m 0700 /work
 
 WORKDIR /app
-COPY --chown=zeroops:zeroops worker /app/worker
+COPY --chown=root:root worker /app/worker
+RUN chmod -R a-w /app
 
 USER zeroops
 EXPOSE 8085

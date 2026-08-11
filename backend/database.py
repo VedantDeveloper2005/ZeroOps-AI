@@ -203,6 +203,18 @@ async def run_migrations():
             STATEMENTS as MIGRATION_004_STATEMENTS,
             VERSION as MIGRATION_004_VERSION,
         )
+        from backend.migrations.v005_devsecops_domain import (
+            STATEMENTS as MIGRATION_005_STATEMENTS,
+            VERSION as MIGRATION_005_VERSION,
+        )
+        from backend.migrations.v006_secure_pending_approvals import (
+            STATEMENTS as MIGRATION_006_STATEMENTS,
+            VERSION as MIGRATION_006_VERSION,
+        )
+        from backend.migrations.v007_change_analysis_retry_history import (
+            STATEMENTS as MIGRATION_007_STATEMENTS,
+            VERSION as MIGRATION_007_VERSION,
+        )
     except ImportError:
         from migrations.v001_tenant_history import (
             STATEMENTS as MIGRATION_001_STATEMENTS,
@@ -219,6 +231,18 @@ async def run_migrations():
         from migrations.v004_auth_identity_integrity import (
             STATEMENTS as MIGRATION_004_STATEMENTS,
             VERSION as MIGRATION_004_VERSION,
+        )
+        from migrations.v005_devsecops_domain import (
+            STATEMENTS as MIGRATION_005_STATEMENTS,
+            VERSION as MIGRATION_005_VERSION,
+        )
+        from migrations.v006_secure_pending_approvals import (
+            STATEMENTS as MIGRATION_006_STATEMENTS,
+            VERSION as MIGRATION_006_VERSION,
+        )
+        from migrations.v007_change_analysis_retry_history import (
+            STATEMENTS as MIGRATION_007_STATEMENTS,
+            VERSION as MIGRATION_007_VERSION,
         )
 
     async with async_engine.begin() as conn:
@@ -237,6 +261,9 @@ async def run_migrations():
             (MIGRATION_002_VERSION, MIGRATION_002_STATEMENTS),
             (MIGRATION_003_VERSION, MIGRATION_003_STATEMENTS),
             (MIGRATION_004_VERSION, MIGRATION_004_STATEMENTS),
+            (MIGRATION_005_VERSION, MIGRATION_005_STATEMENTS),
+            (MIGRATION_006_VERSION, MIGRATION_006_STATEMENTS),
+            (MIGRATION_007_VERSION, MIGRATION_007_STATEMENTS),
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(

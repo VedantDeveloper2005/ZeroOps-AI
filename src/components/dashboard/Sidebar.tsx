@@ -6,13 +6,21 @@ import {
   Activity,
   Bot,
   Boxes,
+  CircleDollarSign,
   ChevronLeft,
   ChevronRight,
   FolderKanban,
+  Gauge,
   LayoutDashboard,
   ListChecks,
+  Logs,
+  Network,
   Plus,
+  ReceiptText,
   Settings,
+  ShieldCheck,
+  Siren,
+  UserRound,
   X,
 } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
@@ -27,59 +35,44 @@ type SidebarProps = {
 
 const navigation = [
   {
-    label: "Overview",
-    href: "/dashboard",
-    icon: LayoutDashboard,
-    matches: (pathname: string) => pathname === "/dashboard",
+    label: "Workspace",
+    items: [
+      { label: "Overview", href: "/dashboard", icon: LayoutDashboard, matches: (path: string) => path === "/dashboard" },
+      { label: "Projects", href: "/dashboard/projects", icon: FolderKanban, matches: (path: string) => path.startsWith("/dashboard/projects") || path.startsWith("/dashboard/apps/") },
+    ],
   },
   {
-    label: "Projects",
-    href: "/dashboard/projects",
-    icon: FolderKanban,
-    matches: (pathname: string) =>
-      pathname.startsWith("/dashboard/projects") ||
-      pathname.startsWith("/dashboard/repositories") ||
-      pathname.startsWith("/dashboard/apps/") ||
-      pathname.startsWith("/dashboard/ai-analysis") ||
-      pathname.startsWith("/dashboard/infrastructure") ||
-      pathname.startsWith("/dashboard/security") ||
-      pathname.startsWith("/dashboard/logs") ||
-      pathname.startsWith("/dashboard/incidents") ||
-      pathname.startsWith("/dashboard/cost-optimization") ||
-      pathname.startsWith("/dashboard/autoscaling"),
+    label: "Delivery",
+    items: [
+      { label: "Analysis", href: "/dashboard/ai-analysis", icon: Bot, matches: (path: string) => path.startsWith("/dashboard/ai-analysis") },
+      { label: "Architecture", href: "/dashboard/architect", icon: Network, matches: (path: string) => path.startsWith("/dashboard/architect") || path.startsWith("/dashboard/infrastructure") },
+      { label: "Deployments", href: "/dashboard/deployments", icon: Boxes, matches: (path: string) => path.startsWith("/dashboard/deployments") },
+    ],
   },
   {
-    label: "Deployments",
-    href: "/dashboard/deployments",
-    icon: Boxes,
-    matches: (pathname: string) => pathname.startsWith("/dashboard/deployments"),
+    label: "Operations",
+    items: [
+      { label: "Monitoring", href: "/dashboard/monitoring", icon: Activity, matches: (path: string) => path.startsWith("/dashboard/monitoring") },
+      { label: "Logs", href: "/dashboard/logs", icon: Logs, matches: (path: string) => path.startsWith("/dashboard/logs") },
+      { label: "Security", href: "/dashboard/security", icon: ShieldCheck, matches: (path: string) => path.startsWith("/dashboard/security") },
+      { label: "Incidents", href: "/dashboard/incidents", icon: Siren, matches: (path: string) => path.startsWith("/dashboard/incidents") },
+      { label: "Activity", href: "/dashboard/activity", icon: ListChecks, matches: (path: string) => path.startsWith("/dashboard/activity") },
+    ],
   },
   {
-    label: "Monitoring",
-    href: "/dashboard/monitoring",
-    icon: Activity,
-    matches: (pathname: string) => pathname.startsWith("/dashboard/monitoring"),
+    label: "Planning",
+    items: [
+      { label: "Cost", href: "/dashboard/cost-optimization", icon: CircleDollarSign, matches: (path: string) => path.startsWith("/dashboard/cost-optimization"), badge: "Setup" },
+      { label: "Capacity", href: "/dashboard/autoscaling", icon: Gauge, matches: (path: string) => path.startsWith("/dashboard/autoscaling"), badge: "Setup" },
+    ],
   },
   {
-    label: "AI Architect",
-    href: "/dashboard/architect",
-    icon: Bot,
-    matches: (pathname: string) => pathname.startsWith("/dashboard/architect"),
-  },
-  {
-    label: "Activity",
-    href: "/dashboard/activity",
-    icon: ListChecks,
-    matches: (pathname: string) => pathname.startsWith("/dashboard/activity"),
-  },
-  {
-    label: "Settings",
-    href: "/dashboard/settings",
-    icon: Settings,
-    matches: (pathname: string) =>
-      pathname.startsWith("/dashboard/settings") ||
-      pathname.startsWith("/dashboard/profile") ||
-      pathname.startsWith("/dashboard/billing"),
+    label: "Account",
+    items: [
+      { label: "Settings", href: "/dashboard/settings", icon: Settings, matches: (path: string) => path.startsWith("/dashboard/settings") },
+      { label: "Profile", href: "/dashboard/profile", icon: UserRound, matches: (path: string) => path.startsWith("/dashboard/profile") },
+      { label: "Plan & billing", href: "/dashboard/billing", icon: ReceiptText, matches: (path: string) => path.startsWith("/dashboard/billing") },
+    ],
   },
 ] as const;
 
@@ -93,14 +86,15 @@ export function Sidebar({
 
   return (
     <aside
+      id="application-navigation"
       aria-label="Application navigation"
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex w-[280px] shrink-0 -translate-x-full flex-col border-r border-border bg-sidebar shadow-xl transition-[transform,width] duration-200 ease-out lg:sticky lg:top-0 lg:h-dvh lg:translate-x-0 lg:shadow-none",
+        "dashboard-sidebar fixed inset-y-0 left-0 z-40 flex w-[288px] shrink-0 -translate-x-full flex-col border-r border-border bg-sidebar shadow-xl transition-[transform,width] duration-200 ease-out motion-reduce:transition-none lg:sticky lg:top-0 lg:h-dvh lg:translate-x-0 lg:shadow-none",
         mobileOpen && "translate-x-0",
         collapsed ? "lg:w-[76px]" : "lg:w-[244px]",
       )}
     >
-      <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-4">
+      <div className="flex h-[72px] shrink-0 items-center justify-between border-b border-border px-4">
         <BrandMark href="/dashboard" compact={collapsed} />
         <button
           type="button"
@@ -116,7 +110,7 @@ export function Sidebar({
         <Link
           href="/dashboard/repositories"
           className={cn(
-            "flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover",
+            "flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover",
             collapsed && "lg:px-0",
           )}
           title={collapsed ? "New project" : undefined}
@@ -127,45 +121,52 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-3">
-        <p
-          className={cn(
-            "mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle",
-            collapsed && "lg:sr-only",
-          )}
-        >
-          Workspace
-        </p>
-        <ul className="space-y-1">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            const active = item.matches(pathname);
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  title={collapsed ? item.label : undefined}
-                  className={cn(
-                    "group relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-primary-subtle text-primary"
-                      : "text-foreground-muted hover:bg-surface-raised hover:text-foreground",
-                    collapsed && "lg:justify-center lg:px-0",
-                  )}
-                >
-                  {active && (
-                    <span
-                      aria-hidden="true"
-                      className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary"
-                    />
-                  )}
-                  <Icon size={18} strokeWidth={1.8} className="shrink-0" />
-                  <span className={cn("truncate", collapsed && "lg:sr-only")}>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+        {navigation.map((group, groupIndex) => (
+          <div
+            key={group.label}
+            className={cn(groupIndex > 0 && "mt-5 border-t border-border/70 pt-4")}
+          >
+            <p
+              className={cn(
+                "mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground-subtle",
+                collapsed && "lg:sr-only",
+              )}
+            >
+              {group.label}
+            </p>
+            <ul className="space-y-1">
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = item.matches(pathname);
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      aria-current={active ? "page" : undefined}
+                      title={collapsed ? item.label : undefined}
+                      className={cn(
+                        "group relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
+                        active
+                          ? "bg-primary-subtle text-primary"
+                          : "text-foreground-muted hover:bg-surface-raised hover:text-foreground",
+                        collapsed && "lg:justify-center lg:px-0",
+                      )}
+                    >
+                      {active && (
+                        <span aria-hidden="true" className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
+                      )}
+                      <Icon size={18} strokeWidth={1.8} className="shrink-0" />
+                      <span className={cn("min-w-0 flex-1 truncate", collapsed && "lg:sr-only")}>{item.label}</span>
+                      {"badge" in item && item.badge && (
+                        <span className={cn("rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground-subtle", collapsed && "lg:hidden")}>{item.badge}</span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       <div className="border-t border-border p-3">
@@ -175,9 +176,9 @@ export function Sidebar({
             collapsed && "lg:hidden",
           )}
         >
-          <p className="text-xs font-semibold text-foreground">Approval stays with you</p>
-          <p className="mt-1 text-[11px] leading-4 text-foreground-muted">
-            Code and cloud changes remain reviewable before execution.
+          <p className="text-xs font-semibold text-foreground">Review before release</p>
+          <p className="mt-1 text-xs leading-5 text-foreground-muted">
+            Required approvals stay pinned to the exact commit and target.
           </p>
         </div>
         <button

@@ -23,6 +23,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { cn } from "@/lib/utils";
 
 type TopBarProps = {
+  navigationOpen: boolean;
   onOpenNavigation: () => void;
 };
 
@@ -50,11 +51,20 @@ const routeLabels: Record<string, string> = {
 const searchableRoutes = [
   { label: "Overview", description: "Projects and actions requiring attention", href: "/dashboard" },
   { label: "Projects", description: "All connected repositories and uploads", href: "/dashboard/projects" },
+  { label: "New project", description: "Connect a repository or inspect a ZIP", href: "/dashboard/repositories" },
+  { label: "Analysis", description: "Recorded repository evidence and provenance", href: "/dashboard/ai-analysis" },
+  { label: "Architecture", description: "Review the proposed Azure target and plan", href: "/dashboard/architect" },
   { label: "Deployments", description: "Progress, logs, and deployment history", href: "/dashboard/deployments" },
   { label: "Monitoring", description: "Health and runtime telemetry", href: "/dashboard/monitoring" },
-  { label: "AI Architect", description: "Explain or propose architecture changes", href: "/dashboard/architect" },
+  { label: "Logs", description: "Recorded deployment and runtime logs", href: "/dashboard/logs" },
+  { label: "Security", description: "Scanner evidence and security outcomes", href: "/dashboard/security" },
+  { label: "Incidents", description: "Investigations and remediation decisions", href: "/dashboard/incidents" },
   { label: "Activity", description: "Audit history for workspace actions", href: "/dashboard/activity" },
+  { label: "Cost", description: "Cost capability status and prerequisites", href: "/dashboard/cost-optimization" },
+  { label: "Capacity", description: "Scaling capability status and prerequisites", href: "/dashboard/autoscaling" },
   { label: "Settings", description: "Connections, secrets, access, and preferences", href: "/dashboard/settings" },
+  { label: "Profile", description: "Identity and account security", href: "/dashboard/profile" },
+  { label: "Plan & billing", description: "Workspace plan and billing details", href: "/dashboard/billing" },
 ] as const;
 
 const notificationIcons = {
@@ -103,7 +113,7 @@ function SearchResultList({
               <span className="block truncate text-sm font-medium text-foreground">
                 {result.label}
               </span>
-              <span className="block truncate text-[11px] text-foreground-muted">
+              <span className="block truncate text-xs text-foreground-muted">
                 {result.description}
               </span>
             </span>
@@ -114,7 +124,7 @@ function SearchResultList({
   );
 }
 
-export function TopBar({ onOpenNavigation }: TopBarProps) {
+export function TopBar({ navigationOpen, onOpenNavigation }: TopBarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
@@ -124,6 +134,8 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
     markAsRead,
     markAllAsRead,
     projects,
+    notificationsState,
+    refreshNotifications,
   } = useNotifications();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -216,23 +228,22 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
   };
 
   return (
-    <header className="sticky top-0 z-20 border-b border-border bg-background/92 backdrop-blur-xl">
-      <div className="flex h-16 items-center gap-2 px-3 sm:gap-4 sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-20 border-b border-border bg-background/94 backdrop-blur-xl">
+      <div className="mx-auto flex h-[72px] max-w-[1480px] items-center gap-2 px-3 sm:gap-4 sm:px-6 lg:px-8 xl:px-10">
         <button
           type="button"
           onClick={onOpenNavigation}
           aria-label="Open navigation"
+          aria-controls="application-navigation"
+          aria-expanded={navigationOpen}
           className="grid min-h-11 min-w-11 place-items-center rounded-lg text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground lg:hidden"
         >
           <Menu size={20} />
         </button>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="hidden text-foreground-subtle sm:inline">Workspace</span>
-            <span aria-hidden="true" className="hidden text-foreground-subtle sm:inline">/</span>
-            <span className="truncate font-medium capitalize text-foreground">{pageLabel}</span>
-          </div>
+          <p className="hidden text-xs font-medium text-foreground-subtle sm:block">ZeroOps workspace</p>
+          <p className="truncate text-sm font-semibold capitalize text-foreground">{pageLabel}</p>
         </div>
 
         <div ref={searchRef} className="relative xl:w-full xl:max-w-sm">
@@ -255,7 +266,7 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
             <section
               id="workspace-search-panel"
               aria-label="Search pages and projects"
-              className="fixed inset-x-3 top-[68px] z-50 overflow-hidden rounded-xl border border-border bg-card p-2 shadow-xl xl:hidden"
+              className="dashboard-popover fixed inset-x-3 top-[76px] z-50 overflow-hidden p-2 xl:hidden"
             >
               <div className="relative">
                 <Search
@@ -310,13 +321,13 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
               aria-label="Search pages and projects"
               placeholder="Search pages and projects"
               autoComplete="off"
-              className="min-h-10 w-full rounded-lg border border-border bg-surface-subtle py-2 pl-9 pr-14 text-sm text-foreground outline-none transition-colors placeholder:text-foreground-subtle focus:border-primary focus:bg-card focus:ring-2 focus:ring-primary/15"
+              className="min-h-11 w-full rounded-lg border border-border bg-surface-subtle py-2 pl-9 pr-14 text-sm text-foreground outline-none transition-colors placeholder:text-foreground-subtle focus:border-primary focus:bg-card focus:ring-2 focus:ring-primary/15"
             />
-            <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] text-foreground-subtle">
+            <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-card px-1.5 py-0.5 text-xs text-foreground-subtle">
               Ctrl K
             </kbd>
             {searchOpen && (
-              <div className="absolute left-0 right-0 top-12 overflow-hidden rounded-xl border border-border bg-card p-1.5 shadow-xl">
+              <div className="dashboard-popover absolute left-0 right-0 top-14 overflow-hidden p-1.5">
                 <SearchResultList
                   results={searchResults}
                   onSelect={navigateFromSearch}
@@ -334,8 +345,10 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
               setProfileOpen(false);
               setSearchOpen(false);
             }}
-            aria-label={notificationsOpen ? "Close notifications" : "Open notifications"}
+            aria-label={notificationsOpen ? "Close notifications" : unreadCount > 0 ? `Open notifications, ${unreadCount} unread` : "Open notifications"}
             aria-expanded={notificationsOpen}
+            aria-haspopup="dialog"
+            aria-controls="notifications-panel"
             className={cn(
               "relative grid min-h-11 min-w-11 place-items-center rounded-lg text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground",
               notificationsOpen && "bg-surface-raised text-foreground",
@@ -343,7 +356,7 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
           >
             <Bell size={19} />
             {unreadCount > 0 && (
-              <span className="absolute right-1.5 top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[9px] font-bold text-white">
+              <span className="absolute right-1.5 top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold text-danger-foreground">
                 {unreadCount > 9 ? "9+" : unreadCount}
               </span>
             )}
@@ -351,20 +364,21 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
 
           {notificationsOpen && (
             <section
+              id="notifications-panel"
               aria-label="Notifications"
-              className="fixed inset-x-3 top-[68px] z-50 overflow-hidden rounded-xl border border-border bg-card shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[360px]"
+              className="dashboard-popover fixed inset-x-3 top-[76px] z-50 overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:top-14 sm:w-[380px]"
             >
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
                 <div>
                   <h2 className="text-sm font-semibold text-foreground">Notifications</h2>
-                  <p className="text-[11px] text-foreground-muted">{unreadCount} unread</p>
+                  <p className="text-xs text-foreground-muted">{unreadCount} unread</p>
                 </div>
                 <div className="flex items-center gap-1">
                   {unreadCount > 0 && (
                     <button
                       type="button"
                       onClick={() => void markAllAsRead()}
-                      className="min-h-9 rounded-lg px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary-subtle"
+                      className="min-h-11 rounded-lg px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary-subtle"
                     >
                       Mark all read
                     </button>
@@ -373,18 +387,32 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
                     type="button"
                     aria-label="Close notifications"
                     onClick={() => setNotificationsOpen(false)}
-                    className="grid min-h-9 min-w-9 place-items-center rounded-lg text-foreground-muted hover:bg-surface-raised"
+                    className="grid min-h-11 min-w-11 place-items-center rounded-lg text-foreground-muted hover:bg-surface-raised"
                   >
                     <X size={16} />
                   </button>
                 </div>
               </div>
               <div className="max-h-[min(420px,65vh)] overflow-y-auto p-1.5">
-                {notifications.length === 0 ? (
+                {notificationsState === "loading" || notificationsState === "idle" ? (
+                  <div className="px-5 py-9" role="status">
+                    <div className="skeleton mx-auto h-9 w-9 rounded-xl" />
+                    <div className="skeleton mx-auto mt-4 h-3 w-36" />
+                    <div className="skeleton mx-auto mt-2 h-3 w-52" />
+                    <span className="sr-only">Loading recorded notifications</span>
+                  </div>
+                ) : notificationsState === "error" ? (
+                  <div className="px-5 py-9 text-center" role="alert">
+                    <AlertCircle size={24} className="mx-auto text-warning" />
+                    <p className="mt-3 text-sm font-semibold text-foreground">Updates are unavailable</p>
+                    <p className="mt-1 text-xs leading-5 text-foreground-muted">We could not verify the latest notification records.</p>
+                    <button type="button" onClick={() => void refreshNotifications()} className="ops-secondary mt-4">Try again</button>
+                  </div>
+                ) : notifications.length === 0 ? (
                   <div className="px-5 py-10 text-center">
-                    <CheckCircle2 size={24} className="mx-auto text-success" />
-                    <p className="mt-3 text-sm font-medium text-foreground">You’re up to date</p>
-                    <p className="mt-1 text-xs text-foreground-muted">Deployment and incident updates will appear here.</p>
+                    <Info size={24} className="mx-auto text-info" />
+                    <p className="mt-3 text-sm font-semibold text-foreground">No recorded notifications</p>
+                    <p className="mt-1 text-xs leading-5 text-foreground-muted">Deployment and incident updates will appear after the API records them.</p>
                   </div>
                 ) : (
                   notifications.slice(0, 20).map((notification) => {
@@ -406,8 +434,8 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
                             <span className="text-xs font-semibold text-foreground">{notification.title}</span>
                             {!notification.read && <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
                           </span>
-                          <span className="mt-1 block text-[11px] leading-4 text-foreground-muted">{notification.message}</span>
-                          <span className="mt-1.5 block text-[10px] text-foreground-subtle">
+                          <span className="mt-1 block text-xs leading-5 text-foreground-muted">{notification.message}</span>
+                          <span className="mt-1.5 block text-xs text-foreground-subtle">
                             {notification.created_at
                               ? new Date(notification.created_at).toLocaleString(undefined, {
                                   month: "short",
@@ -467,6 +495,8 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
             }}
             aria-label="Open account menu"
             aria-expanded={profileOpen}
+            aria-haspopup="menu"
+            aria-controls="account-menu"
             className="flex min-h-11 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-surface-raised sm:px-2"
           >
             <span className="grid h-8 w-8 place-items-center rounded-full bg-primary-subtle text-xs font-semibold text-primary">
@@ -475,25 +505,28 @@ export function TopBar({ onOpenNavigation }: TopBarProps) {
             <ChevronDown size={14} className="hidden text-foreground-subtle sm:block" />
           </button>
           {profileOpen && (
-            <div className="absolute right-0 top-12 w-64 rounded-xl border border-border bg-card p-1.5 shadow-xl">
+            <div id="account-menu" className="dashboard-popover absolute right-0 top-14 w-64 p-1.5" role="menu">
               <div className="border-b border-border px-3 py-3">
                 <p className="truncate text-sm font-semibold text-foreground">{displayName}</p>
-                <p className="mt-0.5 truncate text-[11px] text-foreground-muted">{user?.email}</p>
+                <p className="mt-0.5 truncate text-xs text-foreground-muted">{user?.email}</p>
               </div>
               <Link
                 href="/dashboard/profile"
+                role="menuitem"
                 className="mt-1 flex min-h-11 items-center gap-2.5 rounded-lg px-3 text-sm text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground"
               >
                 <UserRound size={17} /> Profile and security
               </Link>
               <Link
                 href="/dashboard/settings"
+                role="menuitem"
                 className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 text-sm text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground"
               >
                 <Settings size={17} /> Settings
               </Link>
               <button
                 type="button"
+                role="menuitem"
                 onClick={() => void logout()}
                 className="flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 text-sm text-danger transition-colors hover:bg-danger-subtle"
               >

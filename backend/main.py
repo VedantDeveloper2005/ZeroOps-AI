@@ -22,7 +22,7 @@ import zipfile
 import hashlib
 import stat
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, List, Union
 from urllib.parse import urlencode
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Response, Query, Request, UploadFile, File, Header, status
@@ -43,14 +43,14 @@ except ImportError:
 
 try:
     from backend import config
-    from backend.services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
+    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config
-    from services import git, ai, pipeline, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
+    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -63,7 +63,8 @@ async def lifespan(_: FastAPI):
         await migrate_legacy_environment_secrets()
         await remove_unverified_plan_estimates()
         await recover_interrupted_deployments()
-    daemon_task = asyncio.create_task(self_healing_daemon())
+        await reconcile_stale_ai_investigations()
+    daemon_task = asyncio.create_task(maintenance_daemon())
     try:
         yield
     finally:
@@ -82,10 +83,13 @@ app = FastAPI(
 
 try:
     from backend.routes.history import router as history_router
+    from backend.routes.devsecops import router as devsecops_router
 except ImportError:
     from routes.history import router as history_router
+    from routes.devsecops import router as devsecops_router
 
 app.include_router(history_router)
+app.include_router(devsecops_router)
 
 @app.get("/health")
 @app.get("/api/health")
@@ -287,132 +291,50 @@ async def rate_limit_middleware(request: Request, call_next):
 # STARTUP
 # ──────────────────────────────────────────────
 
-async def self_healing_daemon():
-    logger.info("Self-healing telemetry daemon started.")
+async def reconcile_stale_ai_investigations() -> int:
+    """Finalize model attempts that cannot still have a live worker call."""
 
-    async def has_pending_action(db: AsyncSession, project_id, action_type: str, message: str) -> bool:
+    if AsyncSessionLocal is None:
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    completed_at = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(models.AIAction)
-            .filter(
-                models.AIAction.project_id == project_id,
-                models.AIAction.type == action_type,
-                models.AIAction.status == "pending",
-                models.AIAction.message == message,
+            select(models.AIInvestigation).filter(
+                models.AIInvestigation.status == "running",
+                models.AIInvestigation.started_at.is_not(None),
+                models.AIInvestigation.started_at < cutoff,
             )
-            .limit(1)
         )
-        return result.scalars().first() is not None
+        stale = list(result.scalars().all())
+        for investigation in stale:
+            investigation.status = "unavailable"
+            investigation.model_provider = "unavailable"
+            investigation.model_name = "none"
+            investigation.error_code = "AI_INVESTIGATION_INTERRUPTED"
+            investigation.redacted_error = (
+                "The investigation worker did not record a terminal result within the execution window."
+            )
+            investigation.completed_at = completed_at
+        if stale:
+            await db.commit()
+            logger.warning("Finalized %s stale AI investigation(s) as unavailable.", len(stale))
+        return len(stale)
 
+
+async def maintenance_daemon():
+    """Run bounded record reconciliation; telemetry rules execute on ingestion."""
+
+    logger.info("ZeroOps maintenance daemon started.")
     while True:
-        await asyncio.sleep(20)
+        await asyncio.sleep(60)
         try:
-            async with AsyncSessionLocal() as db:
-                # 1. Fetch active projects
-                result = await db.execute(
-                    select(models.Project).filter(models.Project.status == "active")
-                )
-                projects = result.scalars().all()
-                for project in projects:
-                    # Find latest deployment for project
-                    dep_result = await db.execute(
-                        select(models.Deployment)
-                        .filter(models.Deployment.project_id == project.id)
-                        .order_by(desc(models.Deployment.started_at))
-                        .limit(1)
-                    )
-                    latest_dep = dep_result.scalars().first()
-                    if not latest_dep or latest_dep.status != "running":
-                        continue
-                        
-                    # Find latest telemetry metric for deployment
-                    metric_result = await db.execute(
-                        select(models.DeploymentMetric)
-                        .filter(models.DeploymentMetric.deployment_id == latest_dep.id)
-                        .order_by(desc(models.DeploymentMetric.timestamp))
-                        .limit(1)
-                    )
-                    latest_metric = metric_result.scalars().first()
-                    if not latest_metric:
-                        continue
-                        
-                    # Memory Spike check (e.g. Memory utilization exceeds 90%)
-                    if latest_metric.memory_utilization > 90.0:
-                        logger.warning(f"Self-Healing: Memory spike detected ({latest_metric.memory_utilization}%) on project {project.name}")
-
-                        action_message = "Memory utilization exceeded threshold"
-                        if await has_pending_action(db, project.id, "scaling", action_message):
-                            continue
-                        
-                        # Add activity log
-                        db.add(models.ActivityEvent(
-                            user_id=project.user_id,
-                            project_id=project.id,
-                            action="AI Recommendation: Memory spike detected",
-                            details=f"Memory utilization reached {latest_metric.memory_utilization}%. Review resource limits or autoscaling before applying changes."
-                        ))
-                        
-                        # Add AIAction
-                        db.add(models.AIAction(
-                            user_id=project.user_id,
-                            project_id=project.id,
-                            type="scaling",
-                            severity="warning",
-                            message=action_message,
-                            recommendation="Review current memory limits and autoscaling policy for this project. Apply changes through the deployment pipeline after validation.",
-                            status="pending",
-                            icon="Layers"
-                        ))
-                        
-                        # Add Notification
-                        db.add(models.Notification(
-                            user_id=project.user_id,
-                            title="Memory Spike Detected",
-                            message=f"ZeroOps AI detected high memory utilization on {project.name}. A scaling recommendation is pending review.",
-                            type="warning",
-                            category="scaling"
-                        ))
-                        await db.commit()
-                        
-                    # Crash Loop check (e.g. error rate exceeds 15%)
-                    elif latest_metric.error_rate > 15.0:
-                        logger.warning(f"Self-Healing: Crash loop / high error rate ({latest_metric.error_rate}%) on project {project.name}")
-
-                        action_message = "High error rate detected; rollback review needed"
-                        if await has_pending_action(db, project.id, "healing", action_message):
-                            continue
-                        details = f"Detected {latest_metric.error_rate}% error rate on {latest_dep.version or 'current deployment'}. Review logs and roll back through the deployment pipeline if needed."
-                            
-                        # Add activity log
-                        db.add(models.ActivityEvent(
-                            user_id=project.user_id,
-                            project_id=project.id,
-                            action="AI Recommendation: High error rate detected",
-                            details=details
-                        ))
-                        
-                        # Add AIAction
-                        db.add(models.AIAction(
-                            user_id=project.user_id,
-                            project_id=project.id,
-                            type="healing",
-                            severity="critical",
-                            message=action_message,
-                            recommendation="Inspect the failed request logs, verify the latest deployment, and trigger a validated rollback if the current release is unhealthy.",
-                            status="pending",
-                            icon="Undo"
-                        ))
-                        
-                        # Add Notification
-                        db.add(models.Notification(
-                            user_id=project.user_id,
-                            title="High Error Rate Detected",
-                            message=f"ZeroOps AI detected high error rates on {project.name}. A remediation recommendation is pending review.",
-                            type="critical",
-                            category="incident"
-                        ))
-                        await db.commit()
-        except Exception as e:
-            logger.error(f"Error in self_healing_daemon: {e}")
+            await reconcile_stale_ai_investigations()
+        except Exception as error:
+            logger.error(
+                "Stale investigation reconciliation failed: %s",
+                type(error).__name__,
+            )
 
 
 # ──────────────────────────────────────────────
@@ -490,7 +412,9 @@ async def migrate_legacy_environment_secrets() -> None:
     """Move legacy database secret values to Key Vault before clearing them."""
     if not vault.HAS_AZURE_KV or AsyncSessionLocal is None:
         if config.IS_PRODUCTION:
-            logger.error("Key Vault is unavailable; legacy environment secrets were not migrated.")
+            raise RuntimeError(
+                "Azure Key Vault is unavailable; production cannot verify or migrate legacy environment secrets."
+            )
         return
 
     async with AsyncSessionLocal() as db:
@@ -500,16 +424,22 @@ async def migrate_legacy_environment_secrets() -> None:
             .filter(models.EnvironmentVariable.is_secret == True, models.EnvironmentVariable.value != "")
         )
         migrated = 0
+        failed = 0
         for variable, project_id in result.all():
             try:
                 vault.set_project_secret(str(project_id), variable.key, variable.value)
                 variable.value = ""
                 migrated += 1
             except Exception:
-                logger.exception("Unable to migrate an environment secret to Key Vault")
+                failed += 1
+                logger.error("Unable to migrate one legacy environment secret to Key Vault.")
         if migrated:
             await db.commit()
             logger.info("Migrated %s legacy environment secrets to Key Vault.", migrated)
+        if failed and config.IS_PRODUCTION:
+            raise RuntimeError(
+                "One or more legacy environment secrets could not be migrated to Azure Key Vault."
+            )
 
 
 async def remove_unverified_plan_estimates() -> None:
@@ -1958,6 +1888,7 @@ async def get_azure_connection(
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
         "app_service_plan": connection.app_service_plan,
+        "aks_cluster_name": connection.aks_cluster_name,
         "namespace_prefix": connection.namespace_prefix,
         "created_at": format_dt(connection.created_at),
         "updated_at": format_dt(connection.updated_at),
@@ -2029,6 +1960,7 @@ async def connect_azure(
         existing.resource_group = req.resource_group.strip()
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None
         existing.app_service_plan = req.app_service_plan.strip() if req.app_service_plan else None
+        existing.aks_cluster_name = req.aks_cluster_name.strip() if req.aks_cluster_name else None
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else None
         existing.connection_status = "connected"
         existing.is_active = True
@@ -2044,6 +1976,7 @@ async def connect_azure(
             resource_group=req.resource_group.strip(),
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
             app_service_plan=req.app_service_plan.strip() if req.app_service_plan else None,
+            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -2093,6 +2026,7 @@ async def connect_azure(
         "region": connection.region,
         "acr_login_server": connection.acr_login_server,
         "app_service_plan": connection.app_service_plan,
+        "aks_cluster_name": connection.aks_cluster_name,
         "namespace_prefix": connection.namespace_prefix,
     }
 
@@ -2150,6 +2084,11 @@ async def upsert_azure_connection(
         existing.resource_group = req.resource_group.strip() if req.resource_group else existing.resource_group
         existing.acr_login_server = req.acr_login_server.strip().rstrip("/") if req.acr_login_server else existing.acr_login_server
         existing.app_service_plan = req.app_service_plan.strip() if req.app_service_plan else existing.app_service_plan
+        existing.aks_cluster_name = (
+            req.aks_cluster_name.strip()
+            if req.aks_cluster_name
+            else getattr(existing, "aks_cluster_name", None)
+        )
         existing.namespace_prefix = req.namespace_prefix.strip() if req.namespace_prefix else existing.namespace_prefix
         existing.connection_status = "connected"
         existing.is_active = True
@@ -2165,6 +2104,7 @@ async def upsert_azure_connection(
             resource_group=req.resource_group.strip() if req.resource_group else None,
             acr_login_server=req.acr_login_server.strip().rstrip("/") if req.acr_login_server else None,
             app_service_plan=req.app_service_plan.strip() if req.app_service_plan else None,
+            aks_cluster_name=req.aks_cluster_name.strip() if req.aks_cluster_name else None,
             namespace_prefix=req.namespace_prefix.strip() if req.namespace_prefix else None,
             connection_status="connected",
             is_active=True,
@@ -2191,6 +2131,7 @@ async def upsert_azure_connection(
         "resource_group": connection.resource_group,
         "acr_login_server": connection.acr_login_server,
         "app_service_plan": connection.app_service_plan,
+        "aks_cluster_name": connection.aks_cluster_name,
     }
 
 
@@ -2729,17 +2670,24 @@ async def get_project_metrics(
     mem_data = []
     for m in metrics:
         time_str = m.timestamp.strftime("%H:%M")
-        cpu_data.append({"time": time_str, "value": m.cpu_utilization})
-        mem_data.append({"time": time_str, "value": m.memory_utilization})
+        if m.cpu_utilization is not None:
+            cpu_data.append({"time": time_str, "value": m.cpu_utilization})
+        if m.memory_utilization is not None:
+            mem_data.append({"time": time_str, "value": m.memory_utilization})
 
     avg_resp = "No data"
     avg_err = "No data"
     total_reqs = 0
     uptime = "No data"
     if metrics:
-        avg_resp = f"{int(sum(m.response_time_ms for m in metrics) / len(metrics))}ms"
-        avg_err = f"{round(sum(m.error_rate for m in metrics) / len(metrics), 2)}%"
-        total_reqs = sum(m.request_count for m in metrics)
+        response_samples = [m.response_time_ms for m in metrics if m.response_time_ms is not None]
+        error_samples = [m.error_rate for m in metrics if m.error_rate is not None]
+        request_samples = [m.request_count for m in metrics if m.request_count is not None]
+        if response_samples:
+            avg_resp = f"{int(sum(response_samples) / len(response_samples))}ms"
+        if error_samples:
+            avg_err = f"{round(sum(error_samples) / len(error_samples), 2)}%"
+        total_reqs = sum(request_samples) if request_samples else 0
         
         # Calculate uptime based on latest deployment status
         try:
@@ -2901,6 +2849,28 @@ async def start_deploy(
         f"{namespace_prefix}-{project.name}-{str(project.id)[:8]}"
     )
     image_ref = deployment_targets.image_ref_for_target(selected_target, image_name, version)
+    tenant = await tenancy.resolve_tenant(db, user=current_user)
+    pipeline_config_result = await db.execute(
+        select(models.ProjectPipelineConfiguration)
+        .filter(
+            models.ProjectPipelineConfiguration.tenant_id == tenant.id,
+            models.ProjectPipelineConfiguration.project_id == project.id,
+        )
+        .order_by(desc(models.ProjectPipelineConfiguration.version))
+        .limit(1)
+    )
+    pipeline_configuration = pipeline_config_result.scalars().first()
+    pipeline_context = pipeline_records.context_from_configuration(
+        pipeline_configuration,
+        target_type=selected_target.provider,
+        has_dependencies=True,
+        has_tests=bool(pipeline_configuration.run_unit_tests) if pipeline_configuration else True,
+        # The approved architecture is an input to the existing App Service
+        # path, not proof that repository Terraform changed in this commit.
+        has_iac=False,
+        infrastructure_change=False,
+    )
+    planned_stages = pipeline.initialize_pipeline_stages(pipeline_context)
 
     # Create deployment record
     deployment = models.Deployment(
@@ -2915,6 +2885,14 @@ async def start_deploy(
         deployed_by=f"{current_user.first_name or 'User'} {(current_user.last_name or '')[0:1]}.".strip(),
         image=image_ref,
         infrastructure_metadata={
+            # Preserve the caller's target intent so the isolated worker can
+            # re-evaluate an automatic choice against the immutable checkout,
+            # rather than trusting a potentially stale pre-clone analysis.
+            "requested_target": (
+                "auto"
+                if (req.target_provider or "auto").strip().lower() == "auto"
+                else selected_target.provider
+            ),
             "target_provider": selected_target.provider,
             "target_reason": selected_target.reason,
             "target": deployment_targets.metadata_for_target(selected_target),
@@ -2931,6 +2909,24 @@ async def start_deploy(
                 "provider": approved_plan.provider,
                 "region": approved_plan.region,
             },
+            "pipeline_configuration": (
+                {
+                    "id": str(pipeline_configuration.id),
+                    "version": pipeline_configuration.version,
+                    "digest": pipeline_configuration.config_digest or "",
+                }
+                if pipeline_configuration
+                else None
+            ),
+            "pipeline_approval_decision": {
+                "status": (
+                    "pending"
+                    if pipeline_configuration
+                    and pipeline_configuration.deployment_mode == "require_approval"
+                    else "not_required"
+                ),
+                "consumed": False,
+            },
             "preflight": {
                 "id": str(preflight.id),
                 "status": preflight.status,
@@ -2938,22 +2934,38 @@ async def start_deploy(
                 "risk_level": preflight.risk_level,
                 "model": decision_intelligence.RISK_MODEL_VERSION,
             },
-            "stages": [
-                {"id": 1, "label": "Repository verification", "status": "pending", "duration": ""},
-                {"id": 2, "label": "Source preparation", "status": "pending", "duration": ""},
-                {"id": 3, "label": "Repository analysis", "status": "pending", "duration": ""},
-                {"id": 4, "label": "Build specification", "status": "pending", "duration": ""},
-                {"id": 5, "label": "Runtime configuration", "status": "pending", "duration": ""},
-                {"id": 6, "label": "Database requirements", "status": "pending", "duration": ""},
-                {"id": 7, "label": "Azure image build", "status": "pending", "duration": ""},
-                {"id": 8, "label": "App Service deployment", "status": "pending", "duration": ""},
-                {"id": 9, "label": "Public endpoint validation", "status": "pending", "duration": ""},
-                {"id": 10, "label": "Deployment record", "status": "pending", "duration": ""}
-            ]
+            "stages": planned_stages,
         }
     )
     db.add(deployment)
     await db.flush()
+
+    previous_success_result = await db.execute(
+        select(models.Deployment.commit_sha)
+        .filter(
+            models.Deployment.project_id == project.id,
+            models.Deployment.id != deployment.id,
+            models.Deployment.status == "running",
+            models.Deployment.commit_sha.is_not(None),
+        )
+        .order_by(desc(models.Deployment.completed_at))
+        .limit(1)
+    )
+    await pipeline_records.create_pipeline_run(
+        db,
+        tenant_id=tenant.id,
+        project_id=project.id,
+        deployment_id=deployment.id,
+        requested_by_user_id=current_user.id,
+        configuration=pipeline_configuration,
+        trigger_type="manual",
+        branch=selected_branch,
+        source_revision=commit_sha,
+        target_type=selected_target.provider,
+        idempotency_key=f"manual:{deployment.id}",
+        context=pipeline_context,
+        previous_successful_revision=previous_success_result.scalar_one_or_none(),
+    )
 
     db.add(models.DecisionEvaluation(
         user_id=current_user.id,
@@ -3414,7 +3426,14 @@ async def analyze_repo(
         analysis["recommended_target"] = selected_target.label
         analysis["target_reason"] = selected_target.reason
     except ValueError as target_err:
+        db_recommendation.recommended_target = None
+        db_recommendation.azure_configuration = {
+            "selected_provider": None,
+            "target": None,
+            "reason": str(target_err),
+        }
         analysis["recommended_provider"] = "none"
+        analysis["recommended_target"] = None
         analysis["target_reason"] = str(target_err)
     analysis["deployment_targets"] = target_status
     
@@ -4206,7 +4225,7 @@ async def get_deployment_failure_analysis(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve NVIDIA Nemotron failure analysis for a failed deployment."""
+    """Retrieve a failure analysis already produced by the durable worker."""
     # Verify deployment ownership (capture reference before consuming the result set)
     dep_result = await db.execute(
         select(models.Deployment)
@@ -4222,41 +4241,14 @@ async def get_deployment_failure_analysis(
     )
     fa = result.scalars().first()
     if not fa:
-        logger.warning(f"No failure analysis record found in DB for deployment {deployment_id}, triggering on-the-fly analyzer...")
-        
-        # Retrieve logs
-        log_result = await db.execute(
-            select(models.DeploymentLog)
-            .filter(models.DeploymentLog.deployment_id == deployment_id)
-            .order_by(models.DeploymentLog.line_number)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No durable failure analysis is recorded for this deployment. "
+                "A read request does not start an AI workload."
+            ),
         )
-        logs = log_result.scalars().all()
-        log_msgs = [l.message for l in logs]
-        
-        try:
-            failure_res = ai.analyze_failure_nemotron(log_msgs, log_msgs)
-        except (ValueError, RuntimeError) as e:
-            logger.warning(f"AI failure analysis unavailable for deployment {deployment_id}: {e}. Using local analyzer.")
-            failure_res = ai.analyze_failure_local(log_msgs, log_msgs)
-        
-        fa = models.FailureAnalysis(
-            id=uuid.uuid4(),
-            user_id=current_user.id,
-            project_id=deployment.project_id,
-            deployment_id=deployment_id,
-            failure_summary=failure_res.get("failure_summary", "Deployment failed."),
-            root_cause=failure_res.get("root_cause", "Unable to determine root cause."),
-            severity=failure_res.get("severity", "error"),
-            recommended_fix=failure_res.get("recommended_fix", "Review deployment logs."),
-            step_by_step_resolution=failure_res.get("step_by_step_resolution") or [
-                "Check the deployment logs for error details.",
-                "Verify environment variables are configured.",
-                "Trigger a new deployment."
-            ]
-        )
-        db.add(fa)
-        await db.commit()
-        
+
     return fa
 
 
@@ -5014,12 +5006,18 @@ async def get_metrics(
     metrics = metrics_result.scalars().all()
     if not metrics:
         return {"available": False, "message": "No recorded runtime metrics are available for this project."}
+    cpu_samples = [metric.cpu_utilization for metric in metrics if metric.cpu_utilization is not None]
+    memory_samples = [metric.memory_utilization for metric in metrics if metric.memory_utilization is not None]
+    request_samples = [metric.request_count for metric in metrics if metric.request_count is not None]
+    error_samples = [metric.error_rate for metric in metrics if metric.error_rate is not None]
+    if not any((cpu_samples, memory_samples, request_samples, error_samples)):
+        return {"available": False, "message": "Stored samples do not contain the requested runtime measurements."}
     return {
         "available": True,
-        "cpu": round(sum(metric.cpu_utilization for metric in metrics) / len(metrics), 1),
-        "memory": round(sum(metric.memory_utilization for metric in metrics) / len(metrics), 1),
-        "traffic": sum(metric.request_count for metric in metrics),
-        "errorRate": round(sum(metric.error_rate for metric in metrics) / len(metrics), 2),
+        "cpu": round(sum(cpu_samples) / len(cpu_samples), 1) if cpu_samples else None,
+        "memory": round(sum(memory_samples) / len(memory_samples), 1) if memory_samples else None,
+        "traffic": sum(request_samples) if request_samples else None,
+        "errorRate": round(sum(error_samples) / len(error_samples), 2) if error_samples else None,
     }
 
 

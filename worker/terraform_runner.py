@@ -1,4 +1,4 @@
-"""Run queued releases through the production Azure App Service pipeline.
+"""Run queued releases through the production Azure deployment pipeline.
 
 The old worker manufactured build, health-check, and live-URL success results.
 This adapter intentionally delegates to the same pipeline used by the control
@@ -19,9 +19,11 @@ from psycopg2.extras import Json, RealDictCursor
 
 try:
     from backend.services import github_oauth, pipeline, terraform_generator
+    from backend.services.redaction import redact_sensitive_text
     from worker.queue import postgres_connection_kwargs
 except ImportError:
     from services import github_oauth, pipeline, terraform_generator
+    from services.redaction import redact_sensitive_text
     from queue import postgres_connection_kwargs
 
 
@@ -37,6 +39,27 @@ _ALLOWED_RESOURCE_KINDS = {
     "azurerm_storage_account",
     "azurerm_virtual_network",
 }
+
+
+def _pipeline_job_outcome(record: dict[str, Any] | None) -> str:
+    """Classify durable pipeline completion without inventing deployment success."""
+
+    if not record:
+        return "failed"
+    deployment_status = record.get("status")
+    pipeline_status = record.get("pipeline_status")
+    failure_code = record.get("pipeline_failure_code")
+    if deployment_status == "running" and pipeline_status in {None, "succeeded"}:
+        return "deployed"
+    if deployment_status == "stopped" and pipeline_status == "succeeded":
+        return "validation_completed"
+    if (
+        deployment_status == "stopped"
+        and pipeline_status == "blocked"
+        and failure_code == "DEPLOYMENT_APPROVAL_REQUIRED"
+    ):
+        return "approval_required"
+    return "failed"
 
 
 def _safe_internal_iac_metadata(generated: dict[str, Any], queued_spec: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +193,7 @@ class TerraformRunner:
         status: str,
         failure_reason: str | None = None,
         live_url: str | None = None,
+        deployment_completed: bool = True,
     ) -> bool:
         worker_id, lease_token = self._lease_identity(job)
         with connection.cursor() as cursor:
@@ -179,7 +203,7 @@ class TerraformRunner:
                 SET status = %s,
                     failure_reason = %s,
                     deployment_status = CASE
-                        WHEN %s = 'completed' THEN 'completed'
+                        WHEN %s = 'completed' AND %s THEN 'completed'
                         WHEN %s = 'failed' THEN 'failed'
                         ELSE deployment_status
                     END,
@@ -199,6 +223,7 @@ class TerraformRunner:
                     status,
                     failure_reason,
                     status,
+                    deployment_completed,
                     status,
                     live_url,
                     status,
@@ -405,11 +430,36 @@ class TerraformRunner:
 
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
-                    "SELECT status, failure_reason, live_url FROM deployments WHERE id = %s",
+                    """
+                    SELECT
+                        status,
+                        failure_reason,
+                        live_url,
+                        pipeline_status,
+                        pipeline_failure_code
+                    FROM (
+                        SELECT
+                            d.status,
+                            d.failure_reason,
+                            d.live_url,
+                            latest_pipeline.status AS pipeline_status,
+                            latest_pipeline.failure_code AS pipeline_failure_code
+                        FROM deployments AS d
+                        LEFT JOIN LATERAL (
+                            SELECT status, failure_code
+                            FROM pipeline_runs
+                            WHERE deployment_id = d.id
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        ) AS latest_pipeline ON TRUE
+                        WHERE d.id = %s
+                    ) AS pipeline_outcome
+                    """,
                     (deployment_id,),
                 )
                 deployment = cursor.fetchone()
-            if not deployment or deployment["status"] != "running":
+            outcome = _pipeline_job_outcome(deployment)
+            if outcome == "failed":
                 reason = (deployment or {}).get("failure_reason") or "The deployment pipeline did not verify a running application."
                 self._mark_job(connection, job, status="failed", failure_reason=reason)
                 return False
@@ -418,10 +468,11 @@ class TerraformRunner:
                 connection,
                 job,
                 status="completed",
-                live_url=deployment.get("live_url"),
+                live_url=deployment.get("live_url") if outcome == "deployed" else None,
+                deployment_completed=outcome == "deployed",
             )
         except Exception as error:
-            reason = str(error)
+            reason = redact_sensitive_text(str(error), maximum_length=2_000)
             if self._mark_job(connection, job, status="failed", failure_reason=reason):
                 self._mark_deployment_failed(connection, str(deployment_id), reason)
             return False

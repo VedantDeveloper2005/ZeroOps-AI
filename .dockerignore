@@ -1,0 +1,29 @@
+# Both worker images are built from the repository root but need only these
+# three source trees. Default-deny the build context so local logs, archives,
+# Git metadata, frontend artifacts, and developer credentials never reach the
+# Docker daemon or a remote builder.
+*
+!worker
+!worker/**
+!backend
+!backend/**
+!ai-specs
+!ai-specs/**
+
+# Runtime source only. Tests, mutable workspaces, caches, and local settings
+# are neither copied into an image nor uploaded as build context.
+backend/tests
+backend/workspace
+worker/tests
+**/.env
+**/.env.*
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.tox
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/coverage
+**/dist
+**/node_modules

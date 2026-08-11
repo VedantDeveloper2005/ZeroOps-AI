@@ -3,7 +3,7 @@ import { DashboardShell } from "@/components/dashboard/DashboardShell";
 
 export const metadata: Metadata = {
   title: "Workspace",
-  description: "Review, approve, deploy, and operate applications with ZeroOps AI.",
+  description: "Review recorded release evidence, approve exact revisions, and follow available operations data with ZeroOps AI.",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

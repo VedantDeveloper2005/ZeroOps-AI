@@ -3,13 +3,17 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   ArrowRight,
+  CircleOff,
   ExternalLink,
   FolderKanban,
   GitBranch,
   Plus,
+  Rocket,
   Search,
 } from "lucide-react";
+import { MetricCard } from "@/components/ui/MetricCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatePanel } from "@/components/ui/StatePanel";
 import { useNotifications } from "@/lib/NotificationContext";
@@ -32,15 +36,31 @@ function formatDate(value?: string | null) {
 
 function statusPresentation(status?: string | null) {
   if (status === "running") {
-    return { label: "Running", className: "border-success/25 bg-success-subtle text-success" };
+    return {
+      label: "Running",
+      className: "border-success/25 bg-success-subtle text-success",
+      railClassName: "bg-success",
+    };
   }
   if (activeStatuses.has(status || "")) {
-    return { label: status || "In progress", className: "border-info/25 bg-info-subtle text-info" };
+    return {
+      label: status || "In progress",
+      className: "border-info/25 bg-info-subtle text-info",
+      railClassName: "bg-info",
+    };
   }
   if (status === "failed") {
-    return { label: "Failed", className: "border-danger/25 bg-danger-subtle text-danger" };
+    return {
+      label: "Failed",
+      className: "border-danger/25 bg-danger-subtle text-danger",
+      railClassName: "bg-danger",
+    };
   }
-  return { label: "Not deployed", className: "border-border bg-surface-subtle text-foreground-muted" };
+  return {
+    label: "Not deployed",
+    className: "border-border bg-surface-subtle text-foreground-muted",
+    railClassName: "bg-border",
+  };
 }
 
 export default function ProjectsPage() {
@@ -80,7 +100,7 @@ export default function ProjectsPage() {
     const normalized = query.trim().toLowerCase();
     return projects.filter((project) => {
       const deployment = latestByProject.get(project.id);
-      const status = deployment?.status || project.latest_deployment_status || project.status || "";
+      const status = deployment?.status || project.latest_deployment_status || "";
       const matchesQuery =
         !normalized ||
         project.name.toLowerCase().includes(normalized) ||
@@ -90,12 +110,21 @@ export default function ProjectsPage() {
         statusFilter === "all" ||
         (statusFilter === "active" && (status === "running" || activeStatuses.has(status))) ||
         (statusFilter === "failed" && status === "failed") ||
-        (statusFilter === "not-deployed" && !deployment);
+        (statusFilter === "not-deployed" && project.deployment_count === 0);
       return matchesQuery && matchesStatus;
     });
   }, [latestByProject, projects, query, statusFilter]);
 
   const isLoading = projectsLoading || loading;
+  const activeProjectCount = projects.filter((project) => {
+    const status = latestByProject.get(project.id)?.status || project.latest_deployment_status;
+    return status === "running" || activeStatuses.has(status || "");
+  }).length;
+  const failedProjectCount = projects.filter((project) => {
+    const status = latestByProject.get(project.id)?.status || project.latest_deployment_status;
+    return status === "failed";
+  }).length;
+  const notDeployedCount = projects.filter((project) => project.deployment_count === 0).length;
 
   return (
     <div className="pb-8">
@@ -121,6 +150,48 @@ export default function ProjectsPage() {
         />
       )}
 
+      {!isLoading && !error && projects.length > 0 && (
+        <section aria-labelledby="project-portfolio-heading" className="mb-6">
+          <div className="mb-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">
+              Portfolio snapshot
+            </p>
+            <h2 id="project-portfolio-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+              Recorded project state
+            </h2>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Connected projects"
+              value={String(projects.length)}
+              supportingText="All source records in this workspace"
+              icon={FolderKanban}
+              tone="info"
+            />
+            <MetricCard
+              label="Active or running"
+              value={String(activeProjectCount)}
+              supportingText="Latest recorded deployment state"
+              icon={Rocket}
+              tone={activeProjectCount > 0 ? "info" : "neutral"}
+            />
+            <MetricCard
+              label="Failed latest release"
+              value={String(failedProjectCount)}
+              supportingText="Projects whose latest record failed"
+              icon={AlertCircle}
+              tone={failedProjectCount > 0 ? "danger" : "neutral"}
+            />
+            <MetricCard
+              label="Never deployed"
+              value={String(notDeployedCount)}
+              supportingText="Projects with zero deployment records"
+              icon={CircleOff}
+            />
+          </div>
+        </section>
+      )}
+
       {isLoading ? (
         <div className="space-y-3" aria-busy="true" aria-label="Loading projects">
           {Array.from({ length: 4 }).map((_, index) => (
@@ -135,7 +206,17 @@ export default function ProjectsPage() {
         />
       ) : (
         <>
-          <div className="mb-5 flex flex-col gap-3 rounded-xl border border-border bg-card p-3 shadow-sm sm:flex-row sm:items-center">
+          <section aria-label="Project filters" className="mb-5 rounded-xl border border-border bg-card p-3 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Find a project</p>
+                <p className="mt-0.5 text-xs text-foreground-muted">Filter only the source records already in this workspace.</p>
+              </div>
+              <span className="shrink-0 text-xs font-medium tabular-nums text-foreground-subtle">
+                {visibleProjects.length} shown
+              </span>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <label className="relative min-w-0 flex-1">
               <span className="sr-only">Search projects</span>
               <Search
@@ -163,7 +244,8 @@ export default function ProjectsPage() {
                 <option value="not-deployed">Not deployed</option>
               </select>
             </label>
-          </div>
+            </div>
+          </section>
 
           {visibleProjects.length === 0 ? (
             <StatePanel
@@ -176,17 +258,18 @@ export default function ProjectsPage() {
               {visibleProjects.map((project) => {
                 const deployment = latestByProject.get(project.id);
                 const status = statusPresentation(
-                  deployment?.status || project.latest_deployment_status || project.status,
+                  deployment?.status || project.latest_deployment_status,
                 );
                 return (
-                  <article key={project.id} className="rounded-xl border border-border bg-card p-5 shadow-sm">
+                  <article key={project.id} className="group relative overflow-hidden rounded-xl border border-border bg-card p-5 shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-border-hover hover:shadow-md">
+                    <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${status.railClassName}`} />
                     <div className="flex items-start gap-3">
                       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary-subtle text-primary">
                         <FolderKanban size={18} />
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="truncate text-sm font-semibold text-foreground">{project.name}</h2>
+                          <h2 className="truncate text-base font-semibold tracking-tight text-foreground">{project.name}</h2>
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize ${status.className}`}>
                             {status.label}
                           </span>
@@ -234,7 +317,7 @@ export default function ProjectsPage() {
                       )}
                       <Link
                         href={`/dashboard/apps/${project.id}`}
-                        className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white transition-colors hover:bg-primary-hover"
+                        className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
                       >
                         Open project <ArrowRight size={13} />
                       </Link>

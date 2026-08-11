@@ -163,7 +163,7 @@ async def test_decide_approval_approve(db_session):
         user_id=user.id,
         action_type="delete_resource",
         parameters={"resource_id": "test-res-id"},
-        raw_parameters={"resource_id": "test-res-id"},
+        raw_parameters=action_gateway.encrypt_action_parameters({"resource_id": "test-res-id"}),
         risk_tier="high",
         status="pending"
     )
@@ -218,7 +218,7 @@ async def test_decide_approval_deny(db_session):
         user_id=user.id,
         action_type="delete_resource",
         parameters={"resource_id": "test-res-id"},
-        raw_parameters={"resource_id": "test-res-id"},
+        raw_parameters=action_gateway.encrypt_action_parameters({"resource_id": "test-res-id"}),
         risk_tier="high",
         status="pending"
     )
@@ -277,8 +277,10 @@ async def test_unredacted_parameter_execution_regression(db_session):
     
     # Assert parameters are redacted for DB/UI
     assert pending.parameters["ssh_public_key"] == "<REDACTED>"
-    # Assert raw_parameters are unredacted for execution
-    assert pending.raw_parameters["ssh_public_key"] == "actual-value-123"
+    # Executor parameters are encrypted at rest and contain no raw secret.
+    serialized_envelope = str(pending.raw_parameters)
+    assert "actual-value-123" not in serialized_envelope
+    assert pending.raw_parameters["version"] == "fernet-v1"
     
     # Approve the action, and intercept the call to verify it gets the raw parameters
     from unittest.mock import AsyncMock
@@ -296,5 +298,6 @@ async def test_unredacted_parameter_execution_regression(db_session):
         mock_delete.assert_called_once()
         called_args = mock_delete.call_args[0]
         assert called_args[1]["ssh_public_key"] == "actual-value-123"
+        assert pending.raw_parameters == {}
         
     azure_connector.delete_credential_from_vault(user.id)

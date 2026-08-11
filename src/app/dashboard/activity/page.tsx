@@ -41,7 +41,7 @@ function formatTimestamp(value: string) {
 
 export default function ActivityPage() {
   return (
-    <Suspense fallback={<ActivityLoading />}>
+    <Suspense fallback={<ActivityPageLoading />}>
       <ActivityWorkspace />
     </Suspense>
   );
@@ -153,7 +153,21 @@ function ActivityWorkspace() {
           }
         />
       ) : (
-        <section aria-label="Activity timeline" className="rounded-xl border border-border bg-card px-4 py-2 shadow-sm sm:px-6">
+        <section aria-labelledby="activity-timeline-heading" className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="flex flex-col gap-1 border-b border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div>
+              <h2 id="activity-timeline-heading" className="text-sm font-semibold text-foreground">
+                Recorded events
+              </h2>
+              <p className="mt-1 text-xs text-foreground-muted">
+                Ordered newest first from persisted workspace history.
+              </p>
+            </div>
+            <span className="text-xs font-medium text-foreground-subtle tabular-nums">
+              {activity.length} {activity.length === 1 ? "event" : "events"}
+            </span>
+          </div>
+          <div className="px-4 py-1 sm:px-6">
           <ol>
             {activity.map((event, index) => {
               const Icon = iconForAction(event.action);
@@ -168,14 +182,14 @@ function ActivityWorkspace() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                       <div>
-                        <h2 className="text-sm font-semibold text-foreground">{event.action}</h2>
+                        <h3 className="text-sm font-semibold text-foreground">{event.action}</h3>
                         {event.project_name && (
                           <p className="mt-0.5 text-xs font-medium text-primary">{event.project_name}</p>
                         )}
                       </div>
                       <time
                         dateTime={event.created_at}
-                        className="shrink-0 text-[11px] text-foreground-subtle"
+                        className="shrink-0 text-xs text-foreground-subtle"
                       >
                         {formatTimestamp(event.created_at)}
                       </time>
@@ -183,7 +197,7 @@ function ActivityWorkspace() {
                     {event.details && (
                       <p className="mt-2 text-xs leading-5 text-foreground-muted">{event.details}</p>
                     )}
-                    <p className="mt-2 text-[10px] uppercase tracking-[0.08em] text-foreground-subtle">
+                    <p className="mt-2 text-xs font-medium text-foreground-subtle">
                       Persisted workspace event
                     </p>
                   </div>
@@ -191,6 +205,7 @@ function ActivityWorkspace() {
               );
             })}
           </ol>
+          </div>
         </section>
       )}
     </div>
@@ -199,9 +214,22 @@ function ActivityWorkspace() {
 
 function ActivityLoading() {
   return (
-    <div className="flex min-h-56 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-foreground-muted">
-      <Loader2 size={18} className="animate-spin text-primary" />
+    <div role="status" className="flex min-h-56 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-foreground-muted">
+      <Loader2 size={18} className="animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
       Loading recorded activity…
+    </div>
+  );
+}
+
+function ActivityPageLoading() {
+  return (
+    <div className="pb-8">
+      <PageHeader
+        eyebrow="Audit history"
+        title="Activity"
+        description="A chronological record of events persisted by the backend."
+      />
+      <ActivityLoading />
     </div>
   );
 }

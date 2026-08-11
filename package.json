@@ -10,12 +10,16 @@
     "build": "next build",
     "start": "node scripts/start-standalone.mjs",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit --incremental false"
+    "typecheck": "tsc --noEmit --incremental false",
+    "test:homepage": "node --no-warnings --test scripts/homepage-contract.test.mjs",
+    "test:device-gate": "node --experimental-strip-types --no-warnings --test scripts/device-access.test.mjs",
+    "test:dashboard": "node --no-warnings --test scripts/dashboard-contract.test.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.40.0",
+    "geist": "1.7.2",
     "lucide-react": "^1.16.0",
     "next": "^16.2.12",
     "react": "19.2.4",

@@ -62,15 +62,30 @@ function AnalysisHistory() {
     void loadHistory(selectedProjectId);
   }, [loadHistory, selectedProjectId]);
 
+  const selectProject = (projectId: string) => {
+    setAnalyses([]);
+    setExpandedId(null);
+    setError(null);
+    setLoading(true);
+    setSelectedProjectId(projectId);
+  };
+
   if (projectsLoading) return <HistoryLoading />;
 
   if (projects.length === 0) {
     return (
-      <StatePanel
-        title="No analysis history"
-        description="Connect a project before running repository analysis."
-        action={{ label: "Connect a project", href: "/dashboard/repositories" }}
-      />
+      <div>
+        <PageHeader
+          eyebrow="Repository analysis"
+          title="Saved analysis history"
+          description="Review durable source-analysis records without inferring runtime or security state."
+        />
+        <StatePanel
+          title="No analysis history"
+          description="Connect a project before running repository analysis."
+          action={{ label: "Connect a project", href: "/dashboard/repositories" }}
+        />
+      </div>
     );
   }
 
@@ -95,11 +110,27 @@ function AnalysisHistory() {
       <ProjectSelector
         projects={projects}
         value={selectedProjectId}
-        onChange={setSelectedProjectId}
+        onChange={selectProject}
         className="block max-w-sm"
       />
 
       {selectedProject && <ProjectTabs projectId={selectedProject.id} />}
+
+      {selectedProject && !loading && (
+        <section aria-label="Analysis history context" className="rounded-xl border border-border bg-card px-4 py-4 shadow-sm sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">Selected source record</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{selectedProject.name}</p>
+              <p className="mt-1 font-mono text-[11px] text-foreground-muted">{selectedProject.branch || "Branch not recorded"}</p>
+            </div>
+            <div className="rounded-lg border border-border bg-surface-subtle px-4 py-3 sm:text-right">
+              <p className="text-xs text-foreground-muted">Saved runs</p>
+              <p className="mt-1 font-mono text-xl font-semibold tabular-nums text-foreground">{analyses.length}</p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {error ? (
         <StatePanel
@@ -121,12 +152,17 @@ function AnalysisHistory() {
           {analyses.map((analysis, index) => {
             const expanded = expandedId === analysis.id;
             return (
-              <article key={analysis.id} className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+              <article
+                key={analysis.id}
+                className={`overflow-hidden rounded-xl border bg-card shadow-sm transition-colors ${
+                  index === 0 ? "border-primary/30" : "border-border"
+                }`}
+              >
                 <button
                   type="button"
                   onClick={() => setExpandedId(expanded ? null : analysis.id)}
                   aria-expanded={expanded}
-                  className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-subtle sm:px-5"
+                  className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-subtle sm:px-5"
                 >
                   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary-subtle text-primary">
                     <Clock3 size={16} />
@@ -164,7 +200,7 @@ function AnalysisHistory() {
                         ["CPU recommendation", analysis.cpu_recommendation],
                         ["Memory recommendation", analysis.memory_recommendation],
                         ["Storage recommendation", analysis.storage_recommendation],
-                        ["Deployment strategy", analysis.deployment_strategy],
+                        ["Detected deployment shape", analysis.deployment_strategy],
                       ].map(([label, value]) => (
                         <div key={label} className="rounded-lg border border-border bg-surface-subtle p-3">
                           <dt className="text-[11px] font-medium text-foreground-muted">{label}</dt>
@@ -226,7 +262,7 @@ function HistoryLoading({ compact = false }: { compact?: boolean }) {
         compact ? "min-h-52" : "min-h-[55vh]"
       }`}
     >
-      <Loader2 size={18} className="animate-spin text-primary" />
+      <Loader2 size={18} className="animate-spin text-primary motion-reduce:animate-none" />
       Loading saved analysis history…
     </div>
   );

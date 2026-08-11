@@ -230,21 +230,35 @@ export default function ProfilePage() {
 
   if (isLoading) {
     return (
-      <div role="status" className="flex min-h-80 items-center justify-center">
-        <Loader2 size={24} className="animate-spin text-primary" aria-hidden="true" />
-        <span className="ml-3 text-sm text-foreground-muted">Loading account…</span>
+      <div className="mx-auto max-w-6xl">
+        <PageHeader
+          eyebrow="Account"
+          title="Profile and security"
+          description="Manage account details and the multi-factor method enforced at sign-in."
+        />
+        <div role="status" className="flex min-h-80 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
+          <Loader2 size={24} className="animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+          <span className="ml-3 text-sm text-foreground-muted">Loading account…</span>
+        </div>
       </div>
     );
   }
 
   if (!profile) {
     return (
-      <StatePanel
-        variant="error"
-        title="Account profile is unavailable"
-        description={profileLoadError || "The profile response was empty."}
-        action={{ label: "Try again", onClick: () => void loadAccount() }}
-      />
+      <div className="mx-auto max-w-6xl">
+        <PageHeader
+          eyebrow="Account"
+          title="Profile and security"
+          description="Manage account details and the multi-factor method enforced at sign-in."
+        />
+        <StatePanel
+          variant="error"
+          title="Account profile is unavailable"
+          description={profileLoadError || "The profile response was empty."}
+          action={{ label: "Try again", onClick: () => void loadAccount() }}
+        />
+      </div>
     );
   }
 
@@ -273,8 +287,10 @@ export default function ProfilePage() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="space-y-4">
-          <section className="rounded-xl border border-border bg-card p-5 text-center shadow-sm">
+        <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+          <section className="overflow-hidden rounded-xl border border-border bg-card text-center shadow-sm">
+            <div className="h-1 bg-primary" aria-hidden="true" />
+            <div className="p-5">
             <div
               aria-hidden="true"
               className="mx-auto grid h-16 w-16 place-items-center rounded-full border border-primary/25 bg-primary-subtle text-xl font-semibold text-primary"
@@ -286,11 +302,12 @@ export default function ProfilePage() {
             </h2>
             <p className="mt-1 break-all text-xs text-foreground-muted">{profile.email}</p>
             {user?.email_verified === true && (
-              <span className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success-subtle px-2.5 py-1 text-[10px] font-semibold text-success">
+              <span className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success-subtle px-2.5 py-1 text-xs font-semibold text-success">
                 <CheckCircle2 size={12} aria-hidden="true" />
                 Verified email
               </span>
             )}
+            </div>
           </section>
 
           <section
@@ -346,11 +363,16 @@ export default function ProfilePage() {
             aria-labelledby="profile-details-heading"
             className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6"
           >
-            <div className="flex items-center gap-2">
-              <UserRound size={18} className="text-primary" aria-hidden="true" />
+            <div className="flex items-center gap-3 border-b border-border pb-4">
+              <span className="grid h-10 w-10 place-items-center rounded-lg bg-primary-subtle text-primary">
+                <UserRound size={18} aria-hidden="true" />
+              </span>
+              <div>
               <h2 id="profile-details-heading" className="text-base font-semibold text-foreground">
                 Account details
               </h2>
+                <p className="mt-0.5 text-xs text-foreground-muted">Identity fields stored for this account.</p>
+              </div>
             </div>
 
             <form onSubmit={updateProfile} className="mt-5 space-y-4">
@@ -365,7 +387,7 @@ export default function ProfilePage() {
                     autoComplete="given-name"
                     value={firstName}
                     onChange={(event) => setFirstName(event.target.value)}
-                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 text-base text-foreground outline-none transition-colors focus:border-primary sm:text-sm"
+                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 text-base text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15 sm:text-sm"
                   />
                 </div>
                 <div>
@@ -378,7 +400,7 @@ export default function ProfilePage() {
                     autoComplete="family-name"
                     value={lastName}
                     onChange={(event) => setLastName(event.target.value)}
-                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 text-base text-foreground outline-none transition-colors focus:border-primary sm:text-sm"
+                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 text-base text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15 sm:text-sm"
                   />
                 </div>
               </div>
@@ -398,7 +420,7 @@ export default function ProfilePage() {
                 <button type="submit" disabled={isUpdating} className="ops-primary disabled:opacity-60">
                   {isUpdating ? (
                     <>
-                      <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                      <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       Saving…
                     </>
                   ) : (
@@ -413,15 +435,19 @@ export default function ProfilePage() {
             aria-labelledby="mfa-heading"
             className="rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6"
           >
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={18} className="text-primary" aria-hidden="true" />
+            <div className="flex items-center gap-3 border-b border-border pb-4">
+              <span className="grid h-10 w-10 place-items-center rounded-lg bg-success-subtle text-success">
+                <ShieldCheck size={18} aria-hidden="true" />
+              </span>
+              <div>
               <h2 id="mfa-heading" className="text-base font-semibold text-foreground">
                 Multi-factor authentication
               </h2>
+                <p className="mt-0.5 max-w-2xl text-xs leading-5 text-foreground-muted">
+                  Require a second code after primary sign-in.
+                </p>
+              </div>
             </div>
-            <p className="mt-2 max-w-2xl text-xs leading-5 text-foreground-muted">
-              Require either an authenticator code or an email-delivered code after primary sign-in.
-            </p>
 
             {mfaError && (
               <div
@@ -499,7 +525,7 @@ export default function ProfilePage() {
                       setMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))
                     }
                     required
-                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 font-mono text-base tracking-[0.18em] text-foreground outline-none transition-colors focus:border-primary"
+                    className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 font-mono text-base tracking-[0.18em] text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -510,7 +536,7 @@ export default function ProfilePage() {
                   >
                     {mfaBusy ? (
                       <>
-                        <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                        <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                         Verifying…
                       </>
                     ) : (
@@ -558,7 +584,7 @@ export default function ProfilePage() {
                       value={mfaCode}
                       onChange={(event) => setMfaCode(event.target.value)}
                       required
-                      className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 font-mono text-base text-foreground outline-none transition-colors focus:border-primary sm:text-sm"
+                      className="mt-2 min-h-11 w-full rounded-lg border border-border bg-background-secondary px-3 font-mono text-base text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15 sm:text-sm"
                     />
                   </div>
                   <button
@@ -568,7 +594,7 @@ export default function ProfilePage() {
                   >
                     {mfaBusy ? (
                       <>
-                        <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                        <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                         Disabling…
                       </>
                     ) : (
@@ -586,7 +612,7 @@ export default function ProfilePage() {
                   className="ops-primary disabled:opacity-60"
                 >
                   {mfaBusy ? (
-                    <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                    <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                   ) : (
                     <ShieldCheck size={15} aria-hidden="true" />
                   )}

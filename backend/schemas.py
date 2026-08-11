@@ -255,6 +255,7 @@ class AzureConnectRequest(BaseModel):
     region: str = "eastus"
     acr_login_server: Optional[str] = None
     app_service_plan: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
 
@@ -269,6 +270,7 @@ class AzureConnectResponse(BaseModel):
     region: str
     acr_login_server: Optional[str] = None
     app_service_plan: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -284,6 +286,7 @@ class AzureConnectionUpsert(BaseModel):
     resource_group: Optional[str] = None
     acr_login_server: Optional[str] = None
     app_service_plan: Optional[str] = None
+    aks_cluster_name: Optional[str] = None
     namespace_prefix: Optional[str] = None
 
 

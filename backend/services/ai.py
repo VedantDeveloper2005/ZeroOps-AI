@@ -3,6 +3,7 @@ import json
 import re
 import time
 import logging
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
@@ -150,6 +151,32 @@ class FailureReviewContract(BaseModel):
     severity: Literal["critical", "error", "warning"]
     recommended_fix: str = Field(min_length=1, max_length=600)
     step_by_step_resolution: list[FailureResolutionStep] = Field(max_length=6)
+
+
+@dataclass(frozen=True)
+class RepositoryAnalysisOutcome:
+    """Repository analysis plus truthful model-execution provenance."""
+
+    analysis: dict[str, Any]
+    ai_used: bool
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FailureAnalysisOutcome:
+    """Failure diagnosis plus truthful model-execution provenance."""
+
+    analysis: dict[str, Any]
+    ai_used: bool
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    unavailable_reason: str | None = None
 
 
 def _repository_model_gateway() -> ModelGateway:
@@ -574,9 +601,45 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     if database_dependencies and any(k in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL"] for k in scanned_vars):
         vulnerabilities.append("Medium: Ensure database connection string uses SSL connection options in production.")
 
-    # Azure App Service derives runtime configuration from the reviewed
-    # application and does not consume generated cluster manifests.
-    k8s_manifest = ""
+    # Detect repository-owned Kubernetes configuration deterministically. Do
+    # not generate a manifest or ask a model to infer one: target selection is
+    # based only on files that actually exist in the immutable source tree.
+    kubernetes_detected = False
+    helm_detected = False
+    kustomize_detected = False
+    kubernetes_assets: dict[str, list[str]] = {
+        "manifest_files": [],
+        "chart_directories": [],
+        "kustomization_files": [],
+    }
+    if not isinstance(repo_path, dict):
+        try:
+            from backend.services.aks import detect_kubernetes_assets
+        except ImportError:  # pragma: no cover - worker-style imports
+            from services.aks import detect_kubernetes_assets
+        try:
+            assets = detect_kubernetes_assets(repo_path)
+            kubernetes_assets = {
+                "manifest_files": list(assets.manifest_files),
+                "chart_directories": list(assets.chart_directories),
+                "kustomization_files": list(assets.kustomization_files),
+            }
+            kubernetes_detected = assets.detected
+            helm_detected = bool(assets.chart_directories)
+            kustomize_detected = bool(assets.kustomization_files)
+        except (OSError, ValueError):
+            # Source scanning remains usable for non-Kubernetes projects. A
+            # selected AKS path repeats validation and fails closed.
+            pass
+    k8s_manifest = (
+        f"Detected {len(kubernetes_assets['manifest_files'])} manifest file(s), "
+        f"{len(kubernetes_assets['chart_directories'])} Helm chart(s), and "
+        f"{len(kubernetes_assets['kustomization_files'])} Kustomize configuration(s)."
+        if kubernetes_detected
+        else ""
+    )
+    if kubernetes_detected:
+        deployment_strategy = "azure-aks"
     
     # Environment variables intelligence classification
     detected_vars_detail = []
@@ -678,6 +741,10 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         "vulnerabilities": vulnerabilities,
         "dockerfile": dockerfile,
         "kubernetes_manifest": k8s_manifest,
+        "kubernetes_detected": kubernetes_detected,
+        "helm_detected": helm_detected,
+        "kustomize_detected": kustomize_detected,
+        "kubernetes_assets": kubernetes_assets,
         
         # Real AI analysis fields
         "runtime": runtime,
@@ -745,7 +812,12 @@ def log_ai_request(provider: str, model: str, latency_s: float, success: bool,
     )
 
 
-def analyze_repository(repo_path, project_id: str = "default") -> dict:
+def analyze_repository(
+    repo_path,
+    project_id: str = "default",
+    *,
+    include_provenance: bool = False,
+) -> dict | RepositoryAnalysisOutcome:
     """Enrich deterministic repository facts with a strictly bounded AI review.
 
     The model never supplies deployment instructions, ports, resource settings,
@@ -758,7 +830,14 @@ def analyze_repository(repo_path, project_id: str = "default") -> dict:
             "AI_ROUTE_ISOLATED | Production API returned deterministic repository facts; "
             "model inference runs only in the repository-analysis Function."
         )
-        return local_analysis
+        outcome = RepositoryAnalysisOutcome(
+            analysis=local_analysis,
+            ai_used=False,
+            provider="none",
+            model="deterministic-repository-scanner",
+            unavailable_reason="repository_model_execution_isolated",
+        )
+        return outcome if include_provenance else outcome.analysis
     files_context, repo_tree = _safe_model_context(repo_path)
     source_facts = {
         key: local_analysis.get(key)
@@ -819,7 +898,24 @@ Repository tree:
                 tokens_used,
                 result.degraded_reason or "all_model_routes_failed",
             )
-            return local_analysis
+            outcome = RepositoryAnalysisOutcome(
+                analysis=local_analysis,
+                ai_used=False,
+                provider=result.provenance.provider,
+                model=result.provenance.model,
+                input_tokens=(
+                    result.provenance.input_tokens
+                    + result.provenance.primary_input_tokens
+                ),
+                output_tokens=(
+                    result.provenance.output_tokens
+                    + result.provenance.primary_output_tokens
+                ),
+                unavailable_reason=(
+                    result.degraded_reason or "all_model_routes_failed"
+                ),
+            )
+            return outcome if include_provenance else outcome.analysis
 
         review = validate_repository_review(result.value.model_dump(mode="json"))
         log_ai_request(
@@ -829,7 +925,21 @@ Repository tree:
             True,
             tokens_used,
         )
-        return merge_repository_review(local_analysis, review)
+        outcome = RepositoryAnalysisOutcome(
+            analysis=merge_repository_review(local_analysis, review),
+            ai_used=True,
+            provider=result.provenance.provider,
+            model=result.provenance.model,
+            input_tokens=(
+                result.provenance.input_tokens
+                + result.provenance.primary_input_tokens
+            ),
+            output_tokens=(
+                result.provenance.output_tokens
+                + result.provenance.primary_output_tokens
+            ),
+        )
+        return outcome if include_provenance else outcome.analysis
     except Exception:
         latency = time.time() - start_time
         log_ai_request(
@@ -845,7 +955,14 @@ Repository tree:
             AI_REPOSITORY_PROVIDER,
             AI_REPOSITORY_MODEL,
         )
-        return local_analysis
+        outcome = RepositoryAnalysisOutcome(
+            analysis=local_analysis,
+            ai_used=False,
+            provider=AI_REPOSITORY_PROVIDER or "none",
+            model=AI_REPOSITORY_MODEL or "deterministic-repository-scanner",
+            unavailable_reason="provider_or_contract_failure",
+        )
+        return outcome if include_provenance else outcome.analysis
 
 
 def analyze_failure_local(logs: list, build_logs: list) -> dict:
@@ -916,13 +1033,22 @@ def analyze_failure_local(logs: list, build_logs: list) -> dict:
     }
 
 
-def analyze_failure_nemotron(logs: list, build_logs: list, events: list = None) -> dict:
+def analyze_failure_nemotron(
+    logs: list,
+    build_logs: list,
+    events: list | None = None,
+    *,
+    include_provenance: bool = False,
+) -> dict | FailureAnalysisOutcome:
     """Analyze a failed deployment with a redacted, validated AI review.
 
     Failure analysis belongs to the repository-analysis trust boundary and uses
     only its workload-specific routes. The historical function name remains as
     a compatibility alias, while NVIDIA GLM is primary and Groq GPT-OSS is the
     explicit backup. Both unavailable routes degrade to the local analyzer.
+    Existing callers receive the historical analysis dictionary by default;
+    durable audit callers can request provenance to distinguish a model result
+    from deterministic fallback.
     """
     local_analysis = analyze_failure_local(logs, build_logs)
 
@@ -985,7 +1111,24 @@ def analyze_failure_nemotron(logs: list, build_logs: list, events: list = None) 
                 tokens_used,
                 result.degraded_reason or "all_model_routes_failed",
             )
-            return local_analysis
+            outcome = FailureAnalysisOutcome(
+                analysis=local_analysis,
+                ai_used=False,
+                provider=result.provenance.provider,
+                model=result.provenance.model,
+                input_tokens=(
+                    result.provenance.input_tokens
+                    + result.provenance.primary_input_tokens
+                ),
+                output_tokens=(
+                    result.provenance.output_tokens
+                    + result.provenance.primary_output_tokens
+                ),
+                unavailable_reason=(
+                    result.degraded_reason or "all_model_routes_failed"
+                ),
+            )
+            return outcome if include_provenance else outcome.analysis
 
         data = validate_failure_review(result.value.model_dump(mode="json"))
         log_ai_request(
@@ -995,7 +1138,21 @@ def analyze_failure_nemotron(logs: list, build_logs: list, events: list = None) 
             True,
             tokens_used,
         )
-        return data
+        outcome = FailureAnalysisOutcome(
+            analysis=data,
+            ai_used=True,
+            provider=result.provenance.provider,
+            model=result.provenance.model,
+            input_tokens=(
+                result.provenance.input_tokens
+                + result.provenance.primary_input_tokens
+            ),
+            output_tokens=(
+                result.provenance.output_tokens
+                + result.provenance.primary_output_tokens
+            ),
+        )
+        return outcome if include_provenance else outcome.analysis
     except Exception:
         latency = time.time() - start_time
         log_ai_request(
@@ -1011,7 +1168,14 @@ def analyze_failure_nemotron(logs: list, build_logs: list, events: list = None) 
             AI_REPOSITORY_PROVIDER,
             AI_REPOSITORY_MODEL,
         )
-        return local_analysis
+        outcome = FailureAnalysisOutcome(
+            analysis=local_analysis,
+            ai_used=False,
+            provider=AI_REPOSITORY_PROVIDER or "none",
+            model=AI_REPOSITORY_MODEL or "deterministic-scanner",
+            unavailable_reason="provider_or_contract_failure",
+        )
+        return outcome if include_provenance else outcome.analysis
 
 def generate_default_dockerfile(framework: str) -> str:
     if not framework or framework == "Unknown":

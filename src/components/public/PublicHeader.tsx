@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { Menu } from "lucide-react";
+import { useRef } from "react";
 import { BrandMark } from "@/components/BrandMark";
 
 export type PublicSection =
@@ -29,14 +32,17 @@ function HeaderLink({
   href,
   label,
   active,
+  onNavigate,
 }: {
   href: string;
   label: string;
   active: boolean;
+  onNavigate?: () => void;
 }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       className={[
         "inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-medium transition-colors",
@@ -52,6 +58,13 @@ function HeaderLink({
 }
 
 export function PublicHeader({ current }: PublicHeaderProps) {
+  const mobileMenuRef = useRef<HTMLDetailsElement>(null);
+  const closeMobileMenu = () => {
+    if (mobileMenuRef.current) {
+      mobileMenuRef.current.open = false;
+    }
+  };
+
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
       <div className="mx-auto flex min-h-16 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 lg:px-8">
@@ -80,14 +93,14 @@ export function PublicHeader({ current }: PublicHeaderProps) {
           </Link>
           <Link
             href="/signup"
-            aria-label="Start building"
+            aria-label="Create a workspace"
             className="inline-flex min-h-11 items-center justify-center rounded-lg bg-primary px-3.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-4"
           >
-            <span className="sm:hidden">Start</span>
-            <span className="hidden sm:inline">Start building</span>
+            <span className="sm:hidden">Create</span>
+            <span className="hidden sm:inline">Create workspace</span>
           </Link>
 
-          <details className="group relative lg:hidden">
+          <details ref={mobileMenuRef} className="group relative lg:hidden">
             <summary
               aria-label="Toggle navigation"
               className="grid min-h-11 min-w-11 cursor-pointer list-none place-items-center rounded-lg border border-border bg-card text-foreground transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden"
@@ -104,6 +117,7 @@ export function PublicHeader({ current }: PublicHeaderProps) {
                   href={item.href}
                   label={item.label}
                   active={current === item.section}
+                  onNavigate={closeMobileMenu}
                 />
               ))}
               <div className="mt-1 border-t border-border pt-1 sm:hidden">
@@ -111,6 +125,7 @@ export function PublicHeader({ current }: PublicHeaderProps) {
                   href="/login"
                   label="Sign in"
                   active={false}
+                  onNavigate={closeMobileMenu}
                 />
               </div>
             </nav>

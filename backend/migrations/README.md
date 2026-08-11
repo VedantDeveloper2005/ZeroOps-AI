@@ -15,23 +15,34 @@ Current migrations:
 - `004_auth_identity_integrity` normalizes stored email identities, rejects
   ambiguous case/whitespace aliases, and restores the Google identity unique
   index on upgraded databases.
+- `005_devsecops_domain` adds normalized, tenant-owned pipeline, repository
+  change, security, webhook, incident, AI-investigation, and remediation
+  records, plus nullable Azure/App Service/AKS telemetry fields. It also
+  removes zero defaults from legacy metric columns so missing telemetry stays
+  unavailable, without rewriting ambiguous historical zeroes or storing raw
+  payloads, secrets, prompts, logs, or Terraform execution artifacts.
+- `006_secure_pending_approvals` invalidates legacy approvals that retained
+  plaintext executor parameters. New approvals store a versioned Fernet
+  ciphertext envelope in the compatibility column and erase it after use.
+- `007_change_analysis_retry_history` removes a cross-run uniqueness constraint
+  that prevented an approval-bound retry of the same immutable commit from
+  retaining its own change decision. Per-run idempotency remains enforced.
 
 ## Legacy sensitive-column retirement
 
-The existing schema predates the tenant-history layer and still has three
+The existing schema predates the tenant-history layer and still has two
 columns that must be retired in a separately tested compatibility release:
 
 - `database_instances.password`
 - `database_instances.connection_string`
-- `pending_approvals.raw_parameters`
 
 Do not backfill any of them into `operation_runs`, `artifacts`, or
 `activity_events`. The database credentials must be rotated into Azure Key
 Vault and replaced with a non-secret Key Vault reference. Approval execution
-must be redesigned around an immutable artifact digest plus a short-lived
-executor-only reference before `raw_parameters` can be dropped. Until that
-release, history writers must use `backend.services.redaction` and persist only
-digests, redacted summaries, and sanitized evidence.
+uses an encrypted, single-use compatibility envelope until a future schema
+release replaces the column with an immutable artifact digest and short-lived
+executor-only reference. History writers persist only digests, redacted
+summaries, and sanitized evidence.
 
 PostgreSQL row-level security is intentionally not enabled by this migration.
 The current API enforces tenant membership in every history query. RLS should be

@@ -19,10 +19,10 @@ export function BrandMark({ href = "/", compact = false, className }: BrandMarkP
     >
       <span
         aria-hidden="true"
-        className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary text-white shadow-sm"
+        className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary text-primary-foreground shadow-sm"
       >
-        <span className="h-3.5 w-3.5 rotate-45 rounded-[3px] border-[1.5px] border-white" />
-        <span className="absolute h-1.5 w-1.5 rounded-[2px] bg-white" />
+        <span className="h-3.5 w-3.5 rotate-45 rounded-[3px] border-[1.5px] border-current" />
+        <span className="absolute h-1.5 w-1.5 rounded-[2px] bg-current" />
       </span>
       {!compact && (
         <span className="whitespace-nowrap text-[15px] font-semibold tracking-[-0.02em]">

@@ -42,7 +42,18 @@ EXCLUDED_FILE_NAMES = {
 
 def _backend_entries() -> Iterable[tuple[PurePosixPath, Path]]:
     tracked = subprocess.run(
-        ["git", "-C", str(REPOSITORY_ROOT), "ls-files", "-z", "--", "backend"],
+        [
+            "git",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "backend",
+        ],
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")

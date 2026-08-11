@@ -95,6 +95,25 @@ export default function BillingPage() {
         description="A record of on-demand paid operations returned by the configured payment backend. This is not a subscription or invoice view."
       />
 
+      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-border bg-card px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary-subtle text-primary">
+            <CreditCard size={18} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-foreground">On-demand operations only</p>
+            <p className="mt-1 text-xs leading-5 text-foreground-muted">
+              Amounts and payment states come from the configured backend; no subscription state is inferred.
+            </p>
+          </div>
+        </div>
+        {!isLoading && !error && (
+          <span className="shrink-0 rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-medium text-foreground-muted tabular-nums">
+            {operations.length} recorded
+          </span>
+        )}
+      </div>
+
       {isLoading ? (
         <div
           role="status"
@@ -116,21 +135,28 @@ export default function BillingPage() {
           description="No payment-gated operation has been created for this account."
         />
       ) : (
-        <section aria-labelledby="operation-history-heading" className="space-y-3">
-          <div className="flex items-center gap-2">
-            <ReceiptText size={18} className="text-primary" aria-hidden="true" />
-            <h2 id="operation-history-heading" className="text-sm font-semibold text-foreground">
-              Operation history
-            </h2>
+        <section aria-labelledby="operation-history-heading" className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b border-border px-4 py-4 sm:px-5">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-surface-subtle text-primary">
+              <ReceiptText size={17} aria-hidden="true" />
+            </span>
+            <div>
+              <h2 id="operation-history-heading" className="text-sm font-semibold text-foreground">
+                Operation history
+              </h2>
+              <p className="mt-0.5 text-xs text-foreground-muted">
+                Provider-reported payment and consumption state.
+              </p>
+            </div>
           </div>
 
-          <ul className="space-y-3">
+          <ul className="divide-y divide-border">
             {operations.map((operation) => {
               const isCheckingOut = checkoutOperationId === operation.id;
               return (
                 <li
                   key={operation.id}
-                  className="rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5"
+                  className="p-4 transition-colors hover:bg-surface-subtle/60 sm:p-5"
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
@@ -140,7 +166,7 @@ export default function BillingPage() {
                           {operation.description?.trim() || operationLabel(operation.operation_type)}
                         </h3>
                         <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusClass(operation.status)}`}
+                          className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(operation.status)}`}
                         >
                           {operationLabel(operation.status)}
                         </span>

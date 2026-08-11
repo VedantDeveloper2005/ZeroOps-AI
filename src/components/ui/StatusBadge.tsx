@@ -64,7 +64,7 @@ const statusConfig: Record<
   warning: {
     dot: "status-dot-yellow",
     bg: "bg-warning/10 border-warning/20",
-    text: "text-warning",
+    text: "text-warning-hover",
     label: "Warning",
   },
   failed: {
