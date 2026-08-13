@@ -246,21 +246,27 @@ jobs:
               --resource-type virtualMachines \
               --all \
               --output json 2>/dev/null)"; then
+              candidate_skus_path="${RUNNER_TEMP}/terraform-runner-candidate-skus.json"
+              usage_path="${RUNNER_TEMP}/terraform-runner-quota-input.tmp"
+              printf '%s' "${candidate_skus_json}" > "${candidate_skus_path}"
+              printf '%s' "${usage_json}" > "${usage_path}"
               python3 - \
                 "${TARGET_LOCATION}" \
                 "${REQUIRED_VCPUS}" \
                 "${report_dir}/candidate-skus.json" \
                 "$(IFS=,; echo "${candidate_sizes[*]}")" \
-                "${candidate_skus_json}" \
-                "${usage_json}" <<'PY'
+                "${candidate_skus_path}" \
+                "${usage_path}" <<'PY'
           import json
           import sys
 
-          location, required_vcpus, output_path, candidate_text, sku_text, usage_text = sys.argv[1:]
+          location, required_vcpus, output_path, candidate_text, sku_path, usage_path = sys.argv[1:]
           required_vcpus = int(required_vcpus)
           candidate_names = set(candidate_text.split(","))
-          skus = json.loads(sku_text)
-          usage = json.loads(usage_text)
+          with open(sku_path, encoding="utf-8") as handle:
+              skus = json.load(handle)
+          with open(usage_path, encoding="utf-8") as handle:
+              usage = json.load(handle)
           usage_by_name = {
               str(item.get("name", {}).get("value", "")).lower(): item
               for item in usage
@@ -351,7 +357,7 @@ jobs:
           fi
           unset usage_json regional_usage regional_current regional_limit regional_free
           unset family_usage family_current family_limit family_free sku_family sku_vcpus
-          unset candidate_sizes candidate_skus_json viable_alternatives
+          unset candidate_sizes candidate_skus_json candidate_skus_path usage_path viable_alternatives
 
           required_providers=(
             Microsoft.App

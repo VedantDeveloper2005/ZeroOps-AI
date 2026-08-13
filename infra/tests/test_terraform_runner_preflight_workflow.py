@@ -82,6 +82,8 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             "family_free",
             "compute-quota.json",
             "candidate-skus.json",
+            'candidate_skus_path="${RUNNER_TEMP}/terraform-runner-candidate-skus.json"',
+            'with open(sku_path, encoding="utf-8")',
             "Standard_B2s",
             "Standard_D2as_v5",
             '"viable": (',
