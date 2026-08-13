@@ -183,12 +183,20 @@ jobs:
 
           if image_json="$(az vm image show --location "${TARGET_LOCATION}" --urn "${TARGET_IMAGE_URN}" --output json 2>/dev/null)"; then
             if jq -e --arg location "${TARGET_LOCATION}" '
-              ((.publisher // "") | ascii_downcase) == "canonical"
+              ((.publisher // .publisherName // "") | ascii_downcase) == "canonical"
               and (.offer // "") == "0001-com-ubuntu-server-jammy"
-              and (.sku // "") == "22_04-lts-gen2"
+              and (.sku // .skus // "") == "22_04-lts-gen2"
               and ((.version // "") | length) > 0
             ' <<< "${image_json}" >/dev/null; then
               pass_check "Canonical Ubuntu 22.04 LTS Gen2 is available in ${TARGET_LOCATION}."
+              jq '{
+                publisher: (.publisher // .publisherName // ""),
+                offer: (.offer // ""),
+                sku: (.sku // .skus // ""),
+                version: (.version // ""),
+                hyperVGeneration: (.hyperVGeneration // "unknown"),
+                purchasePlanRequired: (.plan != null)
+              }' <<< "${image_json}" > "${report_dir}/image-evidence.json"
             else
               fail_check 'The resolved VM image did not match the fixed Ubuntu 22.04 LTS Gen2 contract.'
             fi
@@ -281,6 +289,12 @@ jobs:
                           return default
               return default
 
+          def capability_truthy(record, name):
+              for item in record.get("capabilities") or []:
+                  if item.get("name") == name:
+                      return str(item.get("value", "")).lower() == "true"
+              return False
+
           def target_is_restricted(record):
               for restriction in record.get("restrictions") or []:
                   restriction_type = str(restriction.get("type", "")).lower()
@@ -316,6 +330,16 @@ jobs:
                       zones.update(str(value) for value in item.get("zones") or [])
               vcpus = int(capability(record, "vCPUs"))
               memory_gb = capability(record, "MemoryGB")
+              accelerated_networking = capability_truthy(
+                  record, "AcceleratedNetworkingEnabled"
+              )
+              ephemeral_os_disk = capability_truthy(
+                  record, "EphemeralOSDiskSupported"
+              )
+              trusted_launch = (
+                  capability_truthy(record, "TrustedLaunchSupported")
+                  and not capability_truthy(record, "TrustedLaunchDisabled")
+              )
               restricted = target_is_restricted(record)
               candidates.append(
                   {
@@ -323,6 +347,9 @@ jobs:
                       "family": family or "unknown",
                       "vcpus": vcpus,
                       "memoryGB": memory_gb,
+                      "acceleratedNetworking": accelerated_networking,
+                      "ephemeralOSDisk": ephemeral_os_disk,
+                      "trustedLaunch": trusted_launch,
                       "zones": sorted(zones),
                       "targetRestricted": restricted,
                       "familyQuotaCurrent": current,
@@ -331,6 +358,9 @@ jobs:
                       "viable": (
                           vcpus == required_vcpus
                           and memory_gb >= 4
+                          and accelerated_networking
+                          and ephemeral_os_disk
+                          and trusted_launch
                           and {"1", "2"}.issubset(zones)
                           and not restricted
                           and free >= required_vcpus
