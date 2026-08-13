@@ -18,7 +18,9 @@ on:
 
 concurrency:
   group: zeroops-backend-${{ github.ref }}
-  cancel-in-progress: true
+  # OneDeploy can keep running in Azure briefly after GitHub cancels a job. Queue
+  # main deployments instead so a replacement run cannot collide with it (409).
+  cancel-in-progress: false
 
 jobs:
   security:

@@ -133,3 +133,10 @@ def test_workflow_deploys_the_canonical_zip() -> None:
     assert "\n          path: backend/\n" not in workflow
     assert "python -m gunicorn backend.main:app" in root_startup
     assert "python -m gunicorn backend.main:app" in backend_startup
+
+
+def test_workflow_serializes_onedeploy_runs() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "group: zeroops-backend-${{ github.ref }}" in workflow
+    assert "cancel-in-progress: false" in workflow
