@@ -163,6 +163,10 @@ jobs:
 
               sku_family="$(jq -r '.[0].family // ""' <<< "${exact_sku_json}")"
               sku_vcpus="$(jq -r '[.[0].capabilities[]? | select(.name == "vCPUs") | .value][0] // ""' <<< "${exact_sku_json}")"
+              sku_accelerated_networking="$(jq -r '[.[0].capabilities[]? | select(.name == "AcceleratedNetworkingEnabled") | .value][0] // "false" | ascii_downcase' <<< "${exact_sku_json}")"
+              sku_ephemeral_os_disk="$(jq -r '[.[0].capabilities[]? | select(.name == "EphemeralOSDiskSupported") | .value][0] // "false" | ascii_downcase' <<< "${exact_sku_json}")"
+              sku_security_types="$(jq -r '[.[0].capabilities[]? | select(.name == "SecurityType") | .value][0] // "" | ascii_downcase' <<< "${exact_sku_json}")"
+              sku_trusted_launch_disabled="$(jq -r '[.[0].capabilities[]? | select(.name == "TrustedLaunchDisabled") | .value][0] // "false" | ascii_downcase' <<< "${exact_sku_json}")"
               if [[ "${sku_vcpus}" == "${REQUIRED_VCPUS}" ]]; then
                 pass_check "VM size ${TARGET_VM_SIZE} requires ${REQUIRED_VCPUS} vCPUs as expected."
               else
@@ -170,6 +174,14 @@ jobs:
               fi
               if [[ -z "${sku_family}" ]]; then
                 fail_check "VM size ${TARGET_VM_SIZE} did not report a quota family."
+              fi
+              if [[ "${sku_accelerated_networking}" == "true" ]] && \
+                [[ "${sku_ephemeral_os_disk}" == "true" ]] && \
+                [[ "${sku_security_types}" == *"trustedlaunch"* ]] && \
+                [[ "${sku_trusted_launch_disabled}" != "true" ]]; then
+                pass_check "VM size ${TARGET_VM_SIZE} supports accelerated networking, ephemeral OS disks, and Trusted Launch."
+              else
+                fail_check "VM size ${TARGET_VM_SIZE} does not satisfy the fixed networking, disk, and Trusted Launch contract."
               fi
             elif [[ "${sku_count}" -eq 0 ]]; then
               fail_check "VM size ${TARGET_VM_SIZE} is not published in ${TARGET_LOCATION}."
@@ -241,7 +253,9 @@ jobs:
               Standard_B2s
               Standard_B2als_v2
               Standard_D2s_v3
+              Standard_D2as_v4
               Standard_D2as_v5
+              Standard_D2ds_v4
               Standard_D2ds_v5
             )
             if candidate_skus_json="$(az vm list-skus \
@@ -290,6 +304,12 @@ jobs:
                       return str(item.get("value", "")).lower() == "true"
               return False
 
+          def capability_text(record, name):
+              for item in record.get("capabilities") or []:
+                  if item.get("name") == name:
+                      return str(item.get("value", ""))
+              return ""
+
           def target_is_restricted(record):
               for restriction in record.get("restrictions") or []:
                   restriction_type = str(restriction.get("type", "")).lower()
@@ -332,7 +352,9 @@ jobs:
                   record, "EphemeralOSDiskSupported"
               )
               trusted_launch = (
-                  capability_truthy(record, "TrustedLaunchSupported")
+                  "trustedlaunch" in capability_text(
+                      record, "SecurityType"
+                  ).lower()
                   and not capability_truthy(record, "TrustedLaunchDisabled")
               )
               restricted = target_is_restricted(record)
@@ -382,6 +404,7 @@ jobs:
           fi
           unset usage_json regional_usage regional_current regional_limit regional_free
           unset family_usage family_current family_limit family_free sku_family sku_vcpus
+          unset sku_accelerated_networking sku_ephemeral_os_disk sku_security_types sku_trusted_launch_disabled
           unset candidate_sizes candidate_skus_json candidate_skus_path usage_path viable_alternatives
 
           required_providers=(
