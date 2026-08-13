@@ -130,7 +130,7 @@ AI_REPOSITORY_SECONDARY_API_KEY = _setting("AI_REPOSITORY_SECONDARY_API_KEY")
 
 # Explicit repository-analysis fallback. It never inherits a generic provider
 # key or either primary workload credential. Conservative complete-prompt
-# budgets reduce rate-limit risk for small demos; provider limits can change.
+# budgets reduce rate-limit risk for bounded repository reviews; provider limits can change.
 AI_REPOSITORY_FALLBACK_PROVIDER = _setting(
     "AI_REPOSITORY_FALLBACK_PROVIDER", "groq"
 ).strip().lower()
@@ -297,7 +297,7 @@ def check_azure_cli() -> bool:
             check=False,
         )
         return result.returncode == 0
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 

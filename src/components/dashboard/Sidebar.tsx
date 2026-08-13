@@ -4,23 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
-  Bot,
   Boxes,
-  CircleDollarSign,
   ChevronLeft,
   ChevronRight,
   FolderKanban,
-  Gauge,
   LayoutDashboard,
   ListChecks,
-  Logs,
-  Network,
   Plus,
   ReceiptText,
   Settings,
-  ShieldCheck,
-  Siren,
-  UserRound,
   X,
 } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
@@ -38,40 +30,49 @@ const navigation = [
     label: "Workspace",
     items: [
       { label: "Overview", href: "/dashboard", icon: LayoutDashboard, matches: (path: string) => path === "/dashboard" },
-      { label: "Projects", href: "/dashboard/projects", icon: FolderKanban, matches: (path: string) => path.startsWith("/dashboard/projects") || path.startsWith("/dashboard/apps/") },
-    ],
-  },
-  {
-    label: "Delivery",
-    items: [
-      { label: "Analysis", href: "/dashboard/ai-analysis", icon: Bot, matches: (path: string) => path.startsWith("/dashboard/ai-analysis") },
-      { label: "Architecture", href: "/dashboard/architect", icon: Network, matches: (path: string) => path.startsWith("/dashboard/architect") || path.startsWith("/dashboard/infrastructure") },
-      { label: "Deployments", href: "/dashboard/deployments", icon: Boxes, matches: (path: string) => path.startsWith("/dashboard/deployments") },
+      {
+        label: "Projects",
+        href: "/dashboard/projects",
+        icon: FolderKanban,
+        matches: (path: string) =>
+          path.startsWith("/dashboard/projects") ||
+          path.startsWith("/dashboard/apps/") ||
+          path.startsWith("/dashboard/ai-analysis") ||
+          path.startsWith("/dashboard/architect") ||
+          path.startsWith("/dashboard/infrastructure") ||
+          path.startsWith("/dashboard/logs") ||
+          path.startsWith("/dashboard/security") ||
+          path.startsWith("/dashboard/incidents"),
+      },
     ],
   },
   {
     label: "Operations",
     items: [
+      { label: "Deployments", href: "/dashboard/deployments", icon: Boxes, matches: (path: string) => path.startsWith("/dashboard/deployments") },
       { label: "Monitoring", href: "/dashboard/monitoring", icon: Activity, matches: (path: string) => path.startsWith("/dashboard/monitoring") },
-      { label: "Logs", href: "/dashboard/logs", icon: Logs, matches: (path: string) => path.startsWith("/dashboard/logs") },
-      { label: "Security", href: "/dashboard/security", icon: ShieldCheck, matches: (path: string) => path.startsWith("/dashboard/security") },
-      { label: "Incidents", href: "/dashboard/incidents", icon: Siren, matches: (path: string) => path.startsWith("/dashboard/incidents") },
       { label: "Activity", href: "/dashboard/activity", icon: ListChecks, matches: (path: string) => path.startsWith("/dashboard/activity") },
-    ],
-  },
-  {
-    label: "Planning",
-    items: [
-      { label: "Cost", href: "/dashboard/cost-optimization", icon: CircleDollarSign, matches: (path: string) => path.startsWith("/dashboard/cost-optimization"), badge: "Setup" },
-      { label: "Capacity", href: "/dashboard/autoscaling", icon: Gauge, matches: (path: string) => path.startsWith("/dashboard/autoscaling"), badge: "Setup" },
     ],
   },
   {
     label: "Account",
     items: [
-      { label: "Settings", href: "/dashboard/settings", icon: Settings, matches: (path: string) => path.startsWith("/dashboard/settings") },
-      { label: "Profile", href: "/dashboard/profile", icon: UserRound, matches: (path: string) => path.startsWith("/dashboard/profile") },
-      { label: "Plan & billing", href: "/dashboard/billing", icon: ReceiptText, matches: (path: string) => path.startsWith("/dashboard/billing") },
+      {
+        label: "Settings",
+        href: "/dashboard/settings",
+        icon: Settings,
+        matches: (path: string) =>
+          path.startsWith("/dashboard/settings") ||
+          path.startsWith("/dashboard/profile") ||
+          path.startsWith("/dashboard/cost-optimization") ||
+          path.startsWith("/dashboard/autoscaling"),
+      },
+      {
+        label: "Billing",
+        href: "/dashboard/billing",
+        icon: ReceiptText,
+        matches: (path: string) => path.startsWith("/dashboard/billing"),
+      },
     ],
   },
 ] as const;
@@ -157,9 +158,6 @@ export function Sidebar({
                       )}
                       <Icon size={18} strokeWidth={1.8} className="shrink-0" />
                       <span className={cn("min-w-0 flex-1 truncate", collapsed && "lg:sr-only")}>{item.label}</span>
-                      {"badge" in item && item.badge && (
-                        <span className={cn("rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground-subtle", collapsed && "lg:hidden")}>{item.badge}</span>
-                      )}
                     </Link>
                   </li>
                 );

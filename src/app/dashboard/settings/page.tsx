@@ -369,7 +369,9 @@ function SettingsWorkspace() {
       secret_scan_enabled: pipelineConfiguration.secret_scan_enabled,
       container_scan_enabled: pipelineConfiguration.container_scan_enabled,
       iac_scan_enabled: pipelineConfiguration.iac_scan_enabled,
-      production_approval_required: pipelineConfiguration.production_approval_required,
+      // Compatibility field: deployment_mode is the authoritative approval policy.
+      production_approval_required:
+        pipelineConfiguration.deployment_mode === "require_approval",
       ai_failure_diagnosis_enabled: pipelineConfiguration.ai_failure_diagnosis_enabled,
       auto_retry_transient_failures: pipelineConfiguration.auto_retry_transient_failures,
       auto_rollback_enabled: pipelineConfiguration.auto_rollback_enabled,
@@ -394,7 +396,7 @@ function SettingsWorkspace() {
   async function regenerateWebhookSecret() {
     if (!selectedProjectId) return;
     if (
-      pipelineConfiguration?.github_webhook_configured &&
+      pipelineConfiguration?.github_webhook_secret_configured &&
       !window.confirm(
         "Regenerate the GitHub webhook secret? The existing secret will stop working after you update the webhook in GitHub.",
       )
@@ -814,9 +816,9 @@ function PipelineSettings({
             </p>
           </div>
           <span className="rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-semibold text-foreground-muted">
-            {configuration.github_webhook_configured
-              ? "GitHub webhook configured"
-              : "GitHub webhook not configured"}
+            {configuration.github_webhook_secret_configured
+              ? "Signing secret stored"
+              : "No signing secret stored"}
           </span>
         </div>
 
@@ -829,7 +831,7 @@ function PipelineSettings({
         <fieldset className="mt-5">
           <legend className="text-sm font-semibold text-foreground">GitHub automation</legend>
           <p className="mt-1 text-xs leading-5 text-foreground-muted">
-            Push-triggered execution works only after the backend confirms a webhook for this project.
+            This screen reports only whether a signing secret is stored. Install the webhook in GitHub separately; installation and event delivery are not verified here.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label htmlFor="pipeline-branch">
@@ -871,12 +873,12 @@ function PipelineSettings({
               id="pipeline-auto-deploy"
               label="Automatic deployment on push"
               description={
-                configuration.github_webhook_configured
-                  ? "Run the stored pipeline when the configured branch receives a push."
-                  : "Unavailable until a GitHub webhook is configured for this project."
+                configuration.github_webhook_secret_configured
+                  ? "Allow authenticated push events for the configured branch. A stored secret does not prove the repository webhook is installed or delivering events."
+                  : "Generate a signing secret and install the returned URL and secret in GitHub before enabling push events."
               }
               checked={configuration.automatic_deployment}
-              disabled={!configuration.github_webhook_configured}
+              disabled={!configuration.github_webhook_secret_configured}
               onChange={(checked) => onChange("automatic_deployment", checked)}
             />
           </div>
@@ -898,7 +900,7 @@ function PipelineSettings({
                 {regeneratingWebhook ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <KeyRound size={14} aria-hidden="true" />}
                 {regeneratingWebhook
                   ? "Generating…"
-                  : configuration.github_webhook_configured
+                  : configuration.github_webhook_secret_configured
                     ? "Regenerate secret"
                     : "Generate secret"}
               </button>
@@ -963,7 +965,17 @@ function PipelineSettings({
         <fieldset>
           <legend className="text-sm font-semibold text-foreground">Failure and approval policy</legend>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <PipelineToggle id="pipeline-production-approval" label="Production approval required" description="Block production deployment until an approval is recorded." checked={configuration.production_approval_required} onChange={(checked) => onChange("production_approval_required", checked)} />
+            <div className="rounded-lg border border-border bg-surface-subtle p-3">
+              <p className="text-xs font-semibold text-foreground">Approval gate</p>
+              <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                {configuration.deployment_mode === "require_approval"
+                  ? "Required by the selected push behavior. A validated release stops for an authenticated approval."
+                  : "Not required by the selected push behavior. Change the deployment mode above to require approval."}
+              </p>
+              <p className="mt-2 text-xs font-semibold text-foreground-subtle">
+                Derived from deployment mode
+              </p>
+            </div>
             <PipelineToggle id="pipeline-ai-diagnosis" label="AI failure diagnosis" description="Allow sanitized failure context to be investigated after a failed stage." checked={configuration.ai_failure_diagnosis_enabled} onChange={(checked) => onChange("ai_failure_diagnosis_enabled", checked)} />
             <PipelineToggle id="pipeline-auto-retry" label="Retry transient failures" description="Allow only policy-classified transient operations to be retried." checked={configuration.auto_retry_transient_failures} onChange={(checked) => onChange("auto_retry_transient_failures", checked)} />
             <PipelineToggle id="pipeline-auto-rollback" label="Automatic rollback" description="Permit rollback only where backend policy marks it safe and authorized." checked={configuration.auto_rollback_enabled} onChange={(checked) => onChange("auto_rollback_enabled", checked)} />

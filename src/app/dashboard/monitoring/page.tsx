@@ -29,7 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const windows: { value: MonitoringWindow; label: string }[] = [
-  { value: "live", label: "Live" },
+  { value: "live", label: "Latest" },
   { value: "1h", label: "1h" },
   { value: "6h", label: "6h" },
   { value: "24h", label: "24h" },

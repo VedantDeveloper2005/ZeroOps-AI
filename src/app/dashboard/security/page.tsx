@@ -251,7 +251,11 @@ function SecurityWorkspace() {
                     <p className="px-5 py-8 text-center text-xs text-foreground-muted">The completed scan stored no findings.</p>
                   ) : (
                     <ul className="divide-y divide-border">
-                      {latestScan.findings.slice(0, 20).map((finding) => (
+                      {latestScan.findings.slice(0, 20).map((finding) => {
+                        const secretContentRedacted =
+                          finding.redacted || finding.category === "secret";
+
+                        return (
                         <li key={finding.id} className="px-4 py-4 sm:px-5">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-xs font-semibold text-foreground">{finding.title}</span>
@@ -259,10 +263,11 @@ function SecurityWorkspace() {
                             {finding.blocking && <span className="rounded-full border border-danger/25 bg-danger-subtle px-2.5 py-1 text-xs font-semibold text-danger">Blocking</span>}
                           </div>
                           <p className="mt-1 text-xs text-foreground-muted">{finding.scanner}{finding.rule_id ? ` · ${finding.rule_id}` : ""}{finding.file_path ? ` · ${finding.file_path}${finding.line_number ? `:${finding.line_number}` : ""}` : ""}</p>
-                          {!latestScan.tools.some((tool) => tool.category === "secret") && finding.description && <p className="mt-2 text-xs leading-5 text-foreground-muted">{finding.description}</p>}
-                          {latestScan.tools.some((tool) => tool.category === "secret") && <p className="mt-2 text-xs text-foreground-muted">Potential secret content redacted.</p>}
+                          {!secretContentRedacted && finding.description && <p className="mt-2 text-xs leading-5 text-foreground-muted">{finding.description}</p>}
+                          {secretContentRedacted && <p className="mt-2 text-xs text-foreground-muted">Potential secret content redacted.</p>}
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
                   )}
                 </section>

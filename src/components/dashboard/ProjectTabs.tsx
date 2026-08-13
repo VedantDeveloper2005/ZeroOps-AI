@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ProjectTabsProps = {
   projectId: string;
 };
 
-const tabs = [
+const primaryTabs = [
   {
     label: "Overview",
     path: (id: string) => `/dashboard/apps/${id}`,
@@ -36,6 +37,9 @@ const tabs = [
     path: (id: string) => `/dashboard/monitoring?project=${id}`,
     matches: (pathname: string) => pathname.startsWith("/dashboard/monitoring"),
   },
+] as const;
+
+const secondaryTabs = [
   {
     label: "Logs",
     path: (id: string) => `/dashboard/logs?project=${id}`,
@@ -76,6 +80,8 @@ const tabs = [
   },
 ] as const;
 
+const tabs = [...primaryTabs, ...secondaryTabs] as const;
+
 export function ProjectTabs({ projectId }: ProjectTabsProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -112,9 +118,10 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
         </select>
       </label>
 
-      <nav aria-label="Project sections" className="ops-surface no-scrollbar hidden overflow-x-auto p-1.5 sm:block">
-        <ul className="flex min-w-max gap-1">
-          {tabs.map((tab) => {
+      <nav aria-label="Project sections" className="ops-surface hidden p-1.5 sm:block">
+        <div className="flex items-center gap-1">
+          <ul className="flex min-w-0 flex-1 gap-1 overflow-x-auto no-scrollbar">
+          {primaryTabs.map((tab) => {
             const href = tab.path(projectId);
             const active = activeTab?.label === tab.label;
             return (
@@ -134,7 +141,48 @@ export function ProjectTabs({ projectId }: ProjectTabsProps) {
               </li>
             );
           })}
-        </ul>
+          </ul>
+
+          <details className="group relative shrink-0">
+            <summary
+              className={cn(
+                "flex min-h-11 cursor-pointer list-none items-center gap-1 rounded-lg px-3 text-xs font-semibold transition-colors marker:hidden",
+                secondaryTabs.some((tab) => tab.label === activeTab?.label)
+                  ? "bg-primary-subtle text-primary shadow-sm"
+                  : "text-foreground-muted hover:bg-surface-subtle hover:text-foreground",
+              )}
+            >
+              More
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className="transition-transform group-open:rotate-180"
+              />
+            </summary>
+            <ul className="absolute right-0 z-30 mt-2 w-48 rounded-xl border border-border bg-card p-1.5 shadow-lg">
+              {secondaryTabs.map((tab) => {
+                const href = tab.path(projectId);
+                const active = activeTab?.label === tab.label;
+                return (
+                  <li key={tab.label}>
+                    <Link
+                      href={href}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex min-h-11 items-center rounded-lg px-3 text-xs font-semibold transition-colors",
+                        active
+                          ? "bg-primary-subtle text-primary"
+                          : "text-foreground-muted hover:bg-surface-subtle hover:text-foreground",
+                      )}
+                    >
+                      {tab.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        </div>
       </nav>
     </>
   );

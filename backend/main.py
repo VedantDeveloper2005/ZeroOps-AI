@@ -3504,6 +3504,62 @@ def _serialize_infrastructure_plan(plan: models.InfrastructurePlan) -> schemas.I
     )
 
 
+def _apply_chat_plan_update(
+    plan: models.InfrastructurePlan,
+    updated_plan_data: dict,
+) -> None:
+    """Apply a chatbot plan revision while keeping indexed fields authoritative."""
+    current_plan_data = plan.plan_data or {}
+    current_region_label = current_plan_data.get("region_label")
+    updated_region_label = updated_plan_data.get("region_label")
+
+    plan.plan_data = updated_plan_data
+    plan.cost_estimate = updated_plan_data.get("cost")
+    plan.security_score = updated_plan_data.get("assessment", {}).get("security", {}).get("value")
+    plan.performance_score = updated_plan_data.get("assessment", {}).get("performance", {}).get("value")
+    plan.reliability_score = updated_plan_data.get("assessment", {}).get("reliability", {}).get("value")
+    plan.estimated_deploy_time = updated_plan_data.get("deployment_time", {}).get("estimate")
+    plan.ai_explanations = updated_plan_data.get("ai_explanations")
+    if updated_region_label and updated_region_label != current_region_label:
+        plan.region = planner.normalize_region(str(updated_region_label))
+    plan.status = "draft"
+    plan.revision += 1
+    plan.approval_note = None
+    plan.approved_at = None
+
+
+def _chat_telemetry_summary(metrics: list[models.DeploymentMetric]) -> dict[str, str] | None:
+    """Summarize only observed telemetry without treating missing values as zero."""
+    cpu_samples = [metric.cpu_utilization for metric in metrics if metric.cpu_utilization is not None]
+    memory_samples = [metric.memory_utilization for metric in metrics if metric.memory_utilization is not None]
+    recent_error_rate = next(
+        (metric.error_rate for metric in metrics if metric.error_rate is not None),
+        None,
+    )
+    recent_response_time = next(
+        (metric.response_time_ms for metric in metrics if metric.response_time_ms is not None),
+        None,
+    )
+    if not any((cpu_samples, memory_samples)) and recent_error_rate is None and recent_response_time is None:
+        return None
+    return {
+        "avg_cpu_utilization": (
+            f"{round(sum(cpu_samples) / len(cpu_samples), 1)}%" if cpu_samples else "Not recorded"
+        ),
+        "avg_memory_utilization": (
+            f"{round(sum(memory_samples) / len(memory_samples), 1)}%"
+            if memory_samples
+            else "Not recorded"
+        ),
+        "recent_error_rate": (
+            f"{round(recent_error_rate, 2)}%" if recent_error_rate is not None else "Not recorded"
+        ),
+        "recent_response_time_ms": (
+            f"{recent_response_time}ms" if recent_response_time is not None else "Not recorded"
+        ),
+    }
+
+
 async def _owned_project_or_404(
     project_id: uuid.UUID,
     current_user: models.User,
@@ -4141,15 +4197,9 @@ async def ai_chat(
             )
             metrics = metrics_result.scalars().all()
 
-            if metrics:
-                avg_cpu = sum(m.cpu_utilization for m in metrics) / len(metrics)
-                avg_mem = sum(m.memory_utilization for m in metrics) / len(metrics)
-                project_metadata["telemetry"] = {
-                    "avg_cpu_utilization": f"{round(avg_cpu, 1)}%",
-                    "avg_memory_utilization": f"{round(avg_mem, 1)}%",
-                    "recent_error_rate": f"{round(metrics[0].error_rate, 2)}%",
-                    "recent_response_time_ms": f"{metrics[0].response_time_ms}ms"
-                }
+            telemetry = _chat_telemetry_summary(metrics)
+            if telemetry:
+                project_metadata["telemetry"] = telemetry
 
     plan_payload = None
     plan_updated = False
@@ -4171,11 +4221,7 @@ async def ai_chat(
             }
             updated_plan, plan_update_summary = planner.apply_chat_instruction(current_plan, req.message)
             if plan_update_summary:
-                architecture_plan.plan_data = updated_plan
-                architecture_plan.status = "draft"
-                architecture_plan.revision += 1
-                architecture_plan.approval_note = None
-                architecture_plan.approved_at = None
+                _apply_chat_plan_update(architecture_plan, updated_plan)
                 db.add(models.ActivityEvent(
                     user_id=current_user.id,
                     project_id=req.project_id,
@@ -5872,15 +5918,7 @@ async def post_architect_chat(
     
     plan_updated = False
     if updated_plan_data != plan.plan_data:
-        plan.plan_data = updated_plan_data
-        plan.cost_estimate = updated_plan_data.get("cost")
-        plan.security_score = updated_plan_data.get("assessment", {}).get("security", {}).get("value")
-        plan.performance_score = updated_plan_data.get("assessment", {}).get("performance", {}).get("value")
-        plan.reliability_score = updated_plan_data.get("assessment", {}).get("reliability", {}).get("value")
-        plan.estimated_deploy_time = updated_plan_data.get("deployment_time", {}).get("estimate")
-        plan.ai_explanations = updated_plan_data.get("ai_explanations")
-        plan.status = "draft"
-        plan.revision += 1
+        _apply_chat_plan_update(plan, updated_plan_data)
         
         db.add(models.ActivityEvent(
             user_id=current_user.id,

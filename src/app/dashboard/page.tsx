@@ -42,6 +42,18 @@ function formatDate(value?: string | null) {
   });
 }
 
+function safeExternalUrl(value?: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function projectState(status?: string | null) {
   if (successfulStatuses.has(status || "")) {
     return {
@@ -126,7 +138,9 @@ export default function DashboardHome() {
   }, [deployments]);
 
   const activeDeployments = deployments.filter((deployment) => activeStatuses.has(deployment.status));
-  const failedDeployments = deployments.filter((deployment) => deployment.status === "failed");
+  const failedDeployments = Array.from(latestByProject.values()).filter(
+    (deployment) => deployment.status === "failed",
+  );
   const incidentNotifications = notifications.filter((notification) => notification.category === "incident");
   const criticalNotifications = notifications.filter(
     (notification) => !notification.read && notification.type === "critical",
@@ -371,9 +385,9 @@ export default function DashboardHome() {
                 tone={(dashboardStats?.failed_deployments ?? failedDeployments.length) > 0 ? "danger" : "neutral"}
               />
               <MetricCard
-                label="Incident records"
+                label="Incident notifications"
                 value={String(incidentNotifications.length)}
-                supportingText="Notifications only; read state is not resolution"
+                supportingText="Notification records; read state is not resolution"
                 icon={ShieldAlert}
                 tone={incidentNotifications.length > 0 ? "warning" : "neutral"}
               />
@@ -396,6 +410,7 @@ export default function DashboardHome() {
                 const state = projectState(
                   deployment?.status || project.latest_deployment_status,
                 );
+                const liveUrl = safeExternalUrl(deployment?.live_url);
                 return (
                   <article
                     key={project.id}
@@ -417,9 +432,9 @@ export default function DashboardHome() {
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      {deployment?.live_url && (
+                      {liveUrl && (
                         <a
-                          href={deployment.live_url}
+                          href={liveUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground"

@@ -1,14 +1,63 @@
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
 
 
 INFRA_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = INFRA_ROOT.parent
 
 
 class InfrastructureContractTests(unittest.TestCase):
+    def test_github_deployments_and_oidc_subject_use_production_environment(self) -> None:
+        manifest = json.loads(
+            (REPOSITORY_ROOT / ".azure" / "federated-credential.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(manifest["name"], "github-production")
+        self.assertEqual(
+            manifest["issuer"], "https://token.actions.githubusercontent.com"
+        )
+        self.assertEqual(
+            manifest["subject"],
+            "repo:VedantDeveloper2005/ZeroOps-AI:environment:production",
+        )
+        self.assertEqual(manifest["audiences"], ["api://AzureADTokenExchange"])
+
+        for workflow_name in ("main_zeroopsai.yml", "main_zeroops-backend.yml"):
+            workflow = (
+                REPOSITORY_ROOT / ".github" / "workflows" / workflow_name
+            ).read_text(encoding="utf-8")
+            self.assertIn("environment: production", workflow)
+            self.assertIn("id-token: write", workflow)
+            self.assertIn(
+                "if: github.event_name != 'pull_request' "
+                "&& github.ref == 'refs/heads/main'",
+                workflow,
+            )
+
+        oidc_documentation = (
+            REPOSITORY_ROOT / "docs" / "github-actions-azure-oidc.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn('$tenantId = "<Microsoft Entra tenant ID>"', oidc_documentation)
+        self.assertIn('$subscriptionId = "<Azure subscription ID>"', oidc_documentation)
+        self.assertIn("az login --tenant $tenantId", oidc_documentation)
+        self.assertIn(
+            "az account set --subscription $subscriptionId", oidc_documentation
+        )
+        self.assertIsNone(
+            re.search(r"az login --tenant [0-9a-fA-F-]{36}", oidc_documentation)
+        )
+        self.assertIsNone(
+            re.search(
+                r"az account set --subscription [0-9a-fA-F-]{36}",
+                oidc_documentation,
+            )
+        )
+
     def test_vmss_is_regular_scale_to_zero_and_capped(self) -> None:
         runner = (INFRA_ROOT / "modules" / "runner" / "main.tf").read_text()
         self.assertIn('priority                     = "Regular"', runner)

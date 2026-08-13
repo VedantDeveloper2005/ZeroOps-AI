@@ -195,4 +195,5 @@ do not mark it passed.
 - [Monitoring and telemetry truthfulness](docs/monitoring.md)
 - [Incidents, investigations, and remediation](docs/incidents-remediation.md)
 - [Azure App Service hosting](docs/azure-app-service.md)
+- [GitHub Actions Azure OIDC setup](docs/github-actions-azure-oidc.md)
 - [Azure infrastructure plan](.azure/deployment-plan.md)

@@ -3,11 +3,9 @@
 import { useMemo, useState } from "react";
 import {
   AppWindow,
-  BadgeCheck,
   Boxes,
   CheckCircle2,
   ChevronDown,
-  CircleAlert,
   Database,
   HardDrive,
   KeyRound,
@@ -16,7 +14,6 @@ import {
   Network,
   Pencil,
   RotateCcw,
-  ShieldCheck,
 } from "lucide-react";
 import type {
   InfrastructurePlan as InfrastructurePlanModel,
@@ -107,8 +104,8 @@ export function InfrastructurePlan({
   };
 
   return (
-    <div className="space-y-5 pb-2">
-      <section aria-labelledby="plan-heading" className="ops-card rounded-2xl p-5 sm:p-7">
+    <div className="space-y-5">
+      <section aria-labelledby="plan-heading" className="ops-card rounded-2xl p-5 sm:p-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
             <p className="text-xs font-semibold text-primary">Saved infrastructure proposal</p>
@@ -122,8 +119,8 @@ export function InfrastructurePlan({
               <StatusBadge status={plan.status} />
             </div>
             <p className="mt-3 text-sm leading-6 text-foreground-muted">
-              This proposal is derived from recorded repository analysis. It is not a live Azure
-              inventory, a price quote, a performance test, or a security certification.
+              Based on saved repository analysis. Azure availability, pricing, and runtime health
+              are checked separately.
             </p>
           </div>
 
@@ -162,43 +159,18 @@ export function InfrastructurePlan({
         </div>
       </section>
 
-      <section aria-labelledby="evidence-heading">
-        <h2 id="evidence-heading" className="sr-only">
-          Recorded plan evidence
-        </h2>
-        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <details className="ops-card rounded-xl p-4">
+        <summary className="flex min-h-11 cursor-pointer items-center justify-between text-sm font-semibold text-foreground">
+          Repository evidence used for this plan
+          <ChevronDown size={16} className="text-foreground-muted" aria-hidden="true" />
+        </summary>
+        <dl className="mt-3 grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-4">
           <EvidenceItem label="Cloud target" value={plan.plan.cloud || "Azure"} />
           <EvidenceItem label="Framework" value={evidence.framework || "Not detected"} />
           <EvidenceItem label="Runtime" value={evidence.runtime || "Not detected"} />
-          <EvidenceItem
-            label="Package manager"
-            value={evidence.package_manager || "Not detected"}
-          />
+          <EvidenceItem label="Package manager" value={evidence.package_manager || "Not detected"} />
         </dl>
-      </section>
-
-      <aside
-        aria-label="Validation boundaries"
-        className="rounded-xl border border-warning/25 bg-warning/10 p-4"
-      >
-        <div className="flex items-start gap-3">
-          <CircleAlert
-            size={18}
-            className="mt-0.5 shrink-0 text-warning"
-            aria-hidden="true"
-          />
-          <div>
-            <p className="text-sm font-semibold text-foreground">
-              Cost and runtime outcomes are not estimated here
-            </p>
-            <p className="mt-1 text-xs leading-5 text-foreground-muted">
-              Subscription-specific pricing, deployment duration, performance, and reliability
-              require Azure-side validation or runtime telemetry. No synthetic scores or costs are
-              shown.
-            </p>
-          </div>
-        </div>
-      </aside>
+      </details>
 
       <section aria-labelledby="resources-heading">
         <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -346,44 +318,15 @@ export function InfrastructurePlan({
         </div>
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-        <article className="ops-card rounded-2xl p-5">
+      <section aria-labelledby="approval-heading">
+        <article className="ops-card rounded-2xl p-5 sm:p-6">
           <div className="flex items-center gap-2">
-            <ShieldCheck size={18} className="text-primary" aria-hidden="true" />
-            <h2 className="text-base font-semibold text-foreground">Execution boundary</h2>
-          </div>
-          <ol className="mt-5 space-y-4 text-xs leading-5 text-foreground-muted">
-            <WorkflowStep
-              number={1}
-              title="Review this revision"
-              detail="Confirm the proposed service, region, tier text, and recorded source findings."
-            />
-            <WorkflowStep
-              number={2}
-              title="Approve explicitly"
-              detail="Approval applies only to this revision. Any edit returns the plan to draft."
-            />
-            <WorkflowStep
-              number={3}
-              title="Start the deployment"
-              detail="The deployment endpoint reruns prerequisites before it can create or update resources."
-            />
-            <WorkflowStep
-              number={4}
-              title="Inspect the recorded outcome"
-              detail="Use persisted deployment logs and the verified release URL to determine what actually happened."
-            />
-          </ol>
-        </article>
-
-        <article className="ops-card rounded-2xl p-5">
-          <div className="flex items-center gap-2">
-            <BadgeCheck size={18} className="text-primary" aria-hidden="true" />
-            <h2 className="text-base font-semibold text-foreground">Review and approval</h2>
+            <CheckCircle2 size={18} className="text-primary" aria-hidden="true" />
+            <h2 id="approval-heading" className="text-base font-semibold text-foreground">Approval</h2>
           </div>
           <p className="mt-3 text-xs leading-5 text-foreground-muted">
-            This workspace currently executes Azure App Service application plans. Other services
-            can be recorded for review but are not deployable by the current engine.
+            Approval applies only to this revision. Any change returns the plan to draft. This
+            workspace currently deploys Azure App Service plans only.
           </p>
 
           {(sourceFindings.length > 0 || unresolvedQuestions.length > 0) && (
@@ -560,27 +503,5 @@ function EvidenceItem({ label, value }: { label: string; value: string }) {
       <dt className="text-xs font-medium text-foreground-muted">{label}</dt>
       <dd className="mt-1.5 break-words text-sm font-semibold text-foreground">{value}</dd>
     </div>
-  );
-}
-
-function WorkflowStep({
-  number,
-  title,
-  detail,
-}: {
-  number: number;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <li className="flex gap-3">
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
-        {number}
-      </span>
-      <div>
-        <p className="font-semibold text-foreground">{title}</p>
-        <p className="mt-0.5">{detail}</p>
-      </div>
-    </li>
   );
 }

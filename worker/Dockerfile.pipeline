@@ -100,10 +100,23 @@ RUN python3 -m venv /opt/zeroops \
     && /opt/zeroops/bin/python -m pip install --no-cache-dir --upgrade pip \
     && /opt/zeroops/bin/python -m pip install --no-cache-dir \
       --requirement /tmp/backend-requirements.txt \
-      checkov==3.3.8 \
-      semgrep==1.164.0 \
     && rm -f /tmp/backend-requirements.txt \
-    && /opt/zeroops/bin/python -m pip check \
+    && /opt/zeroops/bin/python -m pip check
+
+# Scanner CLIs intentionally use separate environments. Their transitive
+# dependencies must not affect one another or downgrade packages used by the
+# API/worker runtime (for example the runtime's security-pinned PyJWT version).
+RUN python3 -m venv /opt/checkov \
+    && /opt/checkov/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/checkov/bin/python -m pip install --no-cache-dir checkov==3.3.8 \
+    && /opt/checkov/bin/python -m pip check \
+    && ln -s /opt/checkov/bin/checkov /usr/local/bin/checkov \
+    && checkov --version \
+    && python3 -m venv /opt/semgrep \
+    && /opt/semgrep/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/semgrep/bin/python -m pip install --no-cache-dir semgrep==1.164.0 \
+    && /opt/semgrep/bin/python -m pip check \
+    && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep \
     && semgrep --version
 
 RUN useradd --create-home --uid 10001 --shell /sbin/nologin zeroops \

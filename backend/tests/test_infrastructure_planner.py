@@ -70,13 +70,55 @@ def test_chat_change_invalidates_deployable_target_without_hiding_limitation():
     assert "currently deploys through Azure App Service only" in application["reason"]
 
 
-def test_chat_can_switch_a_detected_database_to_cosmos():
+def test_chat_questions_are_read_only_even_when_they_name_a_service():
     plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
     updated, summary = planner.apply_chat_instruction(plan, "Can I use Cosmos DB instead?")
     database = next(component for component in updated["components"] if component["id"] == "database")
 
+    assert summary is None
+    assert updated == plan
+    assert database["service"] == "Azure Database for PostgreSQL Flexible Server"
+
+
+def test_chat_explicit_command_can_switch_a_detected_database_to_cosmos():
+    plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
+    updated, summary = planner.apply_chat_instruction(plan, "Use Cosmos DB instead")
+    database = next(component for component in updated["components"] if component["id"] == "database")
+
     assert summary == "Database changed to Azure Cosmos DB for MongoDB."
     assert database["service"] == "Azure Cosmos DB for MongoDB"
+
+
+def test_architect_question_explains_the_saved_plan_without_mutating_it(monkeypatch):
+    plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
+    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+
+    try:
+        from backend.services import ai
+    except ImportError:
+        from services import ai
+
+    updated, reply = ai.architect_chat("Why App Service?", plan)
+
+    assert updated == plan
+    assert "currently configured by ZeroOps" in reply
+    assert "Plan updated" not in reply
+
+
+def test_architect_explicit_edit_preserves_the_requested_service(monkeypatch):
+    try:
+        from backend.services import ai
+    except ImportError:
+        from services import ai
+
+    plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
+    updated, reply = ai.architect_chat("Use Azure Container Apps", plan)
+    application = next(component for component in updated["components"] if component["id"] == "application")
+
+    assert application["service"] == "Azure Container Apps"
+    assert application["deployable"] is False
+    assert "Plan updated" in reply
 
 
 def test_region_updates_are_normalized_and_unknown_regions_are_rejected():
@@ -86,6 +128,24 @@ def test_region_updates_are_normalized_and_unknown_regions_are_rejected():
     assert updated["region_label"] == "West Europe"
     with pytest.raises(ValueError, match="supported Azure region"):
         planner.apply_plan_update(plan, region="Moon Base", component_id=None, service=None, tier=None)
+
+
+def test_chat_capacity_commands_keep_tiers_compatible_with_selected_services():
+    plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
+    plan, _ = planner.apply_chat_instruction(plan, "Use Azure Container Apps")
+    plan, _ = planner.apply_chat_instruction(plan, "Use Cosmos DB instead")
+
+    scaled, scale_summary = planner.apply_chat_instruction(plan, "Scale up")
+    scaled_components = {component["id"]: component for component in scaled["components"]}
+    assert scale_summary is not None
+    assert scaled_components["application"]["tier"] == "Dedicated"
+    assert scaled_components["database"]["tier"] == "Configuration required"
+
+    reduced, cost_summary = planner.apply_chat_instruction(scaled, "Reduce cost")
+    reduced_components = {component["id"]: component for component in reduced["components"]}
+    assert cost_summary is not None
+    assert reduced_components["application"]["tier"] == "Consumption"
+    assert reduced_components["database"]["tier"] == "Configuration required"
 
 
 def test_internal_iac_artifact_exposes_metadata_only(tmp_path, monkeypatch):

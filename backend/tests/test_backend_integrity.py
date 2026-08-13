@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import uuid
 from types import SimpleNamespace
 
@@ -169,3 +170,83 @@ def test_empty_activity_reads_do_not_insert_synthetic_events():
     assert project_db.commits == 0
     assert global_db.added == []
     assert global_db.commits == 0
+
+
+def test_azure_cli_readiness_timeout_is_reported_unavailable(monkeypatch):
+    def time_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(main.config.subprocess, "run", time_out)
+
+    assert main.config.check_azure_cli() is False
+
+
+def test_chat_plan_update_persists_normalized_authoritative_region():
+    plan = SimpleNamespace(
+        plan_data={"region_label": "East US"},
+        region="eastus",
+        cost_estimate=None,
+        security_score=88,
+        performance_score=91,
+        reliability_score=90,
+        estimated_deploy_time="5 minutes",
+        ai_explanations={},
+        status="approved",
+        revision=4,
+        approval_note="approved",
+        approved_at=object(),
+    )
+    updated = {
+        "region_label": "West Europe",
+        "cost": {"monthly_estimate": None},
+        "assessment": {
+            "security": {"value": None},
+            "performance": {"value": None},
+            "reliability": {"value": None},
+        },
+        "deployment_time": {"estimate": None},
+        "ai_explanations": {},
+    }
+
+    main._apply_chat_plan_update(plan, updated)
+
+    assert plan.region == "westeurope"
+    assert plan.plan_data["region_label"] == "West Europe"
+    assert plan.status == "draft"
+    assert plan.revision == 5
+    assert plan.approval_note is None
+    assert plan.approved_at is None
+
+
+def test_chat_telemetry_summary_handles_partial_nullable_samples():
+    metrics = [
+        SimpleNamespace(
+            cpu_utilization=None,
+            memory_utilization=None,
+            error_rate=None,
+            response_time_ms=120,
+        ),
+        SimpleNamespace(
+            cpu_utilization=42.5,
+            memory_utilization=None,
+            error_rate=0.75,
+            response_time_ms=None,
+        ),
+    ]
+
+    summary = main._chat_telemetry_summary(metrics)
+
+    assert summary == {
+        "avg_cpu_utilization": "42.5%",
+        "avg_memory_utilization": "Not recorded",
+        "recent_error_rate": "0.75%",
+        "recent_response_time_ms": "120ms",
+    }
+    assert main._chat_telemetry_summary([
+        SimpleNamespace(
+            cpu_utilization=None,
+            memory_utilization=None,
+            error_rate=None,
+            response_time_ms=None,
+        )
+    ]) is None

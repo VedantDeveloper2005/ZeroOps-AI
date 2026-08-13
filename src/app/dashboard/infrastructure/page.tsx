@@ -284,17 +284,13 @@ function InfrastructureWorkspace() {
   }
 
   const busy = planAction !== null;
-  const selectedProject = projects.find((project) => project.id === selectedProjectId);
-  const approvalRecorded = Boolean(
-    plan && ["approved", "provisioning", "deployed"].includes(plan.status),
-  );
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-5">
       <PageHeader
         eyebrow="AI Architect"
-        title="Review an Azure deployment plan"
-        description="Generate a saved proposal from repository analysis, edit its supported settings, approve one revision, and then start the existing deployment workflow."
+        title="Architecture"
+        description="Review the source-backed Azure plan, make supported changes, and approve one revision before deployment."
         actions={
           <fieldset
             disabled={busy || preflightBusy}
@@ -312,47 +308,6 @@ function InfrastructureWorkspace() {
       />
 
       {selectedProjectId && <ProjectTabs projectId={selectedProjectId} />}
-
-      {selectedProject && (
-        <section aria-labelledby="plan-workflow-heading" className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-          <div className="border-b border-border px-4 py-4 sm:px-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Review workspace</p>
-            <h2 id="plan-workflow-heading" className="mt-1 text-lg font-semibold tracking-tight text-foreground">
-              Evidence, checks, and approval at a glance
-            </h2>
-            <p className="mt-1 text-xs leading-5 text-foreground-muted">
-              These states describe saved ZeroOps records only; they do not imply live Azure readiness.
-            </p>
-          </div>
-          <dl className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
-            <PlanContextItem label="Source" value={selectedProject.name} detail={selectedProject.branch || "Branch not recorded"} tone="complete" />
-            <PlanContextItem
-              label="Saved plan"
-              value={plan ? `Revision ${plan.revision}` : planMissing ? "Not generated" : "Status pending"}
-              detail={plan ? plan.status.replaceAll("_", " ") : "No plan state is assumed"}
-              tone={
-                plan?.status === "approved" || plan?.status === "deployed"
-                  ? "complete"
-                  : plan
-                    ? "attention"
-                    : "neutral"
-              }
-            />
-            <PlanContextItem
-              label="Pre-deployment checks"
-              value={preflight ? preflight.status.replaceAll("_", " ") : "Not run"}
-              detail={preflight ? `Applies to revision ${preflight.plan_revision ?? "not recorded"}` : "No result is inferred"}
-              tone={preflight?.status === "ready" ? "complete" : preflight ? "attention" : "neutral"}
-            />
-            <PlanContextItem
-              label="Human approval"
-              value={approvalRecorded && plan ? `Revision ${plan.revision} approved` : "Required before release"}
-              detail={approvalRecorded ? "Deployment still reruns prerequisites" : "No approval is assumed"}
-              tone={approvalRecorded ? "complete" : "attention"}
-            />
-          </dl>
-        </section>
-      )}
 
       {error && (
         <div
@@ -375,35 +330,32 @@ function InfrastructureWorkspace() {
         <InfrastructurePlanLoading label="Loading saved plan…" />
       ) : plan ? (
         <>
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <div className="min-w-0 space-y-6">
-              <InfrastructurePlanView
-                plan={plan}
-                onUpdate={updatePlan}
-                onApprove={approvePlan}
-                onRegenerate={generatePlan}
-                busy={busy || preflightBusy}
-              />
+          <InfrastructurePlanView
+            plan={plan}
+            onUpdate={updatePlan}
+            onApprove={approvePlan}
+            onRegenerate={generatePlan}
+            busy={busy || preflightBusy}
+          />
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <ArchitectChatPanel
+              projectId={selectedProjectId}
+              onPlanUpdated={(nextPlan) => {
+                setPlan(nextPlan);
+                setPreflight(null);
+                addToast(
+                  "The assistant created a new draft revision. Review it before approval.",
+                  "success",
+                );
+              }}
+            />
+            <div className="min-w-0">
               <DecisionIntelligencePanel
                 preflight={preflight}
                 loading={preflightBusy}
                 onRunPreflight={runPreflight}
               />
-            </div>
-            <div className="min-w-0 xl:relative">
-              <div className="xl:sticky xl:top-24">
-                <ArchitectChatPanel
-                  projectId={selectedProjectId}
-                  onPlanUpdated={(nextPlan) => {
-                    setPlan(nextPlan);
-                    setPreflight(null);
-                    addToast(
-                      "Architect chat created a new draft revision. Review it before approval.",
-                      "success",
-                    );
-                  }}
-                />
-              </div>
             </div>
           </div>
 
@@ -464,34 +416,6 @@ function InfrastructureWorkspace() {
   );
 }
 
-function PlanContextItem({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  tone: "complete" | "attention" | "neutral";
-}) {
-  const indicatorClassName =
-    tone === "complete"
-      ? "bg-success"
-      : tone === "attention"
-        ? "bg-warning"
-        : "bg-foreground-subtle";
-
-  return (
-    <div className="relative bg-card px-4 py-4 sm:px-5">
-      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${indicatorClassName}`} />
-      <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-foreground-subtle">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
-      <dd className="mt-1 text-[11px] leading-4 text-foreground-muted">{detail}</dd>
-    </div>
-  );
-}
-
 type ChatMessage = {
   id: string;
   sender: "user" | "architect" | "status";
@@ -501,7 +425,7 @@ type ChatMessage = {
 const initialChatMessage: ChatMessage = {
   id: "architect-introduction",
   sender: "architect",
-  text: "Ask about this saved proposal or request a supported plan change. A change creates a new draft revision; it never starts a deployment.",
+  text: "Ask why a service was proposed, or use an explicit command to create a new draft revision. Questions never change the plan.",
 };
 
 function ArchitectChatPanel({
@@ -572,7 +496,7 @@ function ArchitectChatPanel({
   return (
     <section
       aria-labelledby="architect-chat-heading"
-      className="ops-card flex h-[32rem] min-h-[28rem] flex-col rounded-2xl border border-border bg-card p-4 sm:p-5"
+      className="ops-card flex h-[28rem] min-h-[24rem] flex-col rounded-2xl border border-border bg-card p-4 sm:p-5"
     >
       <div className="mb-3 border-b border-border pb-3">
         <div className="flex items-center gap-2">
@@ -582,8 +506,8 @@ function ArchitectChatPanel({
           </h2>
         </div>
         <p id="architect-chat-note" className="mt-1.5 text-[11px] leading-4 text-foreground-muted">
-          Replies may be AI-generated. Verify explanations and review every plan change. This panel
-          does not provide a persisted chat history.
+          Answers use the saved plan. Explicit commands can create a draft revision, but never
+          approve or deploy it. Chat history is not persisted.
         </p>
       </div>
 

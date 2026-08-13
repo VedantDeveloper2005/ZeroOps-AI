@@ -42,6 +42,21 @@ class WorkerImageSecurityContractTests(unittest.TestCase):
             "install -d -o zeroops -g zeroops -m 0700 /app/backend/workspace",
             pipeline,
         )
+        self.assertIn("python3 -m venv /opt/checkov", pipeline)
+        self.assertIn("python3 -m venv /opt/semgrep", pipeline)
+        self.assertIn("ln -s /opt/checkov/bin/checkov /usr/local/bin/checkov", pipeline)
+        self.assertIn("ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep", pipeline)
+        runtime_install = pipeline.split("python3 -m venv /opt/checkov", 1)[0]
+        scanner_install = pipeline.split("python3 -m venv /opt/checkov", 1)[1]
+        self.assertNotIn("semgrep==", runtime_install)
+        self.assertNotIn("checkov==", runtime_install)
+        self.assertIn("semgrep==1.164.0", scanner_install)
+        self.assertIn("checkov==3.3.8", scanner_install)
+        checkov_install, semgrep_install = scanner_install.split(
+            "python3 -m venv /opt/semgrep", 1
+        )
+        self.assertNotIn("semgrep==", checkov_install)
+        self.assertNotIn("checkov==", semgrep_install)
         self.assertIn('CMD ["python", "-m", "worker.main"]', pipeline)
 
 

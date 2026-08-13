@@ -492,14 +492,40 @@ export interface PipelineConfiguration {
   ai_failure_diagnosis_enabled: boolean;
   auto_retry_transient_failures: boolean;
   auto_rollback_enabled: boolean;
-  github_webhook_configured: boolean;
+  /** A signing secret exists. This does not verify GitHub webhook installation or delivery. */
+  github_webhook_secret_configured: boolean;
   updated_at: string | null;
 }
 
 export type PipelineConfigurationUpdate = Omit<
   PipelineConfiguration,
-  "project_id" | "github_webhook_configured" | "updated_at"
+  "project_id" | "github_webhook_secret_configured" | "updated_at"
 >;
+
+type PipelineConfigurationWire = Omit<
+  PipelineConfiguration,
+  "github_webhook_secret_configured"
+> & {
+  github_webhook_secret_configured?: boolean;
+  /** Backward-compatible server field; it only represents stored secret state. */
+  github_webhook_configured?: boolean;
+};
+
+function normalizePipelineConfiguration(
+  configuration: PipelineConfigurationWire,
+): PipelineConfiguration {
+  const {
+    github_webhook_configured,
+    github_webhook_secret_configured,
+    ...rest
+  } = configuration;
+
+  return {
+    ...rest,
+    github_webhook_secret_configured:
+      github_webhook_secret_configured ?? github_webhook_configured ?? false,
+  };
+}
 
 export interface GitHubWebhookSecretResponse {
   webhook_url: string;
@@ -1171,14 +1197,26 @@ export const api = {
   updateSettings: (data: Partial<UserSettings>) =>
     request<UserSettings>("/api/user/settings", { method: "PUT", body: JSON.stringify(data) }),
 
-  getPipelineConfiguration: (projectId: string) =>
-    request<PipelineConfiguration>(`/api/projects/${projectId}/pipeline-config`),
+  getPipelineConfiguration: async (projectId: string) =>
+    normalizePipelineConfiguration(
+      await request<PipelineConfigurationWire>(
+        `/api/projects/${projectId}/pipeline-config`,
+      ),
+    ),
 
-  updatePipelineConfiguration: (projectId: string, data: PipelineConfigurationUpdate) =>
-    request<PipelineConfiguration>(`/api/projects/${projectId}/pipeline-config`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+  updatePipelineConfiguration: async (
+    projectId: string,
+    data: PipelineConfigurationUpdate,
+  ) =>
+    normalizePipelineConfiguration(
+      await request<PipelineConfigurationWire>(
+        `/api/projects/${projectId}/pipeline-config`,
+        {
+          method: "PUT",
+          body: JSON.stringify(data),
+        },
+      ),
+    ),
 
   regenerateGitHubWebhookSecret: (projectId: string) =>
     request<GitHubWebhookSecretResponse>(

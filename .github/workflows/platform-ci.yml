@@ -24,7 +24,10 @@ on:
       - "package-lock.json"
       - "worker/**"
       - ".dockerignore"
+      - ".azure/federated-credential.json"
       - ".github/workflows/platform-ci.yml"
+      - ".github/workflows/main_zeroopsai.yml"
+      - ".github/workflows/main_zeroops-backend.yml"
   push:
     branches:
       - main
@@ -48,7 +51,10 @@ on:
       - "package-lock.json"
       - "worker/**"
       - ".dockerignore"
+      - ".azure/federated-credential.json"
       - ".github/workflows/platform-ci.yml"
+      - ".github/workflows/main_zeroopsai.yml"
+      - ".github/workflows/main_zeroops-backend.yml"
   workflow_dispatch:
 
 concurrency:
@@ -118,6 +124,9 @@ jobs:
 
       - name: Validate VMSS execution gates
         run: python -m unittest discover -s worker/tests -v
+
+      - name: Validate infrastructure and deployment identity contracts
+        run: python -m unittest discover -s infra/tests -v
 
       - name: Validate DevSecOps domain and runtime services
         run: |

@@ -54,6 +54,26 @@ DATABASE_SERVICES = {
     "Redis": "Azure Cache for Redis",
 }
 
+LOW_COST_TIERS = {
+    "Azure App Service": "B1",
+    "Azure Container Apps": "Consumption",
+    "Azure Functions": "Flex Consumption",
+    "Azure Static Web Apps": "Free",
+    "Azure Virtual Machines": "B2s",
+    "Azure Database for PostgreSQL Flexible Server": "Burstable B1ms",
+    "Azure Database for MySQL Flexible Server": "Burstable B1ms",
+}
+
+HIGH_CAPACITY_TIERS = {
+    "Azure App Service": "P0v3",
+    "Azure Container Apps": "Dedicated",
+    "Azure Functions": "Premium",
+    "Azure Static Web Apps": "Standard",
+    "Azure Virtual Machines": "D2s v5",
+    "Azure Database for PostgreSQL Flexible Server": "General Purpose",
+    "Azure Database for MySQL Flexible Server": "General Purpose",
+}
+
 
 def _as_list(value: Any) -> list[str]:
     return [str(item) for item in value if str(item).strip()] if isinstance(value, list) else []
@@ -332,7 +352,12 @@ def _set_component_service(component: dict[str, Any], service: str) -> None:
     component["service"] = service
     component["tier"] = details["tiers"][0]
     component["deployable"] = details["deployable"]
-    if not details["deployable"]:
+    if details["deployable"]:
+        component["reason"] = (
+            "App Service is the deployment target currently implemented by ZeroOps. "
+            "The connected Azure plan, permissions, and runtime configuration are validated before deployment."
+        )
+    else:
         component["reason"] = f"{service} is saved as an architecture choice, but this workspace currently deploys through Azure App Service only."
 
 
@@ -355,9 +380,79 @@ def apply_plan_update(plan: dict[str, Any], *, region: str | None, component_id:
     return clear_unverified_estimates(updated)
 
 
+def _apply_compatible_tier_profile(
+    plan: dict[str, Any],
+    tier_by_service: dict[str, str],
+    *,
+    application_reason: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Apply only tiers that are valid for each component's current service."""
+    updated = deepcopy(plan)
+    changed_services: list[str] = []
+    for component in updated.get("components", []):
+        service = str(component.get("service") or "")
+        target_tier = tier_by_service.get(service)
+        if not target_tier or component.get("tier") == target_tier:
+            continue
+        component["tier"] = target_tier
+        if component.get("id") == "application":
+            component["reason"] = application_reason
+        changed_services.append(service)
+
+    if not changed_services:
+        return deepcopy(plan), []
+    return clear_unverified_estimates(updated), changed_services
+
+
 def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str, Any], str | None]:
     """Translate a narrow set of architecture requests into deterministic updates."""
     text = message.lower().strip()
+    if not text:
+        return deepcopy(plan), None
+
+    # Plan changes are consequential and must be explicit. Questions such as
+    # "Why App Service?" or "Can I use Cosmos DB?" receive an explanation and
+    # never create a new revision. The caller can tell users which imperative
+    # command to use when they actually want the change.
+    question_starters = (
+        "can ",
+        "could ",
+        "do ",
+        "does ",
+        "how ",
+        "is ",
+        "should ",
+        "what ",
+        "when ",
+        "where ",
+        "which ",
+        "why ",
+        "would ",
+    )
+    if text.endswith("?") or text.startswith(question_starters):
+        return deepcopy(plan), None
+
+    change_markers = (
+        "change ",
+        "move ",
+        "replace ",
+        "select ",
+        "set ",
+        "switch ",
+        "use ",
+    )
+    requests_change = text.startswith(change_markers) or any(
+        marker in text
+        for marker in (
+            " change ",
+            " move to ",
+            " replace ",
+            " select ",
+            " set to ",
+            " switch to ",
+            " use ",
+        )
+    )
     region_matches = {
         "central india": "centralindia",
         "centralindia": "centralindia",
@@ -369,7 +464,7 @@ def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str
         "southeast asia": "southeastasia",
     }
     for phrase, region in region_matches.items():
-        if phrase in text:
+        if requests_change and phrase in text:
             return apply_plan_update(plan, region=region, component_id=None, service=None, tier=None), f"Region changed to {human_region(region)}."
 
     service_matches = {
@@ -383,10 +478,10 @@ def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str
         "app service": "Azure App Service",
     }
     for phrase, service in service_matches.items():
-        if phrase in text:
+        if requests_change and phrase in text:
             return apply_plan_update(plan, region=None, component_id="application", service=service, tier=None), f"Application runtime changed to {service}."
 
-    if "cosmos db" in text or "cosmos database" in text:
+    if requests_change and ("cosmos db" in text or "cosmos database" in text):
         if any(item.get("id") == "database" for item in plan.get("components", [])):
             return apply_plan_update(
                 plan,
@@ -396,7 +491,7 @@ def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str
                 tier=None,
             ), "Database changed to Azure Cosmos DB for MongoDB."
 
-    if "add redis" in text:
+    if text.startswith("add redis") or " add redis" in text:
         updated = deepcopy(plan)
         if not any(item.get("id") == "cache" for item in updated.get("components", [])):
             updated.setdefault("components", []).append(_component(
@@ -406,32 +501,28 @@ def apply_chat_instruction(plan: dict[str, Any], message: str) -> tuple[dict[str
             ))
             return clear_unverified_estimates(updated), "Azure Cache for Redis added to the plan."
 
-    if "reduce cost" in text or "lower cost" in text or "cheap" in text:
-        updated = deepcopy(plan)
-        changed = False
-        for comp in updated.get("components", []):
-            if comp.get("id") == "application":
-                comp["tier"] = "B1"  # lower basic tier
-                comp["reason"] = "Pricing tier reduced to B1 to optimize infrastructure costs."
-                changed = True
-            elif comp.get("id") == "database":
-                comp["tier"] = "Burstable B1ms"
-                changed = True
-        if changed:
-            return clear_unverified_estimates(updated), "Tiers were adjusted to lower-cost options; validate actual Azure pricing before approval."
+    if text.startswith(("reduce cost", "lower cost", "optimize cost")):
+        updated, changed_services = _apply_compatible_tier_profile(
+            plan,
+            LOW_COST_TIERS,
+            application_reason=(
+                "A lower-cost tier compatible with the selected application service was requested. "
+                "Validate actual Azure pricing and capacity before approval."
+            ),
+        )
+        if changed_services:
+            return updated, "Compatible tiers were adjusted to lower-cost options; validate actual Azure pricing before approval."
 
-    if "increase scalability" in text or "scale up" in text or "premium" in text or "high performance" in text:
-        updated = deepcopy(plan)
-        changed = False
-        for comp in updated.get("components", []):
-            if comp.get("id") == "application":
-                comp["tier"] = "P0v3"  # high performance tier
-                comp["reason"] = "Pricing tier scaled up to P0v3 to support high-performance workloads."
-                changed = True
-            elif comp.get("id") == "database":
-                comp["tier"] = "General Purpose"
-                changed = True
-        if changed:
-            return clear_unverified_estimates(updated), "Tiers were adjusted for higher capacity; validate actual Azure pricing and capacity before approval."
+    if text.startswith(("increase scalability", "scale up", "use premium", "switch to premium")):
+        updated, changed_services = _apply_compatible_tier_profile(
+            plan,
+            HIGH_CAPACITY_TIERS,
+            application_reason=(
+                "A higher-capacity tier compatible with the selected application service was requested. "
+                "Validate actual Azure pricing and capacity before approval."
+            ),
+        )
+        if changed_services:
+            return updated, "Compatible tiers were adjusted for higher capacity; validate actual Azure pricing and capacity before approval."
 
     return deepcopy(plan), None

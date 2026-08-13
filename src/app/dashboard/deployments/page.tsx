@@ -26,6 +26,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { PipelineTimeline } from "@/components/dashboard/pipeline/PipelineTimeline";
+import { PipelineProgress } from "@/components/dashboard/pipeline/PipelineProgress";
+import { DeploymentComparisonModal } from "@/components/dashboard/deployments/DeploymentComparisonModal";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatePanel } from "@/components/ui/StatePanel";
@@ -309,6 +311,53 @@ function safeExternalUrl(value: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function deploymentChronologyTimestamp(deployment: Deployment): number | null {
+  for (const value of [deployment.started_at, deployment.completed_at]) {
+    if (!value) continue;
+    const timestamp = new Date(value).getTime();
+    if (!Number.isNaN(timestamp)) return timestamp;
+  }
+  return null;
+}
+
+function findPreviousDeployment(
+  current: DeploymentDetail | null,
+  history: Deployment[],
+): Deployment | null {
+  if (!current) return null;
+
+  const currentHistoryRecord = history.find(
+    (deployment) => deployment.id === current.id,
+  );
+  const currentTimestamp =
+    deploymentChronologyTimestamp(current) ??
+    (currentHistoryRecord
+      ? deploymentChronologyTimestamp(currentHistoryRecord)
+      : null);
+  if (currentTimestamp === null) return null;
+
+  return (
+    history
+      .filter(
+        (deployment) =>
+          deployment.project_id === current.project_id &&
+          deployment.id !== current.id,
+      )
+      .map((deployment) => ({
+        deployment,
+        timestamp: deploymentChronologyTimestamp(deployment),
+      }))
+      .filter(
+        (
+          candidate,
+        ): candidate is { deployment: Deployment; timestamp: number } =>
+          candidate.timestamp !== null && candidate.timestamp < currentTimestamp,
+      )
+      .sort((left, right) => right.timestamp - left.timestamp)[0]?.deployment ??
+    null
+  );
 }
 
 function metadataValue(
@@ -616,6 +665,7 @@ function DeploymentsPageContent() {
   const [failureAnalysisError, setFailureAnalysisError] = useState<string | null>(
     null,
   );
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
 
   const [redeploying, setRedeploying] = useState(false);
@@ -718,6 +768,7 @@ function DeploymentsPageContent() {
   }, [fetchHistory]);
 
   useEffect(() => {
+    setCompareModalOpen(false);
     setPaidFixConfirmationOpen(false);
     setResolutionOpen(false);
     setFailureAnalysis(null);
@@ -1106,6 +1157,10 @@ function DeploymentsPageContent() {
         (deployment) => deployment.project_id === activeProjectId,
       )
     : history;
+  const previousDeployment = findPreviousDeployment(
+    currentDeployment,
+    history,
+  );
   const deploymentHistoryHref = activeProjectId
     ? `/dashboard/deployments?${new URLSearchParams({
         project: activeProjectId,
@@ -1451,8 +1506,9 @@ function DeploymentsPageContent() {
                     </p>
                   )}
                 </div>
-                {safeLiveUrl && (
-                  <div className="flex shrink-0 flex-wrap gap-2">
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {safeLiveUrl && (
+                    <>
                     <button
                       type="button"
                       onClick={() => void handleCopyUrl()}
@@ -1470,14 +1526,22 @@ function DeploymentsPageContent() {
                       <ExternalLink size={14} aria-hidden="true" />
                       Open application
                     </a>
-                    <Link
-                      href={`/dashboard/monitoring?project=${currentDeployment.project_id}`}
-                      className="ops-secondary"
-                    >
-                      Open monitoring
-                    </Link>
-                  </div>
-                )}
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setCompareModalOpen(true)}
+                    className="ops-secondary"
+                  >
+                    Compare releases
+                  </button>
+                  <Link
+                    href={`/dashboard/monitoring?project=${currentDeployment.project_id}`}
+                    className="ops-secondary"
+                  >
+                    Open monitoring
+                  </Link>
+                </div>
               </div>
             </article>
 
@@ -1740,6 +1804,15 @@ function DeploymentsPageContent() {
                   ) : null}
                 </div>
               </section>
+            )}
+
+            {pipelineRun && (
+              <PipelineProgress
+                status={pipelineRun.status}
+                stages={stages}
+                startedAt={pipelineRun.started_at}
+                completedAt={pipelineRun.completed_at}
+              />
             )}
 
             <PipelineTimeline
@@ -2093,6 +2166,13 @@ function DeploymentsPageContent() {
           </button>
         </div>
       </dialog>
+
+      <DeploymentComparisonModal
+        isOpen={compareModalOpen}
+        onClose={() => setCompareModalOpen(false)}
+        current={currentDeployment}
+        previous={previousDeployment}
+      />
     </div>
   );
 }
