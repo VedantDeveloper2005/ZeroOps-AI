@@ -80,6 +80,11 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             "az vm list-usage",
             "regional_free",
             "family_free",
+            "compute-quota.json",
+            "candidate-skus.json",
+            "Standard_B2s",
+            "Standard_D2as_v5",
+            '"viable": (',
             "az provider show",
             "az resource list",
             "az network vnet list",
@@ -173,6 +178,7 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             "sku.json",
             "image.json",
             "usage.json",
+            "sku-candidates-raw.json",
         ):
             self.assertNotIn(raw_name, self.workflow)
 

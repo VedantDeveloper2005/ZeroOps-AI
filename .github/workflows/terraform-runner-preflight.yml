@@ -183,11 +183,10 @@ jobs:
 
           if image_json="$(az vm image show --location "${TARGET_LOCATION}" --urn "${TARGET_IMAGE_URN}" --output json 2>/dev/null)"; then
             if jq -e --arg location "${TARGET_LOCATION}" '
-              (.publisher | ascii_downcase) == "canonical"
-              and .offer == "0001-com-ubuntu-server-jammy"
-              and .sku == "22_04-lts-gen2"
-              and (.version | length) > 0
-              and ((.location | ascii_downcase) == ($location | ascii_downcase))
+              ((.publisher // "") | ascii_downcase) == "canonical"
+              and (.offer // "") == "0001-com-ubuntu-server-jammy"
+              and (.sku // "") == "22_04-lts-gen2"
+              and ((.version // "") | length) > 0
             ' <<< "${image_json}" >/dev/null; then
               pass_check "Canonical Ubuntu 22.04 LTS Gen2 is available in ${TARGET_LOCATION}."
             else
@@ -228,11 +227,131 @@ jobs:
                 fail_check "Quota entry ${sku_family} was absent for ${TARGET_LOCATION}."
               fi
             fi
+
+            jq '[.[] | {
+              quota: (.name.value // "unknown"),
+              currentValue,
+              limit
+            }] | sort_by(.quota)' <<< "${usage_json}" > "${report_dir}/compute-quota.json"
+
+            candidate_sizes=(
+              Standard_B2s
+              Standard_B2als_v2
+              Standard_D2s_v3
+              Standard_D2as_v5
+              Standard_D2ds_v5
+            )
+            if candidate_skus_json="$(az vm list-skus \
+              --location "${TARGET_LOCATION}" \
+              --resource-type virtualMachines \
+              --all \
+              --output json 2>/dev/null)"; then
+              python3 - \
+                "${TARGET_LOCATION}" \
+                "${REQUIRED_VCPUS}" \
+                "${report_dir}/candidate-skus.json" \
+                "$(IFS=,; echo "${candidate_sizes[*]}")" \
+                "${candidate_skus_json}" \
+                "${usage_json}" <<'PY'
+          import json
+          import sys
+
+          location, required_vcpus, output_path, candidate_text, sku_text, usage_text = sys.argv[1:]
+          required_vcpus = int(required_vcpus)
+          candidate_names = set(candidate_text.split(","))
+          skus = json.loads(sku_text)
+          usage = json.loads(usage_text)
+          usage_by_name = {
+              str(item.get("name", {}).get("value", "")).lower(): item
+              for item in usage
+          }
+
+          def capability(record, name, default=0.0):
+              for item in record.get("capabilities") or []:
+                  if item.get("name") == name:
+                      try:
+                          return float(item.get("value", default))
+                      except (TypeError, ValueError):
+                          return default
+              return default
+
+          def target_is_restricted(record):
+              for restriction in record.get("restrictions") or []:
+                  restriction_type = str(restriction.get("type", "")).lower()
+                  values = [str(value).lower() for value in restriction.get("values") or []]
+                  info = restriction.get("restrictionInfo") or {}
+                  locations = [
+                      str(value).lower()
+                      for value in info.get("locations") or values
+                  ]
+                  zones = [str(value) for value in info.get("zones") or []]
+                  if restriction_type == "location" and location.lower() in values:
+                      return True
+                  if (
+                      restriction_type == "zone"
+                      and location.lower() in locations
+                      and ({"1", "2"} & set(zones))
+                  ):
+                      return True
+              return False
+
+          candidates = []
+          for record in sorted(skus, key=lambda item: item.get("name", "")):
+              if record.get("name") not in candidate_names:
+                  continue
+              family = str(record.get("family", ""))
+              family_usage = usage_by_name.get(family.lower(), {})
+              current = int(family_usage.get("currentValue", 0) or 0)
+              limit = int(family_usage.get("limit", 0) or 0)
+              free = max(0, limit - current)
+              zones = set()
+              for item in record.get("locationInfo") or []:
+                  if str(item.get("location", "")).lower() == location.lower():
+                      zones.update(str(value) for value in item.get("zones") or [])
+              vcpus = int(capability(record, "vCPUs"))
+              memory_gb = capability(record, "MemoryGB")
+              restricted = target_is_restricted(record)
+              candidates.append(
+                  {
+                      "name": record.get("name", "unknown"),
+                      "family": family or "unknown",
+                      "vcpus": vcpus,
+                      "memoryGB": memory_gb,
+                      "zones": sorted(zones),
+                      "targetRestricted": restricted,
+                      "familyQuotaCurrent": current,
+                      "familyQuotaLimit": limit,
+                      "familyQuotaFree": free,
+                      "viable": (
+                          vcpus == required_vcpus
+                          and memory_gb >= 4
+                          and {"1", "2"}.issubset(zones)
+                          and not restricted
+                          and free >= required_vcpus
+                      ),
+                  }
+              )
+
+          with open(output_path, "w", encoding="utf-8") as handle:
+              json.dump(candidates, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+
+              viable_alternatives="$(jq -r '[.[] | select(.viable) | .name] | join(", ")' "${report_dir}/candidate-skus.json")"
+              if [[ -n "${viable_alternatives}" ]]; then
+                warn_check "Validated 2-vCPU alternatives are available: ${viable_alternatives}. The fixed plan still requires separate approval before changing SKU."
+              else
+                warn_check 'No evaluated 2-vCPU alternative currently satisfies size, memory, zones, restriction, and family-quota checks.'
+              fi
+            else
+              warn_check 'Alternative VM size evidence could not be read.'
+            fi
           else
             fail_check "Compute quota could not be read for ${TARGET_LOCATION}."
           fi
           unset usage_json regional_usage regional_current regional_limit regional_free
           unset family_usage family_current family_limit family_free sku_family sku_vcpus
+          unset candidate_sizes candidate_skus_json viable_alternatives
 
           required_providers=(
             Microsoft.App
