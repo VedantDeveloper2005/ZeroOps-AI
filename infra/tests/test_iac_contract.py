@@ -11,19 +11,19 @@ REPOSITORY_ROOT = INFRA_ROOT.parent
 
 
 class InfrastructureContractTests(unittest.TestCase):
-    def test_github_deployments_and_oidc_subject_use_production_environment(self) -> None:
+    def test_github_deployments_and_oidc_subject_use_main_branch(self) -> None:
         manifest = json.loads(
             (REPOSITORY_ROOT / ".azure" / "federated-credential.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest["name"], "github-production")
+        self.assertEqual(manifest["name"], "github-main")
         self.assertEqual(
             manifest["issuer"], "https://token.actions.githubusercontent.com"
         )
         self.assertEqual(
             manifest["subject"],
-            "repo:VedantDeveloper2005/ZeroOps-AI:environment:production",
+            "repo:VedantDeveloper2005/ZeroOps-AI:ref:refs/heads/main",
         )
         self.assertEqual(manifest["audiences"], ["api://AzureADTokenExchange"])
 
@@ -31,7 +31,7 @@ class InfrastructureContractTests(unittest.TestCase):
             workflow = (
                 REPOSITORY_ROOT / ".github" / "workflows" / workflow_name
             ).read_text(encoding="utf-8")
-            self.assertIn("environment: production", workflow)
+            self.assertNotIn("environment: production", workflow)
             self.assertIn("id-token: write", workflow)
             self.assertIn(
                 "if: github.event_name != 'pull_request' "

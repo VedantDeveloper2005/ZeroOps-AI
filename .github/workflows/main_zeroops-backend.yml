@@ -151,8 +151,6 @@ jobs:
     timeout-minutes: 15
     needs: build
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    environment: production
-
     permissions:
       id-token: write
       contents: read
