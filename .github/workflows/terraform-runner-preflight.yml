@@ -182,18 +182,13 @@ jobs:
           unset sku_json exact_sku_json sku_count restriction_count selected_target_restriction_count
 
           if image_json="$(az vm image show --location "${TARGET_LOCATION}" --urn "${TARGET_IMAGE_URN}" --output json 2>/dev/null)"; then
-            if jq -e --arg location "${TARGET_LOCATION}" '
-              ((.publisher // .publisherName // "") | ascii_downcase) == "canonical"
-              and (.offer // "") == "0001-com-ubuntu-server-jammy"
-              and (.sku // .skus // "") == "22_04-lts-gen2"
-              and ((.version // "") | length) > 0
-            ' <<< "${image_json}" >/dev/null; then
+            expected_image_path="/publishers/canonical/artifacttypes/vmimage/offers/0001-com-ubuntu-server-jammy/skus/22_04-lts-gen2/versions/"
+            image_resource_id="$(jq -r '.id // "" | ascii_downcase' <<< "${image_json}")"
+            if [[ "${image_resource_id}" == *"${expected_image_path}"* ]] && \
+              [[ "${image_resource_id}" != *"${expected_image_path}latest" ]]; then
               pass_check "Canonical Ubuntu 22.04 LTS Gen2 is available in ${TARGET_LOCATION}."
               jq '{
-                publisher: (.publisher // .publisherName // ""),
-                offer: (.offer // ""),
-                sku: (.sku // .skus // ""),
-                version: (.version // ""),
+                resolved: true,
                 hyperVGeneration: (.hyperVGeneration // "unknown"),
                 purchasePlanRequired: (.plan != null)
               }' <<< "${image_json}" > "${report_dir}/image-evidence.json"
@@ -203,7 +198,7 @@ jobs:
           else
             fail_check "Canonical Ubuntu 22.04 LTS Gen2 could not be resolved in ${TARGET_LOCATION}."
           fi
-          unset image_json
+          unset image_json expected_image_path image_resource_id
 
           if usage_json="$(az vm list-usage --location "${TARGET_LOCATION}" --output json 2>/dev/null)"; then
             regional_usage="$(jq -c '[.[] | select((.name.value // "" | ascii_downcase) == "cores")][0] // null' <<< "${usage_json}")"
