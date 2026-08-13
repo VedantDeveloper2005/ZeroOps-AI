@@ -99,25 +99,34 @@ generated. References:
 
 Prerequisites that are currently external to this code:
 
-1. Confirm all required providers are registered with explicit authorization.
+1. Treat Trusted Launch as a deployment blocker, not as a validated property of
+   the current Flexible VMSS. The pinned AzureRM `4.81.0`
+   `azurerm_orchestrated_virtual_machine_scale_set` schema has no initial
+   security-profile, security-type, Secure Boot, or vTPM fields. The module's
+   AzAPI update therefore enables Trusted Launch after creation, a path Azure
+   currently classifies as preview for Flexible VMSS. Do not apply until that
+   preview is explicitly authorized and verified for the subscription, or the
+   VMSS is migrated to an initial-create resource/provider schema that exposes
+   the complete security profile.
+2. Confirm all required providers are registered with explicit authorization.
    `Microsoft.App` is required by Flex Consumption subnet delegation, and
    `Microsoft.Quota` is required only if the generic live quota API is used.
    A previous planning attempt automatically registered 31 subscription
    providers; `providers.tf` now sets
    `resource_provider_registrations = "none"` to prevent any future implicit
    registration. Never unregister providers without an explicit approval.
-2. Bootstrap the separate platform backend account described by
+3. Bootstrap the separate platform backend account described by
    `backend.hcl.example`, grant the deployment identity data-plane access, and
    copy the example to ignored `backend.hcl`.
-3. Replace the SSH public key and IDs in the selected profile.
-4. Build `worker/Dockerfile`, push it to the profile ACR, resolve the manifest
+4. Replace the SSH public key and IDs in the selected profile.
+5. Build `worker/Dockerfile`, push it to the profile ACR, resolve the manifest
    digest, and replace `runner_image_reference`. The reference must end in
    `@sha256:<64 lowercase hex characters>`.
-5. Set `execution_scope_resource_id` only to a dedicated customer workload
+6. Set `execution_scope_resource_id` only to a dedicated customer workload
    resource group. A Terraform check rejects the ZeroOps platform group. The
    current plan-only deployment grants Reader on this scope; it intentionally
    cannot apply changes.
-6. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
+7. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
    analysis vault, and `ai-terraform-api-key` and
    `ai-terraform-fallback-api-key` in the Terraform-generation vault, outside
    Terraform. Their versionless app-setting references are
@@ -126,12 +135,12 @@ Prerequisites that are currently external to this code:
    `GROQ_API_KEY` is not wired. The same Groq value may be entered into both
    fallback secrets only for an explicit local test; production credentials
    must remain independently rotatable.
-7. Map the history managed identity to PostgreSQL principal
+8. Map the history managed identity to PostgreSQL principal
    `POSTGRES_ENTRA_USER` and grant only the required `operation_runs`,
    `activity_events`, `artifacts`, and tenant membership permissions. Azure
    RBAC cannot create that database-local role without crossing the existing
    database administration boundary.
-8. Package and deploy the three Function projects separately.
+9. Package and deploy the three Function projects separately.
 
 Run locally before any deployment:
 

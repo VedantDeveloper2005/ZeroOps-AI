@@ -68,6 +68,19 @@ class InfrastructureContractTests(unittest.TestCase):
             re.compile(r'metric_name\s*=\s*"ActiveMessageCount"'),
         )
 
+    def test_flexible_vmss_trusted_launch_workaround_is_explicitly_preview_gated(
+        self,
+    ) -> None:
+        runner = (INFRA_ROOT / "modules" / "runner" / "main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("AzureRM 4.81.0", runner)
+        self.assertIn("post-create upgrade", runner)
+        self.assertIn("existing Flexible VMSS as preview", runner)
+        self.assertIn(
+            'resource "azapi_update_resource" "trusted_launch"', runner
+        )
+
     def test_vmss_is_fail_closed_plan_only(self) -> None:
         root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
         rbac = (INFRA_ROOT / "rbac.tf").read_text(encoding="utf-8")

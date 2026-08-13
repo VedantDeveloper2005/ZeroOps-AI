@@ -89,7 +89,6 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             'with open(sku_path, encoding="utf-8")',
             '"AcceleratedNetworkingEnabled"',
             '"EphemeralOSDiskSupported"',
-            '"SecurityType"',
             '"TrustedLaunchDisabled"',
             "Standard_B2s",
             "Standard_D2ds_v4",
@@ -130,6 +129,20 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             "zeroops-backend-id-96a7",
         ):
             self.assertIn(resource_name, self.workflow)
+
+    def test_trusted_launch_uses_azure_authoritative_negative_capability(self) -> None:
+        self.assertNotIn('select(.name == "SecurityType")', self.workflow)
+        self.assertNotIn("capability_text(record", self.workflow)
+        self.assertIn(
+            '[[ "${sku_trusted_launch_disabled}" != "true" ]]',
+            self.workflow,
+        )
+        self.assertIn(
+            'trusted_launch = not capability_truthy(\n'
+            '                  record, "TrustedLaunchDisabled"\n'
+            "              )",
+            self.workflow,
+        )
 
     def test_azure_cli_commands_are_strictly_read_only(self) -> None:
         allowed_commands = {

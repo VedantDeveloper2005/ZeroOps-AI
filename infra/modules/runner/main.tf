@@ -172,8 +172,12 @@ resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
   depends_on = [azurerm_role_assignment.executor_acr_pull_by_identity]
 }
 
-# AzureRM's Flexible VMSS resource does not yet expose the complete Trusted
-# Launch profile. Keep the VMSS model in AzureRM and patch only those settings.
+# AzureRM 4.81.0's azurerm_orchestrated_virtual_machine_scale_set schema exposes
+# no initial security profile, security type, Secure Boot, or vTPM fields. This
+# AzAPI update is therefore a post-create upgrade. Azure currently classifies
+# enabling Trusted Launch on an existing Flexible VMSS as preview, so live
+# deployment remains blocked until that preview is explicitly authorized and
+# verified, or the pinned provider supports an initial security profile.
 resource "azapi_update_resource" "trusted_launch" {
   type        = "Microsoft.Compute/virtualMachineScaleSets@2024-11-01"
   resource_id = azurerm_orchestrated_virtual_machine_scale_set.this.id
