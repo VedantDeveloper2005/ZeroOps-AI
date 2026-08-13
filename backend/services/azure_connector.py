@@ -6,7 +6,9 @@ import gc
 import json
 import logging
 import os
+import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from azure.identity import ClientSecretCredential
@@ -23,6 +25,145 @@ except ImportError:
     from services import vault
 
 logger = logging.getLogger("zeroops.azure_connector")
+
+ACR_RESOURCE_API_VERSION = "2023-07-01"
+APP_SERVICE_PLAN_API_VERSION = "2023-12-01"
+_ACR_LOGIN_SERVER = re.compile(r"^(?P<name>[a-z0-9]{5,50})\.azurecr\.io$")
+_ARM_RESOURCE_NAME = re.compile(r"^[A-Za-z0-9._()\-]{1,90}$")
+
+
+class AzureTargetValidationError(ValueError):
+    """A redacted, user-actionable Azure deployment-target validation error."""
+
+
+def _resource_properties(resource: Any) -> dict[str, Any]:
+    properties = getattr(resource, "properties", None)
+    if isinstance(properties, Mapping):
+        return dict(properties)
+    if properties is None:
+        return {}
+    return {
+        name: getattr(properties, name)
+        for name in dir(properties)
+        if not name.startswith("_") and not callable(getattr(properties, name))
+    }
+
+
+def _property(properties: dict[str, Any], name: str) -> Any:
+    expected = name.casefold()
+    return next(
+        (value for key, value in properties.items() if str(key).casefold() == expected),
+        None,
+    )
+
+
+def _normalized_location(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _resource_id(
+    subscription_id: str,
+    resource_group: str,
+    provider: str,
+    resource_type: str,
+    name: str,
+) -> str:
+    return (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        f"/providers/{provider}/{resource_type}/{name}"
+    )
+
+
+def _validate_resource_identity(resource: Any, *, expected_id: str, expected_type: str) -> None:
+    resource_id = str(getattr(resource, "id", "") or "")
+    resource_type = str(getattr(resource, "type", "") or "")
+    if resource_id.casefold() != expected_id.casefold() or resource_type.casefold() != expected_type.casefold():
+        raise AzureTargetValidationError(
+            "Azure returned deployment-target metadata that does not match the configured resource group."
+        )
+
+
+def _validate_target_resources(
+    resource_client: ResourceManagementClient,
+    *,
+    subscription_id: str,
+    resource_group: str,
+    acr_login_server: str,
+    app_service_plan: str,
+    region: str,
+) -> None:
+    login_server = acr_login_server.strip().casefold().rstrip("/")
+    registry_match = _ACR_LOGIN_SERVER.fullmatch(login_server)
+    if registry_match is None:
+        raise AzureTargetValidationError(
+            "Container registry login server must use the form <registry>.azurecr.io."
+        )
+    if (
+        not _ARM_RESOURCE_NAME.fullmatch(resource_group)
+        or resource_group.endswith(".")
+        or not _ARM_RESOURCE_NAME.fullmatch(app_service_plan)
+        or app_service_plan.endswith(".")
+    ):
+        raise AzureTargetValidationError(
+            "The configured Azure resource group or App Service plan name is invalid."
+        )
+
+    registry_name = registry_match.group("name")
+    registry_id = _resource_id(
+        subscription_id,
+        resource_group,
+        "Microsoft.ContainerRegistry",
+        "registries",
+        registry_name,
+    )
+    plan_id = _resource_id(
+        subscription_id,
+        resource_group,
+        "Microsoft.Web",
+        "serverfarms",
+        app_service_plan,
+    )
+
+    registry = resource_client.resources.get_by_id(registry_id, ACR_RESOURCE_API_VERSION)
+    _validate_resource_identity(
+        registry,
+        expected_id=registry_id,
+        expected_type="Microsoft.ContainerRegistry/registries",
+    )
+    registry_properties = _resource_properties(registry)
+    returned_login_server = str(_property(registry_properties, "loginServer") or "").casefold().rstrip("/")
+    if returned_login_server != login_server:
+        raise AzureTargetValidationError(
+            "The configured container registry login server does not match the Azure resource."
+        )
+    registry_state = str(_property(registry_properties, "provisioningState") or "").casefold()
+    if registry_state and registry_state != "succeeded":
+        raise AzureTargetValidationError("The configured container registry is not ready.")
+
+    plan = resource_client.resources.get_by_id(plan_id, APP_SERVICE_PLAN_API_VERSION)
+    _validate_resource_identity(
+        plan,
+        expected_id=plan_id,
+        expected_type="Microsoft.Web/serverfarms",
+    )
+    plan_properties = _resource_properties(plan)
+    if _property(plan_properties, "reserved") is not True:
+        raise AzureTargetValidationError(
+            "The configured App Service plan is not a Linux plan."
+        )
+    plan_state = str(_property(plan_properties, "provisioningState") or "").casefold()
+    if plan_state and plan_state != "succeeded":
+        raise AzureTargetValidationError("The configured App Service plan is not ready.")
+    plan_status = str(_property(plan_properties, "status") or "").casefold()
+    if plan_status and plan_status != "ready":
+        raise AzureTargetValidationError("The configured App Service plan is not ready.")
+
+    expected_location = _normalized_location(region)
+    plan_location = _normalized_location(getattr(plan, "location", None))
+    if not expected_location or plan_location != expected_location:
+        raise AzureTargetValidationError(
+            "The Linux App Service plan must match the configured Azure region."
+        )
 
 
 def _get_kv_secret_name(user_id: uuid.UUID) -> str:
@@ -73,11 +214,34 @@ def validate_credential(
     client_secret: str,
     subscription_id: str,
     resource_group: str,
+    acr_login_server: str,
+    app_service_plan: str,
+    region: str,
 ) -> dict:
-    """Validate an Azure connection with a read-only resource-group lookup."""
-    values = [tenant_id, client_id, client_secret, subscription_id, resource_group]
+    """Validate credentials and exact, existing App Service target resources.
+
+    All Azure calls are read-only. Deployment permissions such as ACR builds,
+    Web App writes, and AcrPull role assignment are exercised only by the
+    explicitly approved deployment workflow.
+    """
+    values = [
+        tenant_id,
+        client_id,
+        client_secret,
+        subscription_id,
+        resource_group,
+        acr_login_server,
+        app_service_plan,
+        region,
+    ]
     if not all(str(value or "").strip() for value in values):
-        return {"success": False, "error": "All Azure connection fields are required."}
+        return {
+            "success": False,
+            "error": (
+                "Tenant, subscription, service-principal, resource group, region, "
+                "container registry, and Linux App Service plan fields are required."
+            ),
+        }
     try:
         credential = ClientSecretCredential(
             tenant_id=tenant_id.strip(),
@@ -86,10 +250,37 @@ def validate_credential(
         )
         resource = ResourceManagementClient(credential, subscription_id.strip())
         resource.resource_groups.get(resource_group.strip())
-        return {"success": True, "detail": "Azure connection verified."}
-    except Exception:
-        logger.exception("Azure connection validation failed")
-        return {"success": False, "error": "Azure could not verify these credentials and resource group."}
+        _validate_target_resources(
+            resource,
+            subscription_id=subscription_id.strip(),
+            resource_group=resource_group.strip(),
+            acr_login_server=acr_login_server,
+            app_service_plan=app_service_plan.strip(),
+            region=region.strip(),
+        )
+        return {
+            "success": True,
+            "detail": (
+                "Azure credentials, container registry, and Linux App Service plan "
+                "were verified with read-only lookups."
+            ),
+        }
+    except AzureTargetValidationError as error:
+        return {"success": False, "error": str(error)}
+    except Exception as error:
+        # Azure SDK exceptions may contain request context. Keep the log useful
+        # without serializing credential input or provider response bodies.
+        logger.warning(
+            "Azure connection validation failed during a %s exception.",
+            type(error).__name__,
+        )
+        return {
+            "success": False,
+            "error": (
+                "Azure could not read the configured resource group, container registry, "
+                "and App Service plan with these credentials."
+            ),
+        }
 
 
 async def get_azure_clients_async(user_id: uuid.UUID, db) -> Optional[dict[str, Any]]:

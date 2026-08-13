@@ -19,7 +19,7 @@ from sqlalchemy.pool import StaticPool
 from backend import auth, config, models
 from backend.database import get_db
 from backend.routes import devsecops
-from backend.services import pipeline_approval
+from backend.services import deployment_targets, pipeline_approval
 from backend.services.pipeline_records import context_from_configuration, create_pipeline_run
 from backend.services.tenancy import ensure_personal_tenant
 
@@ -270,6 +270,22 @@ async def test_github_webhook_verifies_hmac_is_idempotent_and_queues_approval_va
     harness = devsecops_harness
     secret = "github-webhook-test-secret"
     monkeypatch.setattr(devsecops.vault, "get_project_secret", lambda *_: secret)
+    azure_connection = models.UserAzureConnection(
+        user_id=harness.owner.id,
+        tenant_id="entra-tenant",
+        subscription_id="azure-subscription",
+        client_id="service-principal-client",
+        connection_status="connected",
+        region="eastus",
+        resource_group="zeroops-test",
+        acr_login_server="zeroopstest.azurecr.io",
+        app_service_plan="zeroops-linux-plan",
+        deployment_target_verified_at=datetime(2026, 1, 1),
+        is_active=True,
+    )
+    azure_connection.deployment_target_fingerprint = (
+        deployment_targets.configuration_fingerprint(azure_connection)
+    )
     harness.session.add_all(
         [
             models.ProjectPipelineConfiguration(
@@ -291,18 +307,7 @@ async def test_github_webhook_verifies_hmac_is_idempotent_and_queues_approval_va
                 revision=1,
                 plan_data={"resource_group": "zeroops-test"},
             ),
-            models.UserAzureConnection(
-                user_id=harness.owner.id,
-                tenant_id="entra-tenant",
-                subscription_id="azure-subscription",
-                client_id="service-principal-client",
-                connection_status="connected",
-                region="eastus",
-                resource_group="zeroops-test",
-                acr_login_server="zeroopstest.azurecr.io",
-                app_service_plan="zeroops-linux-plan",
-                is_active=True,
-            ),
+            azure_connection,
         ]
     )
     await harness.session.commit()

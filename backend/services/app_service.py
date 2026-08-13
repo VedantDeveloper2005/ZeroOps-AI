@@ -418,9 +418,12 @@ def deploy_image(
                 "--assignee-principal-type", "ServicePrincipal", "--role", ACR_PULL_ROLE_ID,
                 "--scope", registry_id, "--output", "none",
             ], env=env)
-        except AzureDeploymentError:
-            # Assignment creation is idempotent from the release perspective.
-            pass
+        except AzureDeploymentError as error:
+            raise AzureDeploymentError(
+                "Azure could not grant AcrPull to the application identity on the "
+                "configured registry. Grant the deployment principal role-assignment "
+                "permission at the registry scope and retry."
+            ) from error
 
         yield "Publishing your new version…"
         yield from _run([

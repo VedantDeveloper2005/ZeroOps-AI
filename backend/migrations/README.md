@@ -27,6 +27,12 @@ Current migrations:
 - `007_change_analysis_retry_history` removes a cross-run uniqueness constraint
   that prevented an approval-bound retry of the same immutable commit from
   retaining its own change decision. Per-run idempotency remains enforced.
+- `008_verified_azure_targets` adds non-secret validation evidence for the exact
+  Azure resource group, registry, region, and Linux App Service plan settings.
+  Existing connection rows remain deployment-ineligible until the account
+  owner verifies and saves them again.
+- `009_analysis_application_type` persists the deterministic application shape
+  shown in current and historical repository-analysis views.
 
 ## Legacy sensitive-column retirement
 

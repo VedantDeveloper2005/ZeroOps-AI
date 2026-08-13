@@ -215,6 +215,14 @@ async def run_migrations():
             STATEMENTS as MIGRATION_007_STATEMENTS,
             VERSION as MIGRATION_007_VERSION,
         )
+        from backend.migrations.v008_verified_azure_targets import (
+            STATEMENTS as MIGRATION_008_STATEMENTS,
+            VERSION as MIGRATION_008_VERSION,
+        )
+        from backend.migrations.v009_analysis_application_type import (
+            STATEMENTS as MIGRATION_009_STATEMENTS,
+            VERSION as MIGRATION_009_VERSION,
+        )
     except ImportError:
         from migrations.v001_tenant_history import (
             STATEMENTS as MIGRATION_001_STATEMENTS,
@@ -244,6 +252,14 @@ async def run_migrations():
             STATEMENTS as MIGRATION_007_STATEMENTS,
             VERSION as MIGRATION_007_VERSION,
         )
+        from migrations.v008_verified_azure_targets import (
+            STATEMENTS as MIGRATION_008_STATEMENTS,
+            VERSION as MIGRATION_008_VERSION,
+        )
+        from migrations.v009_analysis_application_type import (
+            STATEMENTS as MIGRATION_009_STATEMENTS,
+            VERSION as MIGRATION_009_VERSION,
+        )
 
     async with async_engine.begin() as conn:
         await conn.execute(
@@ -264,6 +280,8 @@ async def run_migrations():
             (MIGRATION_005_VERSION, MIGRATION_005_STATEMENTS),
             (MIGRATION_006_VERSION, MIGRATION_006_STATEMENTS),
             (MIGRATION_007_VERSION, MIGRATION_007_STATEMENTS),
+            (MIGRATION_008_VERSION, MIGRATION_008_STATEMENTS),
+            (MIGRATION_009_VERSION, MIGRATION_009_STATEMENTS),
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(

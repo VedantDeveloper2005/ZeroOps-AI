@@ -6,7 +6,7 @@ ZeroOps is Azure-only. Customers connect a repository or upload a ZIP, then Zero
 
 Each connected Azure account needs:
 
-- An existing resource group, Azure Container Registry, and Linux App Service plan in the same region.
+- An existing resource group, Azure Container Registry, and Linux App Service plan. The plan must be in the configured application region; ACR may be in another region, though co-location is recommended.
 - A service principal with least-privilege access to that resource group, plus permission to assign the app identity the `AcrPull` role on its registry.
 - A ZeroOps Key Vault configured for the control plane. Client credentials are stored only in Key Vault—never in the database or a local fallback file.
 

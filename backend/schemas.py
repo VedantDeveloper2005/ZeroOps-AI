@@ -238,8 +238,8 @@ class ProjectCreate(BaseModel):
     name: str
     full_name: str
     repo_url: Optional[str] = None
-    framework: str = "Next.js"
-    language: str = "TypeScript"
+    framework: str = "Unknown"
+    language: str = "Unknown"
     branch: str = "main"
     region: str = "eastus"
 
@@ -442,6 +442,7 @@ class AIAnalysisResponse(BaseModel):
     framework: Optional[str] = None
     framework_version: Optional[str] = None
     language: Optional[str] = None
+    application_type: Optional[str] = None
     risk_score: int = 0
     confidence: int = 0
     cpu_recommendation: Optional[str] = None

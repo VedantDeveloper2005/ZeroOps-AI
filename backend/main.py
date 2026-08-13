@@ -1770,6 +1770,7 @@ async def upload_code_project(
             framework=analysis.get("framework"),
             framework_version=analysis.get("version") or analysis.get("framework_version"),
             language=analysis.get("language"),
+            application_type=analysis.get("application_type"),
             risk_score=analysis.get("risk_score", 0),
             confidence=analysis.get("confidence", 0),
             cpu_recommendation=analysis.get("resources", {}).get("cpu"),
@@ -1880,7 +1881,7 @@ async def get_azure_connection(
     if not connection:
         return {"connected": False}
     return {
-        "connected": connection.connection_status == "connected",
+        "connected": deployment_targets.has_verified_app_service_target(connection),
         "connection_status": connection.connection_status,
         "tenant_id": connection.tenant_id,
         "subscription_id": connection.subscription_id,
@@ -1891,6 +1892,9 @@ async def get_azure_connection(
         "app_service_plan": connection.app_service_plan,
         "aks_cluster_name": connection.aks_cluster_name,
         "namespace_prefix": connection.namespace_prefix,
+        "deployment_target_verified_at": format_dt(
+            connection.deployment_target_verified_at
+        ),
         "created_at": format_dt(connection.created_at),
         "updated_at": format_dt(connection.updated_at),
     }
@@ -1932,7 +1936,10 @@ async def connect_azure(
         client_id=req.client_id,
         client_secret=req.client_secret,
         subscription_id=req.subscription_id,
-        resource_group=req.resource_group
+        resource_group=req.resource_group,
+        acr_login_server=req.acr_login_server or "",
+        app_service_plan=req.app_service_plan or "",
+        region=req.region,
     )
     if not validation_res.get("success"):
         raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
@@ -1984,6 +1991,11 @@ async def connect_azure(
         )
         db.add(connection)
 
+    connection.deployment_target_fingerprint = (
+        deployment_targets.configuration_fingerprint(connection)
+    )
+    connection.deployment_target_verified_at = datetime.utcnow()
+
     try:
         await db.commit()
     except Exception as error:
@@ -2029,6 +2041,9 @@ async def connect_azure(
         "app_service_plan": connection.app_service_plan,
         "aks_cluster_name": connection.aks_cluster_name,
         "namespace_prefix": connection.namespace_prefix,
+        "deployment_target_verified_at": format_dt(
+            connection.deployment_target_verified_at
+        ),
     }
 
 
@@ -2057,12 +2072,25 @@ async def upsert_azure_connection(
         raise HTTPException(status_code=400, detail="client_secret is required to connect.")
 
     # Validate
+    effective_client_id = req.client_id or (existing.client_id if existing else "")
+    effective_resource_group = req.resource_group or (
+        existing.resource_group if existing else ""
+    )
+    effective_acr_login_server = req.acr_login_server or (
+        existing.acr_login_server if existing else ""
+    )
+    effective_app_service_plan = req.app_service_plan or (
+        existing.app_service_plan if existing else ""
+    )
     validation_res = azure_connector.validate_credential(
         tenant_id=req.tenant_id,
-        client_id=req.client_id or (existing.client_id if existing else ""),
+        client_id=effective_client_id,
         client_secret=secret_to_use,
         subscription_id=req.subscription_id,
-        resource_group=req.resource_group or (existing.resource_group if existing else "")
+        resource_group=effective_resource_group,
+        acr_login_server=effective_acr_login_server,
+        app_service_plan=effective_app_service_plan,
+        region=req.region,
     )
     if not validation_res.get("success"):
         raise HTTPException(status_code=400, detail=validation_res.get("error", "Azure credential validation failed."))
@@ -2112,6 +2140,11 @@ async def upsert_azure_connection(
         )
         db.add(connection)
 
+    connection.deployment_target_fingerprint = (
+        deployment_targets.configuration_fingerprint(connection)
+    )
+    connection.deployment_target_verified_at = datetime.utcnow()
+
     try:
         await db.commit()
     except Exception as error:
@@ -2133,6 +2166,9 @@ async def upsert_azure_connection(
         "acr_login_server": connection.acr_login_server,
         "app_service_plan": connection.app_service_plan,
         "aks_cluster_name": connection.aks_cluster_name,
+        "deployment_target_verified_at": format_dt(
+            connection.deployment_target_verified_at
+        ),
     }
 
 
@@ -2159,6 +2195,8 @@ async def disconnect_azure(
 
     connection.connection_status = "revoked"
     connection.is_active = False
+    connection.deployment_target_fingerprint = None
+    connection.deployment_target_verified_at = None
     connection.updated_at = datetime.utcnow()
 
     # Audit log disconnect
@@ -3266,6 +3304,7 @@ async def get_ai_analysis(
         id=analysis.id, project_id=analysis.project_id,
         framework=analysis.framework, framework_version=analysis.framework_version,
         language=analysis.language, risk_score=analysis.risk_score,
+        application_type=analysis.application_type,
         confidence=analysis.confidence,
         cpu_recommendation=analysis.cpu_recommendation,
         memory_recommendation=analysis.memory_recommendation,
@@ -3354,6 +3393,9 @@ async def analyze_repo(
     )
     project = proj_result.scalars().first()
     project_id = project.id if project else None
+    if project is not None:
+        project.framework = analysis.get("framework") or "Unknown"
+        project.language = analysis.get("language") or "Unknown"
 
     # Store analysis in DB
     db_analysis = models.AIAnalysis(
@@ -3362,6 +3404,7 @@ async def analyze_repo(
         framework=analysis.get("framework"),
         framework_version=analysis.get("version") or analysis.get("framework_version"),
         language=analysis.get("language"),
+        application_type=analysis.get("application_type"),
         risk_score=analysis.get("risk_score", 0),
         confidence=analysis.get("confidence", 0),
         cpu_recommendation=analysis.get("resources", {}).get("cpu") or analysis.get("cpu_recommendation"),
@@ -4332,6 +4375,7 @@ async def get_project_analyses_history(
             id=a.id, project_id=a.project_id,
             framework=a.framework, framework_version=a.framework_version,
             language=a.language, risk_score=a.risk_score,
+            application_type=a.application_type,
             confidence=a.confidence,
             cpu_recommendation=a.cpu_recommendation,
             memory_recommendation=a.memory_recommendation,
@@ -5771,6 +5815,7 @@ async def analyze_project_repository(
         framework=raw_analysis.get("framework"),
         framework_version=raw_analysis.get("version"),
         language=raw_analysis.get("language"),
+        application_type=raw_analysis.get("application_type"),
         risk_score=raw_analysis.get("risk_score", 0),
         confidence=raw_analysis.get("confidence", 0),
         cpu_recommendation=resources.get("cpu"),
@@ -5798,6 +5843,8 @@ async def analyze_project_repository(
         pricing_breakdown=raw_analysis.get("pricing_breakdown")
     )
     db.add(db_analysis)
+    project.framework = raw_analysis.get("framework") or "Unknown"
+    project.language = raw_analysis.get("language") or "Unknown"
     db.add(models.ActivityEvent(
         user_id=current_user.id,
         project_id=project_id,
@@ -5824,6 +5871,7 @@ async def get_project_analysis(
         "framework": analysis.framework,
         "version": analysis.framework_version,
         "language": analysis.language,
+        "application_type": analysis.application_type,
         "runtime": analysis.runtime,
         "package_manager": analysis.package_manager,
         "docker_support": analysis.docker_support,

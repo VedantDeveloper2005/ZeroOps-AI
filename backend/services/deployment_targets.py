@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import hmac
+import json
 from typing import Any
 
 
@@ -31,6 +34,44 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def configuration_fingerprint(connection: Any) -> str:
+    """Bind successful target validation to the exact non-secret settings."""
+    payload = {
+        key: _clean(getattr(connection, key, None)).casefold()
+        for key in (
+            "tenant_id",
+            "subscription_id",
+            "client_id",
+            "region",
+            "resource_group",
+            "acr_login_server",
+            "app_service_plan",
+        )
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def has_verified_app_service_target(connection: Any | None) -> bool:
+    if not connection:
+        return False
+    if (
+        _clean(getattr(connection, "connection_status", None)).casefold() != "connected"
+        or getattr(connection, "is_active", False) is not True
+        or getattr(connection, "deployment_target_verified_at", None) is None
+    ):
+        return False
+    stored_fingerprint = _clean(
+        getattr(connection, "deployment_target_fingerprint", None)
+    ).casefold()
+    expected_fingerprint = configuration_fingerprint(connection)
+    return bool(stored_fingerprint) and hmac.compare_digest(
+        stored_fingerprint,
+        expected_fingerprint,
+    )
+
+
 def azure_missing(connection: Any | None) -> list[str]:
     """Return fields required for a real App Service deployment."""
     if not connection:
@@ -39,11 +80,15 @@ def azure_missing(connection: Any | None) -> list[str]:
         "Tenant ID": getattr(connection, "tenant_id", None),
         "Subscription ID": getattr(connection, "subscription_id", None),
         "Client ID": getattr(connection, "client_id", None),
+        "Region": getattr(connection, "region", None),
         "Resource group": getattr(connection, "resource_group", None),
         "Container registry": getattr(connection, "acr_login_server", None),
         "Linux App Service plan": getattr(connection, "app_service_plan", None),
     }
-    return [label for label, value in required.items() if not _clean(value)]
+    missing = [label for label, value in required.items() if not _clean(value)]
+    if not missing and not has_verified_app_service_target(connection):
+        missing.append("Verified Azure deployment target")
+    return missing
 
 
 def aks_missing(connection: Any | None) -> list[str]:

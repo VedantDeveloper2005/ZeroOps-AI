@@ -11,6 +11,11 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+try:
+    from backend.services import deployment_targets
+except ImportError:
+    from services import deployment_targets
+
 
 SUPPORTED_REGIONS = {
     "centralindia": "Central India",
@@ -129,12 +134,22 @@ def build_infrastructure_plan(
     variables = _as_list(analysis.get("environment_variables"))
     vulnerabilities = _as_list(analysis.get("vulnerabilities"))
 
-    existing_plan = getattr(azure_connection, "app_service_plan", None) if azure_connection else None
+    target_is_verified = deployment_targets.has_verified_app_service_target(azure_connection)
+    existing_plan = (
+        getattr(azure_connection, "app_service_plan", None)
+        if target_is_verified
+        else None
+    )
     application_tier = str(existing_plan or "Existing Linux App Service plan required")
+    target_reason = (
+        " App Service is the verified deployment target currently configured by ZeroOps."
+        if target_is_verified
+        else " ZeroOps can deploy this component through Azure App Service after an Azure deployment target is connected and verified."
+    )
     application_reason = (
         f"{framework} was detected with {runtime} metadata"
         + (" and a Dockerfile." if docker_support else ".")
-        + " App Service is the verified deployment target currently configured by ZeroOps."
+        + target_reason
     )
     components: list[dict[str, Any]] = [
         _component(
@@ -329,6 +344,107 @@ def clear_unverified_estimates(plan: dict[str, Any]) -> dict[str, Any]:
         "readiness_message": assessment.get("readiness_message") or "Validate the Azure target and runtime telemetry before relying on readiness metrics.",
     }
     return updated
+
+
+def answer_detection_and_validation_question(plan: dict[str, Any], message: str) -> str | None:
+    """Answer a combined framework/validation question from saved plan evidence only.
+
+    The plan assistant normally delegates open-ended wording to a configured
+    model.  This narrow question is common during deployment review and all of
+    the relevant facts already exist in the saved plan, so answering it
+    deterministically avoids both a generic fallback and unsupported claims.
+    """
+    text = str(message or "").lower().strip()
+    asks_about_framework = "framework" in text and any(
+        marker in text for marker in ("detect", "identif", "record", "found")
+    )
+    asks_about_validation = any(
+        marker in text for marker in ("validat", "readiness")
+    ) and any(
+        marker in text for marker in ("before", "deploy", "launch", "need", "require", "still")
+    )
+    if not (asks_about_framework and asks_about_validation):
+        return None
+
+    evidence = plan.get("application_evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    framework = str(evidence.get("framework") or "").strip()
+    runtime = str(evidence.get("runtime") or "").strip()
+    package_manager = str(evidence.get("package_manager") or "").strip()
+
+    if framework and framework.lower() != "unknown":
+        detail_parts = []
+        if runtime and runtime.lower() != "unknown":
+            detail_parts.append(f"runtime: {runtime}")
+        if package_manager and package_manager.lower() != "unknown":
+            detail_parts.append(f"package manager: {package_manager}")
+        if evidence.get("docker_support") is True:
+            detail_parts.append("Dockerfile detected")
+        detail_text = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+        framework_line = f"**Detected framework:** **{framework}**{detail_text}."
+    else:
+        framework_line = "**Detected framework:** The saved source analysis did not record one."
+
+    validation_items: list[str] = []
+
+    def add_validation_item(value: Any) -> None:
+        item = str(value or "").strip()
+        if item and item not in validation_items:
+            validation_items.append(item)
+
+    assessment = plan.get("assessment")
+    assessment = assessment if isinstance(assessment, dict) else {}
+    add_validation_item(assessment.get("readiness_message"))
+
+    status_labels = {
+        "security": "Security",
+        "performance": "Performance",
+        "reliability": "Reliability",
+    }
+    for key, label in status_labels.items():
+        record = assessment.get(key)
+        if not isinstance(record, dict):
+            continue
+        status = str(record.get("status") or "").strip()
+        if status.startswith("requires_"):
+            add_validation_item(f"{label}: {status.replace('_', ' ')}.")
+
+    for question in _as_list(assessment.get("unresolved_questions")):
+        add_validation_item(f"Resolve the recorded source question: {question}")
+
+    components = plan.get("components")
+    components = components if isinstance(components, list) else []
+    application = next(
+        (component for component in components if isinstance(component, dict) and component.get("id") == "application"),
+        None,
+    )
+    if application:
+        tier = str(application.get("tier") or "").strip()
+        if "required" in tier.lower():
+            add_validation_item(f"Application hosting: {tier}.")
+
+    unavailable_services = [
+        str(component.get("service") or "").strip()
+        for component in components
+        if isinstance(component, dict)
+        and component.get("deployable") is False
+        and str(component.get("service") or "").strip()
+    ]
+    if unavailable_services:
+        add_validation_item(
+            "The current workflow does not mark these planned components as deployable: "
+            + ", ".join(unavailable_services)
+            + "."
+        )
+
+    if not validation_items:
+        validation_items.append(
+            "The saved plan does not record specific outstanding checks; that absence is not proof of deployment readiness."
+        )
+
+    return framework_line + "\n\n**Still needs validation before deployment:**\n" + "\n".join(
+        f"- {item}" for item in validation_items
+    )
 
 
 def _find_component(plan: dict[str, Any], component_id: str) -> dict[str, Any]:

@@ -811,6 +811,7 @@ export interface AzureConnection {
   app_service_plan?: string | null;
   aks_cluster_name?: string | null;
   namespace_prefix?: string | null;
+  deployment_target_verified_at?: string | null;
 }
 
 export interface DeploymentTargetStatus {

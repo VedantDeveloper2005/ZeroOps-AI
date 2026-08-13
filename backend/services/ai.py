@@ -431,6 +431,154 @@ def validate_failure_review(payload: Any) -> dict[str, Any]:
     }
 
 
+def _dependency_version(value: Any) -> str | None:
+    """Return a displayable package version without inventing a resolved version."""
+    if not isinstance(value, str):
+        return None
+    version = value.strip()
+    if not version:
+        return None
+    return version.lstrip("^~<>= ") or version
+
+
+def _docker_start_command(dockerfile: str) -> str | None:
+    """Read the effective Docker CMD as source evidence, without executing it."""
+    matches = list(re.finditer(r"^\s*CMD\s+(.+?)\s*$", dockerfile, re.IGNORECASE | re.MULTILINE))
+    if not matches:
+        return None
+    raw_command = matches[-1].group(1).strip()
+    if raw_command.startswith("["):
+        try:
+            command_parts = json.loads(raw_command)
+        except json.JSONDecodeError:
+            return raw_command
+        if isinstance(command_parts, list) and all(isinstance(part, str) for part in command_parts):
+            return " ".join(command_parts)
+    return raw_command or None
+
+
+def _node_runtime(package_data: dict[str, Any], dockerfile: str) -> str | None:
+    engines = package_data.get("engines")
+    if isinstance(engines, dict):
+        configured_node = _dependency_version(engines.get("node"))
+        if configured_node:
+            return f"Node.js {configured_node}"
+
+    # Docker tags such as node:20-alpine provide an exact major-version source
+    # fact. Do not report floating tags (latest/current) as a version.
+    match = re.search(
+        r"^\s*FROM\s+(?:[^\s/]+/)*node:(\d+(?:\.\d+){0,2})(?:[-@\s]|$)",
+        dockerfile,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return f"Node.js {match.group(1)}" if match else None
+
+
+def _source_documents(repo_source: Any, *, maximum_files: int = 200) -> list[tuple[str, str]]:
+    """Return a bounded source view for deterministic UI-claim checks."""
+    suffixes = (".js", ".jsx", ".ts", ".tsx")
+    documents: list[tuple[str, str]] = []
+    if isinstance(repo_source, dict):
+        for path, content in repo_source.get("files_context", {}).items():
+            normalized = str(path).replace("\\", "/")
+            if normalized.lower().endswith(suffixes) and isinstance(content, str):
+                documents.append((normalized, content[:100_000]))
+                if len(documents) >= maximum_files:
+                    break
+        return documents
+
+    ignored = {"node_modules", ".git", ".next", "dist", "build", "coverage", "venv", ".venv"}
+    for root, dirs, files in os.walk(repo_source):
+        dirs[:] = sorted(directory for directory in dirs if directory not in ignored)
+        for filename in sorted(files):
+            if not filename.lower().endswith(suffixes):
+                continue
+            path = os.path.join(root, filename)
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as source_file:
+                    content = source_file.read(100_000)
+            except OSError:
+                continue
+            documents.append((os.path.relpath(path, repo_source).replace("\\", "/"), content))
+            if len(documents) >= maximum_files:
+                return documents
+    return documents
+
+
+def _docker_findings(dockerfile: str, start_command: str | None) -> list[str]:
+    """Flag source-proven container launch defects that can invalidate a release."""
+    if not dockerfile or not start_command:
+        return []
+
+    findings: list[str] = []
+    normalized_command = " ".join(start_command.lower().split())
+    development_server = bool(
+        re.search(r"(?:^|\s)(?:npm\s+run|pnpm|yarn)\s+dev(?:\s|$)", normalized_command)
+        or re.search(r"(?:^|\s)vite(?:\s|$)", normalized_command)
+    )
+    if development_server:
+        findings.append(
+            "High: Dockerfile starts a development server in the runtime image; use a production server for deployment."
+        )
+
+    stages = re.split(r"(?im)(?=^\s*FROM\s+)", dockerfile.strip())
+    runtime_stage = stages[-1] if stages else dockerfile
+    copies_dist = bool(
+        re.search(r"(?im)^\s*COPY\s+--from=\S+\s+\S*/dist/?\s+\.?/?dist/?\s*$", runtime_stage)
+    )
+    copies_vite_inputs = bool(
+        re.search(r"(?im)^\s*COPY(?:\s+--from=\S+)?\s+\S*/(?:index\.html|src|vite\.config\.[cm]?[jt]s)\b", runtime_stage)
+        or re.search(r"(?im)^\s*COPY\s+\.\s+\.\s*$", runtime_stage)
+    )
+    if development_server and copies_dist and not copies_vite_inputs:
+        findings.append(
+            "High: The runtime image copies the Vite dist directory but starts the Vite development server without index.html/source files, so it will not serve the built application correctly."
+        )
+    return findings
+
+
+def _client_telemetry_findings(repo_source: Any, framework: str) -> list[str]:
+    """Identify metrics presented as live even though source shows client-only state."""
+    if framework not in {"React", "Vue", "Svelte"}:
+        return []
+    documents = _source_documents(repo_source)
+    combined = "\n".join(content for _, content in documents)
+    if not combined:
+        return []
+
+    findings: list[str] = []
+    has_health_claim = "/api/health" in combined and bool(re.search(r"healthy\s*\(200\s+ok\)", combined, re.I))
+    calls_health_endpoint = bool(
+        re.search(r"(?:fetch\s*\(|axios\.(?:get|request)\s*\()[\s\S]{0,200}/api/health", combined, re.I)
+    )
+    if has_health_claim and not calls_health_endpoint:
+        findings.append(
+            "High: Client UI hardcodes 'Healthy (200 OK)' for /api/health, but no request to that endpoint was detected."
+        )
+
+    has_request_label = bool(re.search(r"requests?\s+handled|live\s+request\s+counter", combined, re.I))
+    local_request_counter = bool(
+        re.search(r"useState\s*\(\s*\d+\s*\)", combined)
+        and re.search(r"set[A-Za-z]*Request[A-Za-z]*\s*\(", combined)
+    )
+    if has_request_label and local_request_counter:
+        findings.append(
+            "Medium: 'Requests Handled' is initialized and incremented in browser state; it is not measured request telemetry."
+        )
+
+    has_uptime_label = bool(re.search(r"process\s+uptime|active\s+node\s+process", combined, re.I))
+    browser_uptime_timer = bool(
+        re.search(r"useState\s*\(\s*0\s*\)", combined)
+        and re.search(r"setInterval\s*\(", combined)
+        and re.search(r"set[A-Za-z]*Uptime[A-Za-z]*\s*\(", combined)
+    )
+    if has_uptime_label and browser_uptime_timer:
+        findings.append(
+            "Medium: 'Process Uptime' is a browser timer backed by client state; it is not server process uptime."
+        )
+    return findings
+
+
 def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     """Idempotent, deep repository scanner that supports both local paths and virtual contexts."""
     framework = "Unknown"
@@ -452,12 +600,16 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     memory = None
     storage = None
     dockerfile = None
+    docker_start_command = None
+    build_tool = None
 
     # Check for Dockerfile
     if has_file(repo_path, "Dockerfile"):
         docker_support = True
         dockerfile_content = read_file_content(repo_path, "Dockerfile")
         dockerfile = dockerfile_content or None
+        docker_start_command = _docker_start_command(dockerfile_content)
+        deployment_strategy = "Docker container"
         port_match = re.search(r"^\s*EXPOSE\s+(\d{1,5})\b", dockerfile_content, flags=re.IGNORECASE | re.MULTILINE)
         if port_match and 1 <= int(port_match.group(1)) <= 65535:
             port = port_match.group(1)
@@ -508,19 +660,35 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                         port = port_match.group(1)
                         break
 
-                # Framework detection
+                runtime = _node_runtime(data, dockerfile or "")
+
+                # Framework detection. A client framework is stronger evidence
+                # than generic Node.js runtime metadata for a Vite-built SPA.
                 if "next" in deps:
                     framework = "Next.js"
-                    version = deps["next"].replace("^", "").replace("~", "")
-                elif "express" in deps:
-                    framework = "Express.js"
-                    version = deps["express"].replace("^", "").replace("~", "")
+                    version = _dependency_version(deps["next"])
                 elif "@nestjs/core" in deps:
                     framework = "NestJS"
-                    version = deps["@nestjs/core"].replace("^", "").replace("~", "")
+                    version = _dependency_version(deps["@nestjs/core"])
+                elif "express" in deps:
+                    framework = "Express.js"
+                    version = _dependency_version(deps["express"])
+                elif "react" in deps:
+                    framework = "React"
+                    version = _dependency_version(deps["react"])
+                elif "vue" in deps:
+                    framework = "Vue"
+                    version = _dependency_version(deps["vue"])
+                elif "svelte" in deps or "svelte" in dev_deps:
+                    framework = "Svelte"
+                    version = _dependency_version(deps.get("svelte") or dev_deps.get("svelte"))
                 else:
                     framework = "Node.js"
                     version = None
+
+                vite_version = _dependency_version(deps.get("vite") or dev_deps.get("vite"))
+                if vite_version:
+                    build_tool = f"Vite {vite_version}"
                     
                 if "typescript" in deps or "typescript" in dev_deps:
                     language = "TypeScript"
@@ -546,7 +714,7 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 database_dependencies = list(set(database_dependencies))
         except Exception:
             pass
-            
+
     # Python Project Analysis
     elif has_file(repo_path, "requirements.txt"):
         language = "Python"
@@ -596,6 +764,14 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                 database_dependencies = list(set(database_dependencies))
         except Exception:
             pass
+
+    if docker_start_command:
+        # The container CMD is the effective launch command for a Docker-based
+        # deployment and is stronger evidence than a package script name.
+        start_commands = docker_start_command
+
+    vulnerabilities.extend(_docker_findings(dockerfile or "", docker_start_command))
+    vulnerabilities.extend(_client_telemetry_findings(repo_path, framework))
 
     # Basic vulnerability warning if databases detected but no SSL
     if database_dependencies and any(k in ["DATABASE_URL", "MONGODB_URI", "REDIS_URL"] for k in scanned_vars):
@@ -725,6 +901,20 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
     # Expected traffic tiering
     expected_traffic = None
 
+    if framework in {"React", "Vue", "Svelte"}:
+        application_type = f"{framework} single-page application"
+        if build_tool:
+            application_type += f" ({build_tool})"
+    elif framework != "Unknown":
+        application_type = f"{framework} web service"
+    else:
+        application_type = None
+
+    explanation = f"ZeroOps scanned this repository and detected {framework} runtime metadata."
+    if build_tool:
+        explanation += f" The application is built with {build_tool}."
+    explanation += " Missing external services and secrets must be configured before deployment."
+
     return {
         "framework": framework,
         "version": version,
@@ -756,7 +946,7 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         "build_commands": build_commands,
         "start_commands": start_commands,
         "environment_variables": scanned_vars,
-        "explanation": f"ZeroOps scanned this repository and detected {framework} runtime metadata. Missing external services and secrets must be configured before deployment.",
+        "explanation": explanation,
         "deployment_risk": "Source scanning cannot verify external services, credentials, or runtime behavior before an Azure build runs.",
         "recommendations": [],
         "unresolved_questions": [],
@@ -766,10 +956,10 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
         "expected_traffic": expected_traffic,
         
         # Extra blueprint fields
-        "application_type": f"{framework} Web Service" if framework != "Unknown" else None,
+        "application_type": application_type,
         "estimated_build_time": None,
         "production_readiness_score": None,
-        "detected_services": ([framework] if framework != "Unknown" else []) + ([database_dependencies[0]] if database_dependencies else []),
+        "detected_services": ([framework] if framework != "Unknown" else []) + ([build_tool] if build_tool else []) + ([database_dependencies[0]] if database_dependencies else []),
 
         # Breakdown costs
         "pricing_breakdown": pricing_breakdown
@@ -1533,6 +1723,10 @@ def architect_chat(message: str, plan: dict) -> tuple[dict, str]:
     if change_msg:
         reply = f"Plan updated: {change_msg} Review the new revision before approval."
         return updated_plan, reply
+
+    evidence_reply = planner.answer_detection_and_validation_question(plan, message)
+    if evidence_reply:
+        return plan, evidence_reply
 
     # 2. Generate a friendly chat reply using OpenAI/fallback
     api_key = GITHUB_MODELS_API_KEY or OPENAI_API_KEY

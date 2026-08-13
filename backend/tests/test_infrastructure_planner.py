@@ -1,13 +1,15 @@
 import json
+from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 try:
     from backend import config
-    from backend.services import planner, terraform_generator
+    from backend.services import deployment_targets, planner, terraform_generator
 except ImportError:
     import config
-    from services import planner, terraform_generator
+    from services import deployment_targets, planner, terraform_generator
 
 
 def source_facts():
@@ -36,6 +38,54 @@ def test_plan_uses_source_evidence_without_inventing_pricing_or_secrets():
     serialized = json.dumps(plan)
     assert "NEXTAUTH_SECRET" in serialized  # names guide setup; values are never collected.
     assert "terraform" not in serialized.lower()
+
+
+def test_plan_does_not_claim_an_unverified_azure_target_is_verified():
+    unverified = SimpleNamespace(app_service_plan="legacy-plan")
+
+    plan = planner.build_infrastructure_plan(
+        source_facts(),
+        region="eastus",
+        azure_connection=unverified,
+    )
+    application = next(
+        component for component in plan["components"] if component["id"] == "application"
+    )
+
+    assert application["tier"] == "Existing Linux App Service plan required"
+    assert "after an Azure deployment target is connected and verified" in application["reason"]
+    assert "is the verified deployment target" not in application["reason"]
+
+
+def test_plan_reports_only_a_fingerprint_bound_target_as_verified():
+    connection = SimpleNamespace(
+        tenant_id="tenant",
+        subscription_id="subscription",
+        client_id="client",
+        region="eastus",
+        resource_group="apps-rg",
+        acr_login_server="appsregistry.azurecr.io",
+        app_service_plan="verified-linux-plan",
+        connection_status="connected",
+        is_active=True,
+        deployment_target_verified_at=datetime(2026, 1, 1),
+        deployment_target_fingerprint=None,
+    )
+    connection.deployment_target_fingerprint = deployment_targets.configuration_fingerprint(
+        connection
+    )
+
+    plan = planner.build_infrastructure_plan(
+        source_facts(),
+        region="eastus",
+        azure_connection=connection,
+    )
+    application = next(
+        component for component in plan["components"] if component["id"] == "application"
+    )
+
+    assert application["tier"] == "verified-linux-plan"
+    assert "is the verified deployment target" in application["reason"]
 
 
 def test_detailed_spec_and_revisions_do_not_invent_costs_or_readiness_scores():
@@ -102,7 +152,55 @@ def test_architect_question_explains_the_saved_plan_without_mutating_it(monkeypa
     updated, reply = ai.architect_chat("Why App Service?", plan)
 
     assert updated == plan
-    assert "currently configured by ZeroOps" in reply
+    assert "connected and verified" in reply
+    assert "not proof of live Azure readiness" in reply
+    assert "Plan updated" not in reply
+
+
+def test_architect_combined_detection_validation_question_uses_saved_evidence_without_mutation(monkeypatch):
+    plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
+    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+
+    try:
+        from backend.services import ai
+    except ImportError:
+        from services import ai
+
+    updated, reply = ai.architect_chat(
+        "What framework was detected, and what still needs validation before deployment?",
+        plan,
+    )
+
+    assert updated == plan
+    assert "**Next.js**" in reply
+    assert "runtime: Node.js 22" in reply
+    assert "Connect and validate an Azure environment" in reply
+    assert "Security: requires configuration review" in reply
+    assert "Which retention period applies to customer data?" in reply
+    assert "Plan updated" not in reply
+    assert "Ask about a recorded decision" not in reply
+
+
+def test_architect_combined_detection_validation_question_does_not_invent_missing_evidence(monkeypatch):
+    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+
+    try:
+        from backend.services import ai
+    except ImportError:
+        from services import ai
+
+    plan = {"components": [], "assessment": {}}
+    updated, reply = ai.architect_chat(
+        "What framework was detected and what needs validation before deployment?",
+        plan,
+    )
+
+    assert updated == plan
+    assert "did not record one" in reply
+    assert "absence is not proof of deployment readiness" in reply
+    assert "Next.js" not in reply
     assert "Plan updated" not in reply
 
 

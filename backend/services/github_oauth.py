@@ -496,18 +496,54 @@ async def fetch_github_repo_context(token: str, repo_full_name: str, branch: Opt
         target_basenames = {
             "package.json", "requirements.txt", "pyproject.toml",
             "Dockerfile", "docker-compose.yml", "README.md",
-            ".env.example", ".env", "next.config.js", "next.config.mjs"
+            ".env.example", ".env", "next.config.js", "next.config.mjs",
+            "vite.config.js", "vite.config.mjs", "vite.config.ts", "vite.config.mts",
         }
         
-        files_to_download = []
+        target_files = []
+        workflow_files = []
         for file_path in files_list:
             basename = file_path.split("/")[-1]
             if basename in target_basenames:
-                files_to_download.append(file_path)
+                target_files.append(file_path)
             elif file_path.startswith(".github/workflows/") and file_path.endswith((".yml", ".yaml")):
                 # Limit workflows to avoid too many requests
-                if len([f for f in files_to_download if f.startswith(".github/workflows/")]) < 2:
-                    files_to_download.append(file_path)
+                if len(workflow_files) < 2:
+                    workflow_files.append(file_path)
+
+        # Inspect only a small, deterministic set of likely client entry files.
+        # This gives the analyzer source evidence for UI/runtime claims without
+        # downloading an unbounded repository or sending these files to a model.
+        client_entries = {
+            "src/app.js", "src/app.jsx", "src/app.ts", "src/app.tsx",
+            "src/main.js", "src/main.jsx", "src/main.ts", "src/main.tsx",
+        }
+        client_files = [
+            file_path
+            for file_path in files_list
+            if file_path.replace("\\", "/").lower() in client_entries
+        ]
+
+        # Root metadata and the client entry point are the strongest facts for
+        # a single application. Put them before nested workspace files so the
+        # hard request cap cannot silently drop the source entry point.
+        launch_basenames = {
+            "package.json", "requirements.txt", "pyproject.toml", "Dockerfile",
+            "docker-compose.yml", "next.config.js", "next.config.mjs",
+            "vite.config.js", "vite.config.mjs", "vite.config.ts", "vite.config.mts",
+        }
+        root_launch_targets = [
+            path for path in target_files
+            if "/" not in path and path.split("/")[-1] in launch_basenames
+        ]
+        root_supporting_targets = [
+            path for path in target_files
+            if "/" not in path and path not in root_launch_targets
+        ]
+        nested_targets = [path for path in target_files if "/" in path]
+        files_to_download = list(dict.fromkeys(
+            root_launch_targets + client_files + root_supporting_targets + nested_targets + workflow_files
+        ))
 
         # Limit overall downloads
         files_to_download = files_to_download[:12]
@@ -523,7 +559,12 @@ async def fetch_github_repo_context(token: str, repo_full_name: str, branch: Opt
         files_context = {}
         for path, content in zip(files_to_download, contents):
             if isinstance(content, str):
-                files_context[path] = content[:3000]
+                normalized_path = path.replace("\\", "/").lower()
+                # Likely client entry points are used only by the deterministic
+                # local scanner (the model allow-list excludes them). Keep a
+                # bounded but complete-enough view to validate rendered claims.
+                limit = 30_000 if normalized_path in client_entries else 3_000
+                files_context[path] = content[:limit]
 
         # 6. Scan variables
         scanned_vars = scan_context_for_env_vars(files_context)

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import datetime
 import json
 from pathlib import Path
 
@@ -21,9 +22,17 @@ def azure_connection(**overrides):
         "aks_cluster_name": None,
         "region": "eastus",
         "namespace_prefix": "team-a",
+        "connection_status": "connected",
+        "is_active": True,
+        "deployment_target_verified_at": datetime(2026, 1, 1),
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    connection = SimpleNamespace(**values)
+    if "deployment_target_fingerprint" not in overrides:
+        connection.deployment_target_fingerprint = (
+            deployment_targets.configuration_fingerprint(connection)
+        )
+    return connection
 
 
 def test_azure_target_requires_app_service_configuration():
@@ -42,6 +51,30 @@ def test_azure_target_selects_only_azure_app_service():
     assert target.provider == "azure-app-service"
     assert deployment_targets.image_ref_for_target(target, "team-a-app", "v1") == "zeroopsapps.azurecr.io/team-a-app:v1"
     assert deployment_targets.metadata_for_target(target)["app_service_plan"] == "customer-linux-plan"
+
+
+def test_nonempty_but_unverified_azure_target_is_not_ready():
+    connection = azure_connection(
+        deployment_target_fingerprint=None,
+        deployment_target_verified_at=None,
+    )
+
+    status = deployment_targets.status_payload(connection)
+
+    assert status["any_ready"] is False
+    assert "Verified Azure deployment target" in status["targets"][0]["missing"]
+    with pytest.raises(ValueError, match="Verified Azure deployment target"):
+        deployment_targets.choose_target({}, connection, "auto")
+
+
+def test_target_verification_is_invalidated_when_configuration_changes():
+    connection = azure_connection()
+    connection.app_service_plan = "an-unverified-plan"
+
+    status = deployment_targets.status_payload(connection)
+
+    assert status["any_ready"] is False
+    assert "Verified Azure deployment target" in status["targets"][0]["missing"]
 
 
 def test_aks_is_not_advertised_or_selected_before_external_verification_exists():
@@ -108,6 +141,47 @@ def test_app_settings_use_ephemeral_json_instead_of_secret_argv(tmp_path, monkey
     assert "top-secret-value" not in " ".join(captured["command"])
     assert captured["settings"] == {"WEBSITES_PORT": "3000", "API_TOKEN": "top-secret-value"}
     assert not captured["path"].exists()
+
+
+def test_app_service_fails_fast_when_acr_pull_assignment_is_rejected(monkeypatch):
+    commands = []
+
+    monkeypatch.setattr(app_service, "_sign_in", lambda *_args, **_kwargs: None)
+
+    def fake_capture(command, *, env, cwd=None):
+        commands.append(command)
+        if command[:3] == ["az", "webapp", "show"]:
+            return ""
+        if command[:4] == ["az", "webapp", "identity", "assign"]:
+            return "web-app-principal-id"
+        if command[:3] == ["az", "acr", "show"]:
+            return "/subscriptions/subscription-id/resourceGroups/apps-rg/providers/Microsoft.ContainerRegistry/registries/zeroopsapps"
+        if command[:4] == ["az", "role", "assignment", "create"]:
+            raise app_service.AzureDeploymentError("provider response must stay hidden")
+        raise AssertionError(f"Unexpected Azure command: {command}")
+
+    monkeypatch.setattr(app_service, "_capture", fake_capture)
+
+    with pytest.raises(app_service.AzureDeploymentError) as raised:
+        list(
+            app_service.deploy_image(
+                connection=azure_connection(),
+                client_secret="secret",
+                app_name="example-app",
+                image_ref="zeroopsapps.azurecr.io/example-app:release",
+                metadata={"framework": "FastAPI", "port": "8000"},
+            )
+        )
+
+    assert "grant AcrPull" in str(raised.value)
+    assert "role-assignment permission" in str(raised.value)
+    assert "provider response" not in str(raised.value)
+    role_command = next(
+        command
+        for command in commands
+        if command[:4] == ["az", "role", "assignment", "create"]
+    )
+    assert app_service.ACR_PULL_ROLE_ID in role_command
 
 
 @pytest.mark.parametrize(

@@ -434,8 +434,8 @@ class Project(Base):
     name = Column(Text, nullable=False)                  # e.g. "web-app"
     full_name = Column(Text, nullable=False)              # e.g. "owner/repository"
     repo_url = Column(Text, nullable=True)                # https://github.com/owner/repository
-    framework = Column(Text, default="Next.js")
-    language = Column(Text, default="TypeScript")
+    framework = Column(Text, default="Unknown")
+    language = Column(Text, default="Unknown")
     branch = Column(Text, default="main")
     region = Column(Text, default="eastus")
     status = Column(Text, default=ProjectStatus.active.value)
@@ -726,6 +726,7 @@ class AIAnalysis(Base):
     framework = Column(Text, nullable=True)
     framework_version = Column(Text, nullable=True)
     language = Column(Text, nullable=True)
+    application_type = Column(Text, nullable=True)
     risk_score = Column(Integer, default=0)
     confidence = Column(Integer, default=0)
     cpu_recommendation = Column(Text, nullable=True)
@@ -1001,6 +1002,10 @@ class UserAzureConnection(Base):
     acr_login_server = Column(Text, nullable=True)
     # Existing Linux App Service plan selected by the account owner for customer apps.
     app_service_plan = Column(Text, nullable=True)
+    # A successful read-only Azure lookup is bound to the exact non-secret
+    # deployment settings. Existing records remain unavailable until reverified.
+    deployment_target_fingerprint = Column(String(64), nullable=True)
+    deployment_target_verified_at = Column(DateTime, nullable=True)
     # Legacy field retained only so existing databases can be upgraded safely.
     container_apps_environment = Column(Text, nullable=True)
     aks_cluster_name = Column(Text, nullable=True)
@@ -1013,6 +1018,11 @@ class UserAzureConnection(Base):
 
     __table_args__ = (
         Index("ix_user_azure_connections_user_id", "user_id"),
+        CheckConstraint(
+            "deployment_target_fingerprint IS NULL "
+            "OR deployment_target_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_user_azure_connections_target_fingerprint",
+        ).ddl_if(dialect="postgresql"),
     )
 
 

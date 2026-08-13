@@ -994,6 +994,7 @@ def _analysis_record(deployment: models.Deployment, metadata: Mapping[str, Any])
         framework=metadata.get("framework"),
         framework_version=metadata.get("version"),
         language=metadata.get("language"),
+        application_type=metadata.get("application_type"),
         risk_score=metadata.get("risk_score", 0),
         confidence=metadata.get("confidence", 0),
         cpu_recommendation=resources.get("cpu"),
