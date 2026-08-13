@@ -576,6 +576,7 @@ class ServiceBusEventSink:
             content_type="application/json",
             message_id=event["event_id"],
             correlation_id=envelope.workflow_id,
+            session_id=event["run_id"],
         )
         with self.service_bus_client.get_queue_sender(
             queue_name=self.queue_name

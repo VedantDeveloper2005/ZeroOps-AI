@@ -6,12 +6,16 @@ This runbook defines the intended production path from a generated Terraform
 bundle to an Azure apply. It applies to both human operations and automation.
 Any shortcut around these gates is a security incident.
 
-**Current implementation status:** the Function-to-VMSS plan envelope, bundle
-integrity checks, saved-plan binding, and 24-hour approval-age check are in
-place. The authenticated API's durable approval issuance, single-use atomic
-consumption, scope/cost-envelope binding, and end-to-end apply producer are not
-yet complete. Apply must remain disabled until those items are implemented and
-verified in a disposable workload scope.
+**Current implementation status:** Phase 0 is enforced as plan-only in both the
+runner entry point and Terraform. The VMSS reads only the plan queue, autoscale
+watches only that queue, its workload-scope role is Reader, and neither the
+backend nor executor identity has apply-queue RBAC. The `terraform-apply` queue
+is retained as an unbound reserved contract name; no application identity can
+send to it or receive from it. Apply message contracts and executor code remain
+dormant for future work. The authenticated API's durable approval issuance,
+single-use atomic consumption, scope/cost-envelope binding, and end-to-end
+apply producer are not yet complete. Apply must remain disabled until those
+items are implemented and verified in a disposable workload scope.
 
 ## Preconditions
 
@@ -77,7 +81,11 @@ new plan must produce a different approval request. The current worker only
 verifies the exact job/plan/bundle binding it is given; it cannot itself prove
 that the control plane atomically consumed a user approval.
 
-## Required production apply job
+## Required future production apply job
+
+This section is a design requirement, not a currently reachable runtime path.
+Enabling it requires a separately reviewed change that restores the minimum
+queue RBAC and workload mutation role only after all controls below exist.
 
 1. The authenticated control plane creates an ID-only `TerraformApplyJobV1`
    message only after atomically consuming the approval nonce.

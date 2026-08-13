@@ -5,7 +5,9 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+from worker.azure_adapters import ServiceBusEventSink
 from worker.contracts import ExecutionEnvelope, payload_with_digest
 from worker.history_events import build_workflow_event
 from worker.tests.test_execution_contract import (
@@ -192,6 +194,38 @@ class WorkflowEventCompatibilityTests(unittest.TestCase):
             failed_event["safe_message"],
             "Terraform plan failed.",
         )
+
+    def test_service_bus_event_uses_run_session_and_sanitized_body(self) -> None:
+        service_bus = MagicMock()
+        sender = service_bus.get_queue_sender.return_value.__enter__.return_value
+        result = sanitized_plan_result()
+        result["secret_value"] = "must-never-reach-service-bus"
+
+        with patch("worker.azure_adapters.ServiceBusMessage") as message_type:
+            message = message_type.return_value
+            ServiceBusEventSink(service_bus, "workflow-events").publish(
+                plan_envelope(),
+                result,
+            )
+
+        service_bus.get_queue_sender.assert_called_once_with(
+            queue_name="workflow-events"
+        )
+        sender.send_messages.assert_called_once_with(message)
+        body = message_type.call_args.args[0]
+        properties = message_type.call_args.kwargs
+        event = json.loads(body)
+
+        self.assertEqual(event["run_id"], WORKFLOW_ID)
+        self.assertEqual(properties["session_id"], event["run_id"])
+        self.assertEqual(properties["correlation_id"], event["correlation_id"])
+        for forbidden in (
+            "must-never-reach-service-bus",
+            "executor-plan-etag",
+            "terraform.tfstate",
+            "?sig=",
+        ):
+            self.assertNotIn(forbidden, body)
 
 
 if __name__ == "__main__":

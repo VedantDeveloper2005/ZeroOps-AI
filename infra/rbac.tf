@@ -82,13 +82,6 @@ resource "azurerm_role_assignment" "executor_plan_receiver" {
   principal_type     = "ServicePrincipal"
 }
 
-resource "azurerm_role_assignment" "executor_apply_receiver" {
-  scope              = module.service_bus.queue_ids.terraform_apply
-  role_definition_id = local.role_definition_ids.service_bus_receiver
-  principal_id       = azurerm_user_assigned_identity.executor.principal_id
-  principal_type     = "ServicePrincipal"
-}
-
 resource "azurerm_role_assignment" "executor_event_sender" {
   scope              = module.service_bus.queue_ids.workflow_events
   role_definition_id = local.role_definition_ids.service_bus_sender
@@ -121,20 +114,13 @@ resource "azurerm_role_assignment" "executor_customer_scope" {
   count = var.execution_scope_resource_id == null ? 0 : 1
 
   scope              = var.execution_scope_resource_id
-  role_definition_id = local.role_definition_ids.contributor
+  role_definition_id = local.role_definition_ids.reader
   principal_id       = azurerm_user_assigned_identity.executor.principal_id
   principal_type     = "ServicePrincipal"
 }
 
 resource "azurerm_role_assignment" "backend_repo_sender" {
   scope              = module.service_bus.queue_ids.repo_analysis
-  role_definition_id = local.role_definition_ids.service_bus_sender
-  principal_id       = data.azurerm_user_assigned_identity.backend.principal_id
-  principal_type     = "ServicePrincipal"
-}
-
-resource "azurerm_role_assignment" "backend_apply_sender" {
-  scope              = module.service_bus.queue_ids.terraform_apply
   role_definition_id = local.role_definition_ids.service_bus_sender
   principal_id       = data.azurerm_user_assigned_identity.backend.principal_id
   principal_type     = "ServicePrincipal"

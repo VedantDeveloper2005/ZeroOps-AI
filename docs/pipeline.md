@@ -23,7 +23,10 @@ not considered successful merely because a tool is absent.
   telemetry collector and is explicitly unclaimed. A project-level toggle to
   make high findings blocking is also not connected.
 - **Blocked:** the separate Terraform Service Bus/VMSS saved-plan apply flow is
-  not connected to this release pipeline. Terraform apply remains disabled.
+  not connected to this release pipeline. Terraform apply is fail-closed: the
+  VMSS entry point polls only the plan queue, autoscale watches only that queue,
+  the workload identity has Reader rather than Contributor, and no application
+  sender or executor receiver RBAC exists for the reserved apply queue.
   AKS application mutation is also blocked before server-side apply until a
   hardened external Service/Ingress verifier exists.
 - **Not live verified:** neither an App Service nor AKS release was performed

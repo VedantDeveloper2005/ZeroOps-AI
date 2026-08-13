@@ -38,14 +38,6 @@ variable "plan_queue_id" {
   type = string
 }
 
-variable "apply_queue_name" {
-  type = string
-}
-
-variable "apply_queue_id" {
-  type = string
-}
-
 variable "event_queue_name" {
   type = string
 }

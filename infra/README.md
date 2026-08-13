@@ -15,13 +15,17 @@ recreated, resized, or reconfigured by this root.
   Terraform creates no secrets. NVIDIA primary and Groq fallback credentials
   must be written out of band to four workload-specific secret names.
 - Service Bus queues for repository analysis, generation, plan, apply, and
-  workflow events. Plan/apply queues use sessions and duplicate detection.
+  workflow events. The apply queue is retained as a reserved contract name but
+  has no application sender, executor receiver, or autoscale rule in the
+  current plan-only phase. Plan/apply queues use sessions and duplicate
+  detection.
 - A versioned tenant artifact account and a different executor-only account for
   Terraform state, leases, completion receipts, and saved binary plans.
 - A Basic ACR in test or Premium ACR in production, with admin access disabled.
 - A regular `Standard_D2ads_v5` Flexible VMSS spread across zones 1 and 2. It
-  starts at zero, scales to one in test or at most ten in production, and uses a
-  static NAT egress IP with no per-VM public IP.
+  starts at zero, scales from Terraform plan queue depth to one in test or at
+  most ten in production, and uses a static NAT egress IP with no per-VM public
+  IP.
 - VNet integration, private DNS, and production private endpoints, plus Log
   Analytics, Application Insights, Azure Monitor diagnostics, DCR, alerting,
   and an optional resource-group budget.
@@ -37,33 +41,37 @@ approved migration after private connectivity is tested.
 
 | Identity | Can receive | Can send | Storage | Key Vault |
 |---|---|---|---|---|
-| Existing backend | none | repository-analysis, Terraform-generation, and apply requests | tenant artifacts only | existing control vault remains external |
+| Existing backend | none | repository-analysis and Terraform-generation requests | tenant artifacts only | existing control vault remains external |
 | Analysis Function | repository analysis | workflow events | tenant artifacts | analysis model vault only |
 | Terraform generation Function | Terraform generation | Terraform plan | tenant artifacts | generation model vault only |
-| VMSS executor | plan/apply | workflow events | tenant artifacts plus executor-only plans/state | no model key vault |
+| VMSS executor | Terraform plan only | workflow events | tenant artifacts plus executor-only plans/state | no model key vault |
 | History projector Function | workflow events | none | none | none; PostgreSQL Entra login only |
 
 The backend and AI Functions receive no RBAC on the executor storage account.
 Saved `.tfplan` files, Terraform state, and lease blobs therefore cannot be read
 through the user-facing application. User history receives only sanitized
 action counts, resource kinds, immutable digests, status, and timestamps.
+The optional customer workload scope grants the executor Reader, not
+Contributor. Apply message contracts and execution code are retained for future
+work, but the deployed entry point does not read an apply queue and neither the
+backend nor executor identity has apply-queue RBAC.
 
 ## Cost profile
 
 `environments/test.tfvars.example` is the default demonstration profile:
 Standard Service Bus, Basic ACR, FC1 Functions, LRS Function host storage, and a
-VMSS maximum of one. The executor stays at zero when both execution queues are
-empty.
+VMSS maximum of one. The executor stays at zero when the plan queue is empty.
 
 `environments/production.tfvars.example` enables private endpoints, Premium
 Service Bus/ACR, ZRS storage, longer retention, and a VMSS cap of ten. Premium
 services are explicit rather than silently enabled in test. The monthly budget
 is also explicit and refuses to enable without dates, an amount, and a receiver.
 
-The regular VMSS is intentional: an interrupted Spot eviction during
-`terraform apply` is not an acceptable cost optimization. The worker instead
-uses queue-driven scale-to-zero, ephemeral OS disks, a bounded SKU, lifecycle
-tiering, FC1 serverless compute, and per-environment caps.
+The regular VMSS is intentional so a future, separately authorized apply path
+does not require changing the compute safety model. In the current plan-only
+phase, the worker uses plan-queue-driven scale-to-zero, ephemeral OS disks, a
+bounded SKU, lifecycle tiering, FC1 serverless compute, and per-environment
+caps.
 
 ## Template composition provenance
 
@@ -106,7 +114,9 @@ Prerequisites that are currently external to this code:
    digest, and replace `runner_image_reference`. The reference must end in
    `@sha256:<64 lowercase hex characters>`.
 5. Set `execution_scope_resource_id` only to a dedicated customer workload
-   resource group. A Terraform check rejects the ZeroOps platform group.
+   resource group. A Terraform check rejects the ZeroOps platform group. The
+   current plan-only deployment grants Reader on this scope; it intentionally
+   cannot apply changes.
 6. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
    analysis vault, and `ai-terraform-api-key` and
    `ai-terraform-fallback-api-key` in the Terraform-generation vault, outside
@@ -134,8 +144,8 @@ checkov --config-file infra/.checkov.yml --directory infra --framework terraform
 ```
 
 For a real plan, initialize with `-backend-config=backend.hcl` and use a copied,
-ignored tfvars file. Save the exact plan; execution is permitted only through
-the isolated VMSS approval flow after separate deployment authorization:
+ignored tfvars file. Save the exact plan. Applying it is not permitted in the
+current phase; the isolated VMSS only produces plan evidence:
 
 ```powershell
 terraform -chdir=infra plan -out=platform.tfplan -var-file=environments/test.tfvars

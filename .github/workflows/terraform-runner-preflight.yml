@@ -1,0 +1,387 @@
+name: Terraform runner Azure preflight
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  validate-runner-prerequisites:
+    name: Validate Terraform runner prerequisites
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CORE_ONLY_SHOW_ERRORS: "true"
+      AZURE_CORE_OUTPUT: none
+      TARGET_RESOURCE_GROUP: zeroops-rg
+      TARGET_LOCATION: centralindia
+      TARGET_VM_SIZE: Standard_D2ads_v5
+      TARGET_IMAGE_URN: Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest
+      TARGET_VNET_CIDR: 10.72.0.0/16
+      REQUIRED_VCPUS: "2"
+
+    steps:
+      - name: Check out the approved main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+
+      - name: Run read-only Azure prerequisite checks
+        id: preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+
+          report_dir="${RUNNER_TEMP}/terraform-runner-preflight"
+          report="${report_dir}/summary.md"
+          mkdir -p "${report_dir}"
+
+          failures=0
+          passes=0
+          warnings=0
+
+          pass_check() {
+            printf -- '- PASS: %s\n' "$1" >> "${report}"
+            passes=$((passes + 1))
+          }
+
+          fail_check() {
+            printf -- '- FAIL: %s\n' "$1" >> "${report}"
+            failures=$((failures + 1))
+          }
+
+          warn_check() {
+            printf -- '- WARN: %s\n' "$1" >> "${report}"
+            warnings=$((warnings + 1))
+          }
+
+          publish_summary() {
+            if [[ -f "${report}" ]]; then
+              cat "${report}" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          }
+          trap publish_summary EXIT
+
+          {
+            printf '# Terraform runner Azure preflight\n\n'
+            printf 'This report contains read-only, sanitized readiness evidence. '
+            printf 'It contains no access tokens, credentials, resource IDs, or raw Azure responses.\n\n'
+            printf '## Fixed deployment target\n\n'
+            printf -- '- Resource group: `%s`\n' "${TARGET_RESOURCE_GROUP}"
+            printf -- '- Region: `%s`\n' "${TARGET_LOCATION}"
+            printf -- '- VM size: `%s`\n' "${TARGET_VM_SIZE}"
+            printf -- '- Image: Ubuntu 22.04 LTS Gen2 (`%s`)\n' "${TARGET_IMAGE_URN}"
+            printf -- '- Planned VNet address space: `%s`\n\n' "${TARGET_VNET_CIDR}"
+            printf '## Checks\n\n'
+          } > "${report}"
+
+          if account_json="$(az account show --output json 2>/dev/null)"; then
+            account_state="$(jq -r '.state // ""' <<< "${account_json}")"
+            if [[ "${account_state}" == "Enabled" ]]; then
+              pass_check 'OIDC selected an enabled Azure subscription.'
+            else
+              fail_check 'OIDC did not select an enabled Azure subscription.'
+            fi
+          else
+            fail_check 'The Azure subscription context could not be read.'
+          fi
+          unset account_json account_state
+
+          if resource_group_json="$(az group show --name "${TARGET_RESOURCE_GROUP}" --output json 2>/dev/null)"; then
+            resource_group_location="$(jq -r '.location // "unknown"' <<< "${resource_group_json}")"
+            if [[ "${resource_group_location,,}" == "${TARGET_LOCATION,,}" ]]; then
+              pass_check "Existing resource group ${TARGET_RESOURCE_GROUP} is readable in ${TARGET_LOCATION}."
+            else
+              fail_check "Existing resource group ${TARGET_RESOURCE_GROUP} is in ${resource_group_location}; ${TARGET_LOCATION} is required."
+            fi
+          else
+            fail_check "Existing resource group ${TARGET_RESOURCE_GROUP} is missing or unreadable."
+          fi
+          unset resource_group_json resource_group_location
+
+          sku_family=''
+          sku_vcpus=''
+          if sku_json="$(az vm list-skus --location "${TARGET_LOCATION}" --resource-type virtualMachines --size "${TARGET_VM_SIZE}" --all --output json 2>/dev/null)"; then
+            exact_sku_json="$(jq -c --arg size "${TARGET_VM_SIZE}" '[.[] | select(.name == $size)]' <<< "${sku_json}")"
+            sku_count="$(jq 'length' <<< "${exact_sku_json}")"
+
+            if [[ "${sku_count}" -eq 1 ]]; then
+              pass_check "VM size ${TARGET_VM_SIZE} is published in ${TARGET_LOCATION}."
+
+              restriction_count="$(jq '.[0].restrictions // [] | length' <<< "${exact_sku_json}")"
+              selected_target_restriction_count="$(jq --arg location "${TARGET_LOCATION}" '
+                [
+                  .[0].restrictions[]?
+                  | select(
+                      (
+                        ((.type // "") | ascii_downcase) == "location"
+                        and any((.values // [])[]?; ascii_downcase == ($location | ascii_downcase))
+                      )
+                      or
+                      (
+                        ((.type // "") | ascii_downcase) == "zone"
+                        and any(
+                          (.restrictionInfo.locations // .values // [])[]?;
+                          ascii_downcase == ($location | ascii_downcase)
+                        )
+                        and any((.restrictionInfo.zones // [])[]?; . == "1" or . == "2")
+                      )
+                    )
+                ] | length
+              ' <<< "${exact_sku_json}")"
+              if [[ "${selected_target_restriction_count}" -gt 0 ]]; then
+                fail_check "VM size ${TARGET_VM_SIZE} is restricted in ${TARGET_LOCATION} or in required zones 1/2."
+              elif [[ "${restriction_count}" -gt 0 ]]; then
+                warn_check "VM size ${TARGET_VM_SIZE} has ${restriction_count} restriction(s) outside the selected region/zones."
+              else
+                pass_check "VM size ${TARGET_VM_SIZE} has no subscription or location restrictions."
+              fi
+
+              if jq -e --arg location "${TARGET_LOCATION}" '
+                .[0].locationInfo // []
+                | any(
+                    (.location | ascii_downcase) == ($location | ascii_downcase)
+                    and ((.zones // []) | index("1") != null)
+                    and ((.zones // []) | index("2") != null)
+                  )
+              ' <<< "${exact_sku_json}" >/dev/null; then
+                pass_check "VM size ${TARGET_VM_SIZE} supports required zones 1 and 2 in ${TARGET_LOCATION}."
+              else
+                fail_check "VM size ${TARGET_VM_SIZE} does not expose both required zones 1 and 2 in ${TARGET_LOCATION}."
+              fi
+
+              sku_family="$(jq -r '.[0].family // ""' <<< "${exact_sku_json}")"
+              sku_vcpus="$(jq -r '[.[0].capabilities[]? | select(.name == "vCPUs") | .value][0] // ""' <<< "${exact_sku_json}")"
+              if [[ "${sku_vcpus}" == "${REQUIRED_VCPUS}" ]]; then
+                pass_check "VM size ${TARGET_VM_SIZE} requires ${REQUIRED_VCPUS} vCPUs as expected."
+              else
+                fail_check "VM size ${TARGET_VM_SIZE} did not report the expected ${REQUIRED_VCPUS} vCPU requirement."
+              fi
+              if [[ -z "${sku_family}" ]]; then
+                fail_check "VM size ${TARGET_VM_SIZE} did not report a quota family."
+              fi
+            elif [[ "${sku_count}" -eq 0 ]]; then
+              fail_check "VM size ${TARGET_VM_SIZE} is not published in ${TARGET_LOCATION}."
+            else
+              fail_check "VM size lookup returned more than one exact ${TARGET_VM_SIZE} record."
+            fi
+          else
+            fail_check "VM size availability could not be read for ${TARGET_LOCATION}."
+          fi
+          unset sku_json exact_sku_json sku_count restriction_count selected_target_restriction_count
+
+          if image_json="$(az vm image show --location "${TARGET_LOCATION}" --urn "${TARGET_IMAGE_URN}" --output json 2>/dev/null)"; then
+            if jq -e --arg location "${TARGET_LOCATION}" '
+              (.publisher | ascii_downcase) == "canonical"
+              and .offer == "0001-com-ubuntu-server-jammy"
+              and .sku == "22_04-lts-gen2"
+              and (.version | length) > 0
+              and ((.location | ascii_downcase) == ($location | ascii_downcase))
+            ' <<< "${image_json}" >/dev/null; then
+              pass_check "Canonical Ubuntu 22.04 LTS Gen2 is available in ${TARGET_LOCATION}."
+            else
+              fail_check 'The resolved VM image did not match the fixed Ubuntu 22.04 LTS Gen2 contract.'
+            fi
+          else
+            fail_check "Canonical Ubuntu 22.04 LTS Gen2 could not be resolved in ${TARGET_LOCATION}."
+          fi
+          unset image_json
+
+          if usage_json="$(az vm list-usage --location "${TARGET_LOCATION}" --output json 2>/dev/null)"; then
+            regional_usage="$(jq -c '[.[] | select((.name.value // "" | ascii_downcase) == "cores")][0] // null' <<< "${usage_json}")"
+            if [[ "${regional_usage}" != 'null' ]]; then
+              regional_current="$(jq -r '.currentValue' <<< "${regional_usage}")"
+              regional_limit="$(jq -r '.limit' <<< "${regional_usage}")"
+              regional_free=$((regional_limit - regional_current))
+              if [[ "${regional_free}" -ge "${REQUIRED_VCPUS}" ]]; then
+                pass_check "Regional vCPU quota has ${regional_free} free of ${regional_limit}; ${REQUIRED_VCPUS} required."
+              else
+                fail_check "Regional vCPU quota has ${regional_free} free of ${regional_limit}; ${REQUIRED_VCPUS} required."
+              fi
+            else
+              fail_check "Regional vCPU quota was absent for ${TARGET_LOCATION}."
+            fi
+
+            if [[ -n "${sku_family}" ]]; then
+              family_usage="$(jq -c --arg family "${sku_family}" '[.[] | select((.name.value // "" | ascii_downcase) == ($family | ascii_downcase))][0] // null' <<< "${usage_json}")"
+              if [[ "${family_usage}" != 'null' ]]; then
+                family_current="$(jq -r '.currentValue' <<< "${family_usage}")"
+                family_limit="$(jq -r '.limit' <<< "${family_usage}")"
+                family_free=$((family_limit - family_current))
+                if [[ "${family_free}" -ge "${REQUIRED_VCPUS}" ]]; then
+                  pass_check "${sku_family} quota has ${family_free} free of ${family_limit}; ${REQUIRED_VCPUS} required."
+                else
+                  fail_check "${sku_family} quota has ${family_free} free of ${family_limit}; ${REQUIRED_VCPUS} required."
+                fi
+              else
+                fail_check "Quota entry ${sku_family} was absent for ${TARGET_LOCATION}."
+              fi
+            fi
+          else
+            fail_check "Compute quota could not be read for ${TARGET_LOCATION}."
+          fi
+          unset usage_json regional_usage regional_current regional_limit regional_free
+          unset family_usage family_current family_limit family_free sku_family sku_vcpus
+
+          required_providers=(
+            Microsoft.App
+            Microsoft.Authorization
+            Microsoft.Compute
+            Microsoft.ContainerRegistry
+            Microsoft.DBforPostgreSQL
+            Microsoft.Insights
+            Microsoft.KeyVault
+            Microsoft.ManagedIdentity
+            Microsoft.Network
+            Microsoft.OperationalInsights
+            Microsoft.ServiceBus
+            Microsoft.Storage
+            Microsoft.Web
+          )
+          for namespace in "${required_providers[@]}"; do
+            if provider_state="$(az provider show --namespace "${namespace}" --query registrationState --output tsv 2>/dev/null)"; then
+              if [[ "${provider_state}" == 'Registered' ]]; then
+                pass_check "Resource provider ${namespace} is Registered."
+              else
+                fail_check "Resource provider ${namespace} is ${provider_state:-unknown}; this workflow will not register it."
+              fi
+            else
+              fail_check "Resource provider ${namespace} could not be read."
+            fi
+          done
+
+          if quota_provider_state="$(az provider show --namespace Microsoft.Quota --query registrationState --output tsv 2>/dev/null)"; then
+            if [[ "${quota_provider_state}" == 'Registered' ]]; then
+              pass_check 'Optional resource provider Microsoft.Quota is Registered.'
+            else
+              warn_check "Optional resource provider Microsoft.Quota is ${quota_provider_state:-unknown}; Compute usage validation above remains authoritative."
+            fi
+          else
+            warn_check 'Optional resource provider Microsoft.Quota could not be read.'
+          fi
+          unset provider_state quota_provider_state namespace
+
+          if inventory_json="$(az resource list --resource-group "${TARGET_RESOURCE_GROUP}" --output json 2>/dev/null)"; then
+            jq '[.[] | {name, type, location}] | sort_by(.type, .name)' <<< "${inventory_json}" > "${report_dir}/resource-inventory.json"
+            pass_check "Existing resource inventory for ${TARGET_RESOURCE_GROUP} was captured without properties or resource IDs."
+
+            required_resources=(
+              'ASP-zeroopsrg-8559|microsoft.web/serverfarms'
+              'zeroopsai|microsoft.web/sites'
+              'zeroops-backend|microsoft.web/sites'
+              'zeroops-db-prod|microsoft.dbforpostgresql/flexibleservers'
+              'zeroops-kv-prod|microsoft.keyvault/vaults'
+              'zeroops-backend-id-96a7|microsoft.managedidentity/userassignedidentities'
+            )
+            for resource_contract in "${required_resources[@]}"; do
+              resource_name="${resource_contract%%|*}"
+              resource_type="${resource_contract#*|}"
+              if jq -e --arg name "${resource_name}" --arg type "${resource_type}" '
+                any(.[]; .name == $name and ((.type | ascii_downcase) == $type))
+              ' <<< "${inventory_json}" >/dev/null; then
+                pass_check "Required existing resource ${resource_name} (${resource_type}) is present."
+              else
+                fail_check "Required existing resource ${resource_name} (${resource_type}) is missing."
+              fi
+            done
+          else
+            fail_check "Existing resource inventory for ${TARGET_RESOURCE_GROUP} could not be read."
+          fi
+          unset inventory_json resource_contract resource_name resource_type
+
+          if vnet_json="$(az network vnet list --output json 2>/dev/null)"; then
+            jq '[.[] | {name, resourceGroup, addressPrefixes: (.addressSpace.addressPrefixes // [])}] | sort_by(.resourceGroup, .name)' <<< "${vnet_json}" > "${report_dir}/vnet-inventory.json"
+
+            python3 - "${report_dir}/vnet-inventory.json" "${report_dir}/vnet-cidr-check.json" "${TARGET_VNET_CIDR}" <<'PY'
+          import ipaddress
+          import json
+          import sys
+
+          inventory_path, result_path, planned_text = sys.argv[1:]
+          planned = ipaddress.ip_network(planned_text, strict=False)
+
+          with open(inventory_path, encoding="utf-8") as handle:
+              inventory = json.load(handle)
+
+          conflicts = []
+          invalid = []
+          for vnet in inventory:
+              for prefix_text in vnet.get("addressPrefixes", []):
+                  try:
+                      prefix = ipaddress.ip_network(prefix_text, strict=False)
+                  except ValueError:
+                      invalid.append(
+                          {
+                              "name": vnet.get("name"),
+                              "resourceGroup": vnet.get("resourceGroup"),
+                              "addressPrefix": prefix_text,
+                          }
+                      )
+                      continue
+                  if prefix.version == planned.version and prefix.overlaps(planned):
+                      conflicts.append(
+                          {
+                              "name": vnet.get("name"),
+                              "resourceGroup": vnet.get("resourceGroup"),
+                              "addressPrefix": prefix_text,
+                          }
+                      )
+
+          with open(result_path, "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "plannedAddressSpace": str(planned),
+                      "conflicts": conflicts,
+                      "invalidExistingPrefixes": invalid,
+                  },
+                  handle,
+                  indent=2,
+                  sort_keys=True,
+              )
+              handle.write("\n")
+          PY
+
+            cidr_conflicts="$(jq '.conflicts | length' "${report_dir}/vnet-cidr-check.json")"
+            invalid_prefixes="$(jq '.invalidExistingPrefixes | length' "${report_dir}/vnet-cidr-check.json")"
+            if [[ "${invalid_prefixes}" -gt 0 ]]; then
+              fail_check "Existing VNet inventory contains ${invalid_prefixes} unreadable address prefix(es)."
+            elif [[ "${cidr_conflicts}" -eq 0 ]]; then
+              pass_check "Planned VNet ${TARGET_VNET_CIDR} does not overlap any existing subscription VNet address space."
+            else
+              fail_check "Planned VNet ${TARGET_VNET_CIDR} overlaps ${cidr_conflicts} existing VNet address space(s)."
+            fi
+          else
+            fail_check 'Subscription VNet inventory could not be read; CIDR safety cannot be proven.'
+          fi
+          unset vnet_json cidr_conflicts invalid_prefixes
+
+          {
+            printf '\n## Result\n\n'
+            printf -- '- Passed checks: %s\n' "${passes}"
+            printf -- '- Failed checks: %s\n' "${failures}"
+            printf -- '- Warnings: %s\n' "${warnings}"
+          } >> "${report}"
+
+          if [[ "${failures}" -gt 0 ]]; then
+            exit 1
+          fi
+
+      - name: Upload sanitized preflight evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terraform-runner-azure-preflight
+          path: ${{ runner.temp }}/terraform-runner-preflight
+          if-no-files-found: error
+          retention-days: 7

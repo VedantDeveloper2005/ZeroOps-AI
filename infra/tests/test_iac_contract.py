@@ -68,6 +68,46 @@ class InfrastructureContractTests(unittest.TestCase):
             re.compile(r'metric_name\s*=\s*"ActiveMessageCount"'),
         )
 
+    def test_vmss_is_fail_closed_plan_only(self) -> None:
+        root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
+        rbac = (INFRA_ROOT / "rbac.tf").read_text(encoding="utf-8")
+        locals_tf = (INFRA_ROOT / "locals.tf").read_text(encoding="utf-8")
+        runner = (
+            INFRA_ROOT / "modules" / "runner" / "main.tf"
+        ).read_text(encoding="utf-8")
+        runner_variables = (
+            INFRA_ROOT / "modules" / "runner" / "variables.tf"
+        ).read_text(encoding="utf-8")
+        cloud_init = (
+            INFRA_ROOT / "modules" / "runner" / "cloud-init.yaml.tftpl"
+        ).read_text(encoding="utf-8")
+        worker_entrypoint = (
+            REPOSITORY_ROOT / "worker" / "vmss_main.py"
+        ).read_text(encoding="utf-8")
+
+        # Keep the contract queue reserved, but bind no production identity or
+        # runtime/autoscale path to it until atomic approval is implemented.
+        self.assertIn('terraform_apply      = "terraform-apply"', locals_tf)
+        self.assertNotIn("executor_apply_receiver", rbac)
+        self.assertNotIn("backend_apply_sender", rbac)
+        self.assertNotIn("module.service_bus.queue_ids.terraform_apply", rbac)
+        self.assertNotIn("apply_queue", root)
+        self.assertNotIn("apply_queue", runner)
+        self.assertNotIn("apply_queue", runner_variables)
+        self.assertNotIn("ZEROOPS_APPLY_QUEUE", cloud_init)
+        self.assertNotIn("ZEROOPS_APPLY_QUEUE", worker_entrypoint)
+        self.assertNotIn('operation="apply"', worker_entrypoint)
+
+        # Planning needs read access to the target, never mutation authority.
+        self.assertIn(
+            "role_definition_id = local.role_definition_ids.reader",
+            rbac,
+        )
+        self.assertNotIn(
+            "role_definition_id = local.role_definition_ids.contributor",
+            rbac,
+        )
+
     def test_executor_only_state_and_plan_containers_exist(self) -> None:
         storage = (INFRA_ROOT / "modules" / "storage" / "main.tf").read_text()
         rbac = (INFRA_ROOT / "rbac.tf").read_text()

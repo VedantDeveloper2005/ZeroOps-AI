@@ -53,14 +53,12 @@ resource "azurerm_private_endpoint" "registry" {
 locals {
   vmss_resource_id = "${data.azurerm_resource_group.this.id}/providers/Microsoft.Compute/virtualMachineScaleSets/${var.name}"
   queue_metric_ids = {
-    plan  = var.plan_queue_id
-    apply = var.apply_queue_id
+    plan = var.plan_queue_id
   }
   custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
     identity_client_id            = var.identity_client_id
     service_bus_namespace         = var.service_bus_namespace
     plan_queue_name               = var.plan_queue_name
-    apply_queue_name              = var.apply_queue_name
     event_queue_name              = var.event_queue_name
     artifact_storage_account_name = var.artifact_storage_account_name
     executor_storage_account_name = var.executor_storage_account_name

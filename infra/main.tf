@@ -293,8 +293,6 @@ module "runner" {
   service_bus_namespace          = module.service_bus.fully_qualified_namespace
   plan_queue_name                = local.queue_names.terraform_plan
   plan_queue_id                  = module.service_bus.queue_ids.terraform_plan
-  apply_queue_name               = local.queue_names.terraform_apply
-  apply_queue_id                 = module.service_bus.queue_ids.terraform_apply
   event_queue_name               = local.queue_names.workflow_events
   artifact_storage_account_name  = module.storage.artifact_account_name
   executor_storage_account_name  = module.storage.executor_account_name
@@ -315,7 +313,6 @@ module "runner" {
 
   depends_on = [
     azurerm_role_assignment.executor_plan_receiver,
-    azurerm_role_assignment.executor_apply_receiver,
     azurerm_role_assignment.executor_event_sender,
     azurerm_role_assignment.executor_artifacts,
     azurerm_role_assignment.executor_state,

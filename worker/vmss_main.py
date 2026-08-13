@@ -1,4 +1,9 @@
-"""Scale-to-zero Service Bus worker for Terraform plan/apply jobs."""
+"""Scale-to-zero Service Bus worker for Terraform plan jobs.
+
+Terraform apply support remains implemented behind the execution contract, but
+the production entry point is intentionally plan-only until the control-plane
+approval and single-use consumption flow is complete.
+"""
 
 from __future__ import annotations
 
@@ -51,7 +56,6 @@ class RunnerConfig:
     client_id: str
     service_bus_namespace: str
     plan_queue: str
-    apply_queue: str
     event_queue: str
     artifact_account: str
     executor_account: str
@@ -68,7 +72,6 @@ class RunnerConfig:
                 "ZEROOPS_SERVICE_BUS_NAMESPACE"
             ),
             plan_queue=_required_environment("ZEROOPS_PLAN_QUEUE"),
-            apply_queue=_required_environment("ZEROOPS_APPLY_QUEUE"),
             event_queue=_required_environment("ZEROOPS_EVENT_QUEUE"),
             artifact_account=_required_environment("ZEROOPS_ARTIFACT_ACCOUNT"),
             executor_account=_required_environment("ZEROOPS_EXECUTOR_ACCOUNT"),
@@ -263,16 +266,10 @@ def main() -> int:
         while keep_running:
             handled = _poll_queue(
                 client=service_bus,
-                queue_name=config.apply_queue,
-                operation="apply",
-                handler_kwargs=handler_kwargs,
-            )
-            handled = _poll_queue(
-                client=service_bus,
                 queue_name=config.plan_queue,
                 operation="plan",
                 handler_kwargs=handler_kwargs,
-            ) or handled
+            )
             health.mark_ready()
             if not handled:
                 time.sleep(config.poll_seconds)
