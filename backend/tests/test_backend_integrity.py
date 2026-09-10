@@ -369,3 +369,58 @@ def test_chat_telemetry_summary_handles_partial_nullable_samples():
             response_time_ms=None,
         )
     ]) is None
+
+
+@pytest.mark.asyncio
+async def test_run_migrations_unlocked_survives_duplicate_schema_migrations(monkeypatch):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+    from backend import database
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        # Populate all migrations, with duplicate records for '001_tenant_history'
+        versions = [
+            "001_tenant_history",
+            "001_tenant_history",  # Duplicate row
+            "002_projector_event_id",
+            "003_history_integrity",
+            "004_auth_identity_integrity",
+            "005_devsecops_domain",
+            "006_secure_pending_approvals",
+            "007_change_analysis_retry_history",
+            "008_verified_azure_targets",
+            "009_analysis_application_type",
+            "010_terraform_control_plane",
+            "011_auth_ai_hardening",
+            "012_deployment_terraform_binding",
+        ]
+        for version in versions:
+            await conn.execute(
+                text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+                {"version": version},
+            )
+
+    monkeypatch.setattr(database, "database_available", True)
+    monkeypatch.setattr(database, "async_engine", engine)
+
+    # Must complete without raising MultipleResultsFound
+    await database._run_migrations_unlocked()
+
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text("SELECT count(*) FROM schema_migrations WHERE version = '001_tenant_history'")
+        )
+        assert result.scalar() == 1
+
+    await engine.dispose()

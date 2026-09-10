@@ -186,16 +186,18 @@ async def run_migrations():
 
     lock_connection = await async_engine.connect()
     lock_acquired = False
+    is_postgres = lock_connection.dialect.name == "postgresql"
     try:
-        await lock_connection.execute(
-            text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
-            {"lock_key": "zeroops-schema-migrations"},
-        )
-        await lock_connection.commit()
-        lock_acquired = True
+        if is_postgres:
+            await lock_connection.execute(
+                text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
+                {"lock_key": "zeroops-schema-migrations"},
+            )
+            await lock_connection.commit()
+            lock_acquired = True
         await _run_migrations_unlocked()
     finally:
-        if lock_acquired:
+        if lock_acquired and is_postgres:
             try:
                 await lock_connection.execute(
                     text("SELECT pg_advisory_unlock(hashtext(:lock_key))"),
@@ -328,6 +330,62 @@ async def _run_migrations_unlocked():
                 """
             )
         )
+        if conn.dialect.name == "postgresql":
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM schema_migrations a
+                    USING schema_migrations b
+                    WHERE a.ctid < b.ctid AND a.version = b.version
+                    """
+                )
+            )
+            # Fix any rows with NULL applied_at from prior buggy inserts
+            await conn.execute(
+                text(
+                    """
+                    UPDATE schema_migrations
+                    SET applied_at = NOW()
+                    WHERE applied_at IS NULL
+                    """
+                )
+            )
+            # Ensure applied_at has a DEFAULT for future inserts
+            await conn.execute(
+                text(
+                    """
+                    ALTER TABLE schema_migrations
+                    ALTER COLUMN applied_at SET DEFAULT NOW()
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_schema_migrations_version
+                    ON schema_migrations (version)
+                    """
+                )
+            )
+        elif conn.dialect.name == "sqlite":
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM schema_migrations
+                    WHERE rowid NOT IN (
+                        SELECT MIN(rowid) FROM schema_migrations GROUP BY version
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_schema_migrations_version
+                    ON schema_migrations (version)
+                    """
+                )
+            )
         versioned_migrations = (
             (MIGRATION_001_VERSION, MIGRATION_001_STATEMENTS),
             (MIGRATION_002_VERSION, MIGRATION_002_STATEMENTS),
@@ -344,16 +402,33 @@ async def _run_migrations_unlocked():
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(
-                text("SELECT 1 FROM schema_migrations WHERE version = :version"),
+                text("SELECT 1 FROM schema_migrations WHERE version = :version LIMIT 1"),
                 {"version": migration_version},
             )
-            if applied_result.scalar_one_or_none() is None:
+            if applied_result.first() is None:
                 for statement in migration_statements_for_version:
                     await conn.execute(text(statement))
-                await conn.execute(
-                    text("INSERT INTO schema_migrations (version) VALUES (:version)"),
-                    {"version": migration_version},
-                )
+                if conn.dialect.name == "postgresql":
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO schema_migrations (version, applied_at)
+                            VALUES (:version, NOW())
+                            ON CONFLICT (version) DO NOTHING
+                            """
+                        ),
+                        {"version": migration_version},
+                    )
+                else:
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT OR IGNORE INTO schema_migrations (version)
+                            VALUES (:version)
+                            """
+                        ),
+                        {"version": migration_version},
+                    )
                 logger.info("Applied schema migration %s.", migration_version)
 
     migration_statements = [
@@ -547,7 +622,8 @@ async def _run_migrations_unlocked():
     ]
 
     async with async_engine.begin() as conn:
-        for stmt in migration_statements:
-            await conn.execute(text(stmt))
-    logger.info("Schema migrations completed successfully (GitHub OAuth columns, AI analysis fields, and indexes).")
+        if conn.dialect.name == "postgresql":
+            for stmt in migration_statements:
+                await conn.execute(text(stmt))
+            logger.info("Schema migrations completed successfully (GitHub OAuth columns, AI analysis fields, and indexes).")
 
