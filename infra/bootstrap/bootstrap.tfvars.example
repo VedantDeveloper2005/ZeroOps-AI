@@ -1,0 +1,14 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+
+location                      = "centralindia"
+platform_resource_group_name = "zeroops-rg"
+state_resource_group_name    = "zeroops-tfstate-rg"
+state_storage_account_name   = "replacewithstateaccount"
+state_container_name         = "platform-tfstate"
+plan_container_name          = "deployment-plans"
+execution_scope_resource_id = null
+
+github_repository        = "VedantDeveloper2005/ZeroOps-AI"
+github_apply_environment = "azure-test-apply"
+name_suffix              = "2f871a"

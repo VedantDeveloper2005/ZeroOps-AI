@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend import main, schemas
-from worker.queue import (
+from worker.job_queue import (
     PostgresJobQueue,
     postgres_connection_kwargs,
     stale_job_disposition,

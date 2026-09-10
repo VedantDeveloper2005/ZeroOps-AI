@@ -8,6 +8,7 @@ import { StatePanel } from "@/components/ui/StatePanel";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 import {
   api,
   getErrorMessage,
@@ -53,7 +54,7 @@ export default function LogsPage() {
 function LogsWorkspace() {
   const searchParams = useSearchParams();
   const { projects, isLoading: projectsLoading } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [selectedDeploymentId, setSelectedDeploymentId] = useState("");
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [detail, setDetail] = useState<DeploymentDetail | null>(null);
@@ -65,15 +66,6 @@ function LogsWorkspace() {
   const [activeLevels, setActiveLevels] = useState<Set<LevelFilter>>(new Set(filters));
   const [streamState, setStreamState] = useState<StreamState>("idle");
   const shouldStream = detail ? activeStatuses.has(detail.status) : false;
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadDeployments = useCallback(async (projectId: string) => {
     if (!projectId) return;

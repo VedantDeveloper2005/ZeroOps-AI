@@ -60,28 +60,48 @@ class InfrastructureContractTests(unittest.TestCase):
 
     def test_vmss_is_regular_scale_to_zero_and_capped(self) -> None:
         runner = (INFRA_ROOT / "modules" / "runner" / "main.tf").read_text()
-        self.assertIn('priority                     = "Regular"', runner)
-        self.assertIn("instances                    = 0", runner)
+        root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
+        network = (INFRA_ROOT / "modules" / "network" / "main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(runner, re.compile(r'priority\s*=\s*"Regular"'))
+        self.assertRegex(runner, re.compile(r"instances\s*=\s*0"))
         self.assertIn("maximum = tostring(var.max_instances)", runner)
         self.assertRegex(
             runner,
             re.compile(r'metric_name\s*=\s*"ActiveMessageCount"'),
         )
+        self.assertIn("enable_nat_gateway      = var.deploy_runner", root)
+        self.assertGreaterEqual(
+            network.count("count = var.enable_nat_gateway ? 1 : 0"), 4
+        )
 
-    def test_flexible_vmss_trusted_launch_workaround_is_explicitly_preview_gated(
-        self,
-    ) -> None:
+    def test_vmss_uses_initial_trusted_launch_and_managed_os_disk(self) -> None:
         runner = (INFRA_ROOT / "modules" / "runner" / "main.tf").read_text(
             encoding="utf-8"
         )
-        self.assertIn("AzureRM 4.81.0", runner)
-        self.assertIn("post-create upgrade", runner)
-        self.assertIn("existing Flexible VMSS as preview", runner)
-        self.assertIn(
-            'resource "azapi_update_resource" "trusted_launch"', runner
-        )
+        self.assertIn('resource "azurerm_linux_virtual_machine_scale_set" "this"', runner)
+        self.assertIn("secure_boot_enabled", runner)
+        self.assertIn("vtpm_enabled", runner)
+        self.assertIn('storage_account_type = "StandardSSD_LRS"', runner)
+        self.assertNotIn("diff_disk_settings", runner)
+        self.assertNotIn("azapi_update_resource", runner)
 
-    def test_vmss_is_fail_closed_plan_only(self) -> None:
+        cloud_init = (
+            INFRA_ROOT / "modules" / "runner" / "cloud-init.yaml.tftpl"
+        ).read_text(encoding="utf-8")
+        self.assertIn("docker-29.7.1.tgz", cloud_init)
+        self.assertIn(
+            "0fcea2a8b4d1b54ccc9010e3451b78504a369d414f37eb3bb79300e1b5c22ce6",
+            cloud_init,
+        )
+        self.assertIn("/metadata/identity/oauth2/token", cloud_init)
+        self.assertIn("/oauth2/exchange", cloud_init)
+        self.assertNotIn("package_update", cloud_init)
+        self.assertNotIn("apt-get", cloud_init)
+        self.assertNotIn("az acr login", cloud_init)
+
+    def test_vmss_has_queue_scoped_plan_and_apply_authority(self) -> None:
         root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
         rbac = (INFRA_ROOT / "rbac.tf").read_text(encoding="utf-8")
         locals_tf = (INFRA_ROOT / "locals.tf").read_text(encoding="utf-8")
@@ -98,28 +118,25 @@ class InfrastructureContractTests(unittest.TestCase):
             REPOSITORY_ROOT / "worker" / "vmss_main.py"
         ).read_text(encoding="utf-8")
 
-        # Keep the contract queue reserved, but bind no production identity or
-        # runtime/autoscale path to it until atomic approval is implemented.
+        # Apply is enabled only through its sessioned queue and the same
+        # immutable worker. No namespace-wide messaging role is used.
         self.assertIn('terraform_apply      = "terraform-apply"', locals_tf)
-        self.assertNotIn("executor_apply_receiver", rbac)
-        self.assertNotIn("backend_apply_sender", rbac)
-        self.assertNotIn("module.service_bus.queue_ids.terraform_apply", rbac)
-        self.assertNotIn("apply_queue", root)
-        self.assertNotIn("apply_queue", runner)
-        self.assertNotIn("apply_queue", runner_variables)
-        self.assertNotIn("ZEROOPS_APPLY_QUEUE", cloud_init)
-        self.assertNotIn("ZEROOPS_APPLY_QUEUE", worker_entrypoint)
-        self.assertNotIn('operation="apply"', worker_entrypoint)
+        self.assertIn("executor_apply_receiver", rbac)
+        self.assertIn("backend_apply_sender", rbac)
+        self.assertGreaterEqual(rbac.count("count = var.deploy_runner ? 1 : 0"), 2)
+        self.assertIn("module.service_bus.queue_ids.terraform_apply", rbac)
+        self.assertIn("apply_queue", root)
+        self.assertIn("apply_queue", runner)
+        self.assertIn("apply_queue", runner_variables)
+        self.assertIn("ZEROOPS_APPLY_QUEUE", cloud_init)
 
-        # Planning needs read access to the target, never mutation authority.
+        # Mutation authority is opt-in and limited to one dedicated customer
+        # resource group. A root check rejects the platform group itself.
         self.assertIn(
-            "role_definition_id = local.role_definition_ids.reader",
-            rbac,
-        )
-        self.assertNotIn(
             "role_definition_id = local.role_definition_ids.contributor",
             rbac,
         )
+        self.assertIn("execution_scope_is_not_platform_scope", root)
 
     def test_executor_only_state_and_plan_containers_exist(self) -> None:
         storage = (INFRA_ROOT / "modules" / "storage" / "main.tf").read_text()
@@ -152,7 +169,11 @@ class InfrastructureContractTests(unittest.TestCase):
             INFRA_ROOT / "environments" / "production.tfvars.example"
         ).read_text()
         self.assertIn("vmss_max_instances = 1", test_profile)
-        self.assertIn("vmss_max_instances = 10", production_profile)
+        self.assertIn('vmss_sku           = "Standard_B2as_v2"', test_profile)
+        self.assertIn('runner_os_image_version = "22.04.202608060"', test_profile)
+        self.assertIn("deploy_runner       = false", test_profile)
+        self.assertIn("vmss_max_instances = 2", production_profile)
+        self.assertIn('vmss_sku           = "Standard_B2as_v2"', production_profile)
         self.assertIn('service_bus_sku          = "Premium"', production_profile)
         self.assertIn("enable_private_endpoints = true", production_profile)
 
@@ -208,19 +229,17 @@ class InfrastructureContractTests(unittest.TestCase):
             root,
             r"model_key_vault_uri\s*=\s*module\.model_key_vaults\.terraform_vault_uri",
         )
-        self.assertEqual(
-            len(re.findall(r'AI_REPOSITORY_PROVIDER\s*=\s*"nvidia"', root)),
-            1,
-        )
-        self.assertEqual(
-            len(re.findall(r'AI_TERRAFORM_PROVIDER\s*=\s*"nvidia"', root)),
-            1,
-        )
-        self.assertEqual(
-            root.count('https://integrate.api.nvidia.com/v1'),
-            2,
-        )
-        self.assertEqual(root.count('z-ai/glm-5.2'), 2)
+        variables = (INFRA_ROOT / "variables.tf").read_text(encoding="utf-8")
+        self.assertIn("AI_REPOSITORY_PROVIDER                   = var.repository_ai_provider", root)
+        self.assertIn("AI_TERRAFORM_PROVIDER                   = var.terraform_ai_provider", root)
+        self.assertIn("AI_REPOSITORY_ENDPOINT                   = var.repository_ai_endpoint", root)
+        self.assertIn("AI_TERRAFORM_ENDPOINT                   = var.terraform_ai_endpoint", root)
+        self.assertIn("AI_REPOSITORY_MODEL                      = var.repository_ai_model", root)
+        self.assertIn("AI_TERRAFORM_MODEL                      = var.terraform_ai_model", root)
+        self.assertIn('default     = "nvidia"', variables)
+        self.assertIn('"azure-openai"', variables)
+        self.assertIn('default     = "https://integrate.api.nvidia.com/v1"', variables)
+        self.assertIn('default     = "z-ai/glm-5.2"', variables)
         self.assertEqual(
             len(re.findall(r'AI_REPOSITORY_FALLBACK_PROVIDER\s*=\s*"groq"', root)),
             1,

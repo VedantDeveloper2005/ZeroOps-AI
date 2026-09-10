@@ -1,12 +1,13 @@
 # Azure Deployment Plan — ZeroOps AI
 
-> **Status:** Ready for Validation; local implementation and functional verification are complete. Deployment is not authorized.
+> **Status:** In Progress; production workflow and deployment-path remediation is underway. Deployment is not authorized until this plan records a validated, immutable Terraform plan and its explicit approval.
 >
 > **Architecture approval:** User-approved on 2026-07-29.
 >
 > **Authority:** [`infra/`](../infra/) is the deployable infrastructure source of truth. [`infrastructure-plan.json`](./infrastructure-plan.json) is a conceptual decision graph, not deployable IaC.
 
 Generated: 2026-07-31
+Remediation refresh: 2026-08-23
 
 ---
 

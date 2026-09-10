@@ -26,6 +26,7 @@ from backend.contracts.ai import (
 )
 from backend.services.providers import (
     AzureFoundryProvider,
+    AzureOpenAIProvider,
     GitHubModelsProvider,
     GroqProvider,
     NvidiaProvider,
@@ -198,6 +199,12 @@ def build_provider(configuration: ProviderConfiguration) -> StructuredModelProvi
         return GitHubModelsProvider(configuration)
     if provider_name in {"azure-foundry", "microsoft-foundry"}:
         return AzureFoundryProvider(configuration)
+    if provider_name in {
+        "azure-openai",
+        "foundry-openai",
+        "microsoft-foundry-openai",
+    }:
+        return AzureOpenAIProvider(configuration)
     raise ProviderConfigurationError("The selected AI provider is not supported.")
 
 

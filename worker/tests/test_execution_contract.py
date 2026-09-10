@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from worker.contracts import (
@@ -31,6 +31,9 @@ ARTIFACT_ID = "88888888-8888-4888-8888-888888888888"
 OPAQUE_CONTAINER = "t-0123456789abcdef0123456789abcdef01234567"
 PLAN_DIGEST = "a" * 64
 BUNDLE_DIGEST = "b" * 64
+INPUT_DIGEST = "d" * 64
+SCOPE_DIGEST = "e" * 64
+POLICY_DIGEST = "f" * 64
 
 
 def base_plan_payload() -> dict:
@@ -52,13 +55,29 @@ def base_plan_payload() -> dict:
             "sha256": BUNDLE_DIGEST,
             "size_bytes": 1024,
         },
+        "input_variables": {
+            "file_name": "zeroops.auto.tfvars.json",
+            "sha256": INPUT_DIGEST,
+            "definitions": [],
+        },
+        "guardrails": {
+            "target_resource_group": "rg-zeroops-target",
+            "allowed_resource_types": ["azurerm_resource_group"],
+            "maximum_resource_changes": 10,
+            "maximum_delete_count": 0,
+            "maximum_replace_count": 0,
+            "scope_digest": SCOPE_DIGEST,
+            "policy_digest": POLICY_DIGEST,
+            "monthly_budget_microunits": None,
+            "budget_currency": None,
+        },
         "state_key": (
             f"tenants/{TENANT_ID}/workspaces/{WORKFLOW_ID}/terraform.tfstate"
         ),
         "target_subscription_id": "55555555-5555-4555-8555-555555555555",
         "target_tenant_id": "66666666-6666-4666-8666-666666666666",
         "terraform_version": "1.15.8",
-        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "requested_at": "2026-08-23T00:00:00+00:00",
     }
 
 
@@ -131,16 +150,34 @@ class ExecutionContractTests(unittest.TestCase):
             "sha256": PLAN_DIGEST,
             "plan_job_digest": "c" * 64,
             "bundle_sha256": BUNDLE_DIGEST,
+            "input_variables_sha256": INPUT_DIGEST,
+            "scope_digest": SCOPE_DIGEST,
+            "policy_digest": POLICY_DIGEST,
+        }
+        now = datetime.now(timezone.utc)
+        payload["cost_estimate"] = {
+            "artifact_sha256": "9" * 64,
+            "currency": "USD",
+            "monthly_cost_microunits": 1_000_000,
+            "captured_at": (now - timedelta(minutes=1)).isoformat(),
         }
         payload["approval"] = {
             "approval_id": str(uuid.uuid4()),
             "decision": "approved",
             "approved_by": USER_ID,
-            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "approved_at": now.isoformat(),
             "plan_job_digest": "c" * 64,
             "plan_sha256": PLAN_DIGEST,
             "plan_etag": '"plan-etag"',
             "bundle_sha256": BUNDLE_DIGEST,
+            "apply_job_id": JOB_ID,
+            "expires_at": (now + timedelta(hours=1)).isoformat(),
+            "input_variables_sha256": INPUT_DIGEST,
+            "scope_digest": SCOPE_DIGEST,
+            "policy_digest": POLICY_DIGEST,
+            "cost_estimate_sha256": "9" * 64,
+            "currency": "USD",
+            "monthly_cost_microunits": 1_000_000,
         }
         envelope = ExecutionEnvelope.from_mapping(payload_with_digest(payload))
         with tempfile.TemporaryDirectory() as directory:

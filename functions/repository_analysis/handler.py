@@ -84,8 +84,13 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
     )
     instructions = prompt_path.read_text(encoding="utf-8")
     provider = os.getenv("AI_REPOSITORY_PROVIDER", "nvidia")
-    if provider.strip().lower().replace("_", "-") != "nvidia":
-        raise ValueError("Repository primary provider must be NVIDIA")
+    if provider.strip().lower().replace("_", "-") not in {
+        "nvidia",
+        "azure-openai",
+        "foundry-openai",
+        "microsoft-foundry-openai",
+    }:
+        raise ValueError("Repository primary provider must be NVIDIA or Microsoft Foundry OpenAI")
     api_key = os.getenv("AI_REPOSITORY_API_KEY", "")
     model_client: StructuredModelClient | None
     try:

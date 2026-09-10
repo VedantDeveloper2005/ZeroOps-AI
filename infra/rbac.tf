@@ -82,6 +82,15 @@ resource "azurerm_role_assignment" "executor_plan_receiver" {
   principal_type     = "ServicePrincipal"
 }
 
+resource "azurerm_role_assignment" "executor_apply_receiver" {
+  count = var.deploy_runner ? 1 : 0
+
+  scope              = module.service_bus.queue_ids.terraform_apply
+  role_definition_id = local.role_definition_ids.service_bus_receiver
+  principal_id       = azurerm_user_assigned_identity.executor.principal_id
+  principal_type     = "ServicePrincipal"
+}
+
 resource "azurerm_role_assignment" "executor_event_sender" {
   scope              = module.service_bus.queue_ids.workflow_events
   role_definition_id = local.role_definition_ids.service_bus_sender
@@ -114,8 +123,39 @@ resource "azurerm_role_assignment" "executor_customer_scope" {
   count = var.execution_scope_resource_id == null ? 0 : 1
 
   scope              = var.execution_scope_resource_id
-  role_definition_id = local.role_definition_ids.reader
+  role_definition_id = local.role_definition_ids.contributor
   principal_id       = azurerm_user_assigned_identity.executor.principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "backend_apply_sender" {
+  count = var.deploy_runner ? 1 : 0
+
+  scope              = module.service_bus.queue_ids.terraform_apply
+  role_definition_id = local.role_definition_ids.service_bus_sender
+  principal_id       = data.azurerm_user_assigned_identity.backend.principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "deployment_acr_push" {
+  count = var.deployment_identity_principal_id == null ? 0 : 1
+
+  scope              = module.runner.registry_id
+  role_definition_id = local.role_definition_ids.acr_push
+  principal_id       = var.deployment_identity_principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "deployment_function_packages" {
+  for_each = var.deployment_identity_principal_id == null ? {} : {
+    analysis             = module.storage.analysis_deployment_container_id
+    terraform_generation = module.storage.tfgen_deployment_container_id
+    history_projection   = module.storage.history_deployment_container_id
+  }
+
+  scope              = each.value
+  role_definition_id = local.role_definition_ids.blob_contributor
+  principal_id       = var.deployment_identity_principal_id
   principal_type     = "ServicePrincipal"
 }
 

@@ -1,9 +1,4 @@
-"""Scale-to-zero Service Bus worker for Terraform plan jobs.
-
-Terraform apply support remains implemented behind the execution contract, but
-the production entry point is intentionally plan-only until the control-plane
-approval and single-use consumption flow is complete.
-"""
+"""Scale-to-zero Service Bus worker for immutable Terraform plan/apply jobs."""
 
 from __future__ import annotations
 
@@ -22,7 +17,7 @@ from azure.servicebus import (
     ServiceBusClient,
     ServiceBusReceiveMode,
 )
-from azure.servicebus.exceptions import ServiceBusError
+from azure.servicebus.exceptions import OperationTimeoutError, ServiceBusError
 
 from worker.azure_adapters import (
     AzureBlobArtifactStore,
@@ -37,6 +32,10 @@ from worker.terraform_executor import TerraformExecutionError, TerraformExecutor
 
 
 keep_running = True
+
+
+class RunnerReconciliationRequired(RuntimeError):
+    """Stop accepting jobs after a provider operation needs manual recovery."""
 
 
 def _stop(_signum, _frame) -> None:
@@ -56,6 +55,7 @@ class RunnerConfig:
     client_id: str
     service_bus_namespace: str
     plan_queue: str
+    apply_queue: str
     event_queue: str
     artifact_account: str
     executor_account: str
@@ -72,6 +72,7 @@ class RunnerConfig:
                 "ZEROOPS_SERVICE_BUS_NAMESPACE"
             ),
             plan_queue=_required_environment("ZEROOPS_PLAN_QUEUE"),
+            apply_queue=_required_environment("ZEROOPS_APPLY_QUEUE"),
             event_queue=_required_environment("ZEROOPS_EVENT_QUEUE"),
             artifact_account=_required_environment("ZEROOPS_ARTIFACT_ACCOUNT"),
             executor_account=_required_environment("ZEROOPS_EXECUTOR_ACCOUNT"),
@@ -126,6 +127,8 @@ def _process_message(
         protection.protect()
         protected = True
         with lease_factory.for_envelope(envelope) as lease:
+            if envelope.operation == "apply":
+                store.claim_approval(envelope)
             with tempfile.TemporaryDirectory(
                 prefix=f"zeroops-{envelope.job_id}-",
                 dir="/work",
@@ -173,18 +176,17 @@ def _process_message(
     except Exception:
         receiver.abandon_message(message)
     finally:
-        release_failed = False
         if protected:
             try:
                 protection.release()
             except Exception:
-                release_failed = True
+                detail = "Scale-in protection release failed; operator reconciliation required."
                 health.mark_error(
-                    "Scale-in protection release failed; operator reconciliation required.",
+                    detail,
                     active_job=envelope.job_id if envelope else None,
                 )
-        if not release_failed:
-            health.mark_ready()
+                raise RunnerReconciliationRequired(detail) from None
+        health.mark_ready()
 
 
 def _poll_queue(
@@ -215,7 +217,9 @@ def _poll_queue(
                 **handler_kwargs,
             )
             return True
-    except ServiceBusError:
+    except OperationTimeoutError:
+        # NEXT_AVAILABLE_SESSION times out when there is no available session.
+        # Authentication and connection failures must reach the health handler.
         return False
 
 
@@ -264,16 +268,29 @@ def main() -> int:
 
     try:
         while keep_running:
-            handled = _poll_queue(
-                client=service_bus,
-                queue_name=config.plan_queue,
-                operation="plan",
-                handler_kwargs=handler_kwargs,
-            )
+            try:
+                handled_apply = _poll_queue(
+                    client=service_bus,
+                    queue_name=config.apply_queue,
+                    operation="apply",
+                    handler_kwargs=handler_kwargs,
+                )
+                handled_plan = _poll_queue(
+                    client=service_bus,
+                    queue_name=config.plan_queue,
+                    operation="plan",
+                    handler_kwargs=handler_kwargs,
+                )
+            except ServiceBusError:
+                health.mark_error("Service Bus polling failed; retrying the queue connection.")
+                time.sleep(config.poll_seconds)
+                continue
             health.mark_ready()
-            if not handled:
+            if not handled_apply and not handled_plan:
                 time.sleep(config.poll_seconds)
         return 0
+    except RunnerReconciliationRequired:
+        return 1
     finally:
         service_bus.close()
         credential.close()

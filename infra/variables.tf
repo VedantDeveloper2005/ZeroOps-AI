@@ -180,10 +180,56 @@ variable "function_instance_memory_mb" {
   }
 }
 
+variable "repository_ai_provider" {
+  description = "Primary provider for repository analysis. NVIDIA remains the default; azure-openai targets a Microsoft Foundry deployment."
+  type        = string
+  default     = "nvidia"
+
+  validation {
+    condition     = contains(["nvidia", "azure-openai"], var.repository_ai_provider)
+    error_message = "repository_ai_provider must be nvidia or azure-openai."
+  }
+}
+
+variable "repository_ai_endpoint" {
+  description = "Non-secret endpoint for repository analysis. Azure OpenAI must use https://<resource>.openai.azure.com/openai/v1."
+  type        = string
+  default     = "https://integrate.api.nvidia.com/v1"
+}
+
+variable "repository_ai_model" {
+  description = "NVIDIA catalog model ID or Microsoft Foundry Azure OpenAI deployment name for repository analysis."
+  type        = string
+  default     = "z-ai/glm-5.2"
+}
+
+variable "terraform_ai_provider" {
+  description = "Primary provider for Terraform generation. NVIDIA remains the default; azure-openai targets a Microsoft Foundry deployment."
+  type        = string
+  default     = "nvidia"
+
+  validation {
+    condition     = contains(["nvidia", "azure-openai"], var.terraform_ai_provider)
+    error_message = "terraform_ai_provider must be nvidia or azure-openai."
+  }
+}
+
+variable "terraform_ai_endpoint" {
+  description = "Non-secret endpoint for Terraform generation. Azure OpenAI must use https://<resource>.openai.azure.com/openai/v1."
+  type        = string
+  default     = "https://integrate.api.nvidia.com/v1"
+}
+
+variable "terraform_ai_model" {
+  description = "NVIDIA catalog model ID or Microsoft Foundry Azure OpenAI deployment name for Terraform generation."
+  type        = string
+  default     = "z-ai/glm-5.2"
+}
+
 variable "vmss_sku" {
   description = "Regular (non-Spot) worker VM size."
   type        = string
-  default     = "Standard_D2ads_v5"
+  default     = "Standard_B2as_v2"
 }
 
 variable "vmss_zones" {
@@ -199,6 +245,23 @@ variable "vmss_max_instances" {
   validation {
     condition     = var.vmss_max_instances >= 1 && var.vmss_max_instances <= 10
     error_message = "vmss_max_instances must be between 1 and 10."
+  }
+}
+
+variable "deploy_runner" {
+  description = "Create the VMSS only after a runner image has been pushed and pinned by digest. The registry is created even when this is false."
+  type        = bool
+  default     = false
+}
+
+variable "runner_os_image_version" {
+  description = "Exact Canonical Ubuntu 22.04 Gen2 image version for the runner. Mutable labels such as latest are rejected."
+  type        = string
+  default     = "22.04.202608060"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.runner_os_image_version))
+    error_message = "runner_os_image_version must be an exact numeric image version, never latest."
   }
 }
 
@@ -221,11 +284,30 @@ variable "runner_admin_ssh_public_key" {
 variable "runner_image_reference" {
   description = "Immutable ACR image reference including @sha256:digest."
   type        = string
-  nullable    = false
+  default     = null
+  nullable    = true
 
   validation {
-    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.runner_image_reference))
-    error_message = "runner_image_reference must be pinned to an immutable sha256 digest."
+    condition = (
+      (!var.deploy_runner && var.runner_image_reference == null) ||
+      (var.deploy_runner && var.runner_image_reference != null && can(regex("@sha256:[0-9a-f]{64}$", var.runner_image_reference)))
+    )
+    error_message = "runner_image_reference must be null during foundation deployment and a real immutable sha256 reference when deploy_runner is true."
+  }
+}
+
+variable "deployment_identity_principal_id" {
+  description = "Object ID of the dedicated federated apply identity. Used only for release publishing access; never use the validation VM identity."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.deployment_identity_principal_id == null ||
+      can(regex("^[0-9a-fA-F-]{36}$", var.deployment_identity_principal_id))
+    )
+    error_message = "deployment_identity_principal_id must be a managed-identity object ID or null."
   }
 }
 

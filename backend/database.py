@@ -177,6 +177,38 @@ async def init_db():
 
 
 async def run_migrations():
+    """Serialize every startup migration block behind one session-level lock."""
+
+    if not database_available or async_engine is None:
+        return
+
+    from sqlalchemy import text
+
+    lock_connection = await async_engine.connect()
+    lock_acquired = False
+    try:
+        await lock_connection.execute(
+            text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
+            {"lock_key": "zeroops-schema-migrations"},
+        )
+        await lock_connection.commit()
+        lock_acquired = True
+        await _run_migrations_unlocked()
+    finally:
+        if lock_acquired:
+            try:
+                await lock_connection.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:lock_key))"),
+                    {"lock_key": "zeroops-schema-migrations"},
+                )
+                await lock_connection.commit()
+            except Exception:
+                # Closing the connection also releases PostgreSQL session locks.
+                logger.exception("Unable to explicitly release the schema migration lock.")
+        await lock_connection.close()
+
+
+async def _run_migrations_unlocked():
     """Run idempotent schema migrations using ALTER TABLE ADD COLUMN IF NOT EXISTS.
     Safe to run on every startup — only adds columns that don't already exist.
     This handles the case where create_all created the initial table but new columns
@@ -223,6 +255,18 @@ async def run_migrations():
             STATEMENTS as MIGRATION_009_STATEMENTS,
             VERSION as MIGRATION_009_VERSION,
         )
+        from backend.migrations.v010_terraform_control_plane import (
+            STATEMENTS as MIGRATION_010_STATEMENTS,
+            VERSION as MIGRATION_010_VERSION,
+        )
+        from backend.migrations.v011_auth_ai_hardening import (
+            STATEMENTS as MIGRATION_011_STATEMENTS,
+            VERSION as MIGRATION_011_VERSION,
+        )
+        from backend.migrations.v012_deployment_terraform_binding import (
+            STATEMENTS as MIGRATION_012_STATEMENTS,
+            VERSION as MIGRATION_012_VERSION,
+        )
     except ImportError:
         from migrations.v001_tenant_history import (
             STATEMENTS as MIGRATION_001_STATEMENTS,
@@ -260,6 +304,18 @@ async def run_migrations():
             STATEMENTS as MIGRATION_009_STATEMENTS,
             VERSION as MIGRATION_009_VERSION,
         )
+        from migrations.v010_terraform_control_plane import (
+            STATEMENTS as MIGRATION_010_STATEMENTS,
+            VERSION as MIGRATION_010_VERSION,
+        )
+        from migrations.v011_auth_ai_hardening import (
+            STATEMENTS as MIGRATION_011_STATEMENTS,
+            VERSION as MIGRATION_011_VERSION,
+        )
+        from migrations.v012_deployment_terraform_binding import (
+            STATEMENTS as MIGRATION_012_STATEMENTS,
+            VERSION as MIGRATION_012_VERSION,
+        )
 
     async with async_engine.begin() as conn:
         await conn.execute(
@@ -282,6 +338,9 @@ async def run_migrations():
             (MIGRATION_007_VERSION, MIGRATION_007_STATEMENTS),
             (MIGRATION_008_VERSION, MIGRATION_008_STATEMENTS),
             (MIGRATION_009_VERSION, MIGRATION_009_STATEMENTS),
+            (MIGRATION_010_VERSION, MIGRATION_010_STATEMENTS),
+            (MIGRATION_011_VERSION, MIGRATION_011_STATEMENTS),
+            (MIGRATION_012_VERSION, MIGRATION_012_STATEMENTS),
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(

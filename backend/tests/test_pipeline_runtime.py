@@ -65,6 +65,44 @@ def test_pipeline_approval_is_hmac_bound_to_new_run_and_source():
     ).valid
 
 
+def test_pipeline_rejects_reverified_azure_target_not_covered_by_apply_proof():
+    connection = SimpleNamespace(
+        tenant_id="entra-tenant",
+        subscription_id="azure-subscription",
+        client_id="service-principal-client",
+        connection_status="connected",
+        region="eastus",
+        resource_group="terraform-applied-target",
+        acr_login_server="zeroopstest.azurecr.io",
+        app_service_plan="zeroops-linux-plan",
+        deployment_target_verified_at=datetime.now(timezone.utc),
+        deployment_target_fingerprint=None,
+        is_active=True,
+    )
+    applied_target_fingerprint = (
+        pipeline.deployment_targets.configuration_fingerprint(connection)
+    )
+    connection.resource_group = "different-reverified-target"
+    connection.deployment_target_fingerprint = (
+        pipeline.deployment_targets.configuration_fingerprint(connection)
+    )
+
+    with pytest.raises(pipeline.PipelineExecutionError) as failure:
+        pipeline._require_terraform_apply_target_binding(
+            {
+                "terraform_apply": {
+                    "schema_version": "terraform-apply-proof.v1",
+                    "target_fingerprint": applied_target_fingerprint,
+                }
+            },
+            connection,
+        )
+
+    assert failure.value.failure_code == "TERRAFORM_APPLY_TARGET_DRIFT"
+    assert failure.value.status == "blocked"
+    assert failure.value.stage_key == "source"
+
+
 @pytest.mark.asyncio
 async def test_runtime_approval_requires_prior_blocked_gate_and_matching_plan():
     now = datetime.now(timezone.utc)

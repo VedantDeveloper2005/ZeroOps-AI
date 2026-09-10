@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -317,6 +318,52 @@ class PipelineExecutionError(RuntimeError):
         self.status = status if status in {"failed", "blocked", "unavailable"} else "failed"
         self.stage_key = stage_key
         super().__init__(self.safe_message)
+
+
+def _require_terraform_apply_target_binding(
+    deployment_metadata: Mapping[str, Any] | Any,
+    azure_connection: Any | None,
+) -> str:
+    """Rebind release execution to the exact Azure target covered by apply proof."""
+
+    apply_proof = (
+        deployment_metadata.get("terraform_apply")
+        if isinstance(deployment_metadata, Mapping)
+        else None
+    )
+    if (
+        not isinstance(apply_proof, Mapping)
+        or apply_proof.get("schema_version") != "terraform-apply-proof.v1"
+    ):
+        raise PipelineExecutionError(
+            "The deployment has no valid completed Terraform apply proof.",
+            failure_code="TERRAFORM_APPLY_PROOF_MISSING",
+            status="blocked",
+            stage_key="source",
+        )
+
+    proof_fingerprint = str(apply_proof.get("target_fingerprint") or "").strip().lower()
+    stored_fingerprint = str(
+        getattr(azure_connection, "deployment_target_fingerprint", None) or ""
+    ).strip().lower()
+    current_fingerprint = (
+        deployment_targets.configuration_fingerprint(azure_connection)
+        if azure_connection is not None
+        else ""
+    )
+    if (
+        len(proof_fingerprint) != 64
+        or not deployment_targets.has_verified_app_service_target(azure_connection)
+        or not hmac.compare_digest(proof_fingerprint, stored_fingerprint)
+        or not hmac.compare_digest(proof_fingerprint, current_fingerprint)
+    ):
+        raise PipelineExecutionError(
+            "The verified Azure deployment target changed after Terraform apply; create and approve a new exact plan.",
+            failure_code="TERRAFORM_APPLY_TARGET_DRIFT",
+            status="blocked",
+            stage_key="source",
+        )
+    return proof_fingerprint
 
 
 def _duration_label(started_at: datetime | None, completed_at: datetime | None) -> str:
@@ -758,6 +805,23 @@ async def _run_security_stage(
         await p_logger.log(
             f"{result.tool} completed with policy result {result.status}.",
             "warning" if result.status == "warning" else "success",
+        )
+        return result
+
+    if result.status == "unavailable" and config.ZEROOPS_DEMO_EXECUTOR and not config.IS_PRODUCTION:
+        await runtime.transition(
+            stage_key,
+            "unavailable",
+            reason=result.summary,
+            failure_code="SCANNER_UNAVAILABLE",
+            redacted_error=result.summary,
+            evidence=evidence,
+            result_metadata=metadata,
+            tool_version=result.tool_version,
+        )
+        await p_logger.log(
+            f"{result.tool} is unavailable ({result.summary}); continuing demo pipeline.",
+            "warning",
         )
         return result
 
@@ -1444,6 +1508,13 @@ async def run_deployment_pipeline(
             repository_facts = await asyncio.to_thread(repository_checks.inspect_repository, repo_path)
             local_metadata = await asyncio.to_thread(ai.analyze_repo_local, repo_path, normalize_project_id(repo_name))
 
+            if repository_executor is None and config.ZEROOPS_DEMO_EXECUTOR and not config.IS_PRODUCTION:
+                try:
+                    from backend.services.demo_executor import DemoRepositoryCheckExecutor
+                except ImportError:
+                    from services.demo_executor import DemoRepositoryCheckExecutor
+                repository_executor = DemoRepositoryCheckExecutor(repo_path)
+
             azure_result = await db.execute(
                 select(models.UserAzureConnection)
                 .where(
@@ -1458,22 +1529,33 @@ async def run_deployment_pipeline(
             deployment_metadata = deployment.infrastructure_metadata or {}
             if not isinstance(deployment_metadata, Mapping):
                 deployment_metadata = {}
-            requested_provider = (
-                deployment_metadata.get("requested_target")
-                if isinstance(deployment_metadata, Mapping)
-                else None
-            ) or pipeline_run.target_type or deployment_metadata.get("target_provider", "auto")
-            if requested_provider == "undecided":
-                requested_provider = "auto"
+            # Application-only deployments to an already-verified Azure App
+            # Service do not require Terraform apply proof.  The proof is only
+            # needed when real infrastructure provisioning is involved.
+            _is_app_service_reused = deployment_targets.is_app_service_reused_deployment(
+                target=(
+                    deployment_metadata.get("requested_target")
+                    or deployment_metadata.get("target_provider")
+                ),
+                connection=azure_connection,
+                infrastructure_change=bool(deployment_metadata.get("terraform_apply_required")),
+                has_iac=bool(deployment_metadata.get("terraform_apply")),
+            )
+            if not _is_app_service_reused:
+                _require_terraform_apply_target_binding(
+                    deployment_metadata,
+                    azure_connection,
+                )
             selected_target = deployment_targets.choose_target(
                 local_metadata,
                 azure_connection,
-                requested_provider,
+                "azure-app-service",
             )
             pipeline_run.target_type = selected_target.provider
             namespace_prefix = deployment_targets.namespace_prefix(selected_target, deployment.user_id)
-            application_name = normalize_project_id(
-                f"{namespace_prefix}-{project.name}-{str(project.id)[:8]}"
+            application_name = deployment_targets.app_service_application_name(
+                project.name,
+                project.id,
             )
             tagged_image = deployment_targets.image_ref_for_target(
                 selected_target,

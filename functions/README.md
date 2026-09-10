@@ -160,7 +160,9 @@ primary route and Groq receives no repair request. Input-budget failures and
 deterministic policy violations never trigger fallback. After both routes fail,
 repository analysis returns its evidence-only result while Terraform generation
 fails closed. A successful fallback still passes Pydantic, semantic, Terraform,
-policy, VMSS plan, and human-approval gates; it never performs `terraform apply`.
+policy, VMSS plan, and human-approval gates. The generation Function never
+performs `terraform apply`; a later VMSS apply job can do so only for the exact
+saved plan after the durable approval, cost, scope, and policy bindings pass.
 
 The VMSS never receives any model setting or model Key Vault permission.
 

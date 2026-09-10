@@ -53,12 +53,15 @@ resource "azurerm_private_endpoint" "registry" {
 locals {
   vmss_resource_id = "${data.azurerm_resource_group.this.id}/providers/Microsoft.Compute/virtualMachineScaleSets/${var.name}"
   queue_metric_ids = {
-    plan = var.plan_queue_id
+    plan  = var.plan_queue_id
+    apply = var.apply_queue_id
   }
-  custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
+  custom_data = var.enable_vmss ? base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
     identity_client_id            = var.identity_client_id
+    tenant_id                     = var.tenant_id
     service_bus_namespace         = var.service_bus_namespace
     plan_queue_name               = var.plan_queue_name
+    apply_queue_name              = var.apply_queue_name
     event_queue_name              = var.event_queue_name
     artifact_storage_account_name = var.artifact_storage_account_name
     executor_storage_account_name = var.executor_storage_account_name
@@ -69,56 +72,49 @@ locals {
     vmss_name                     = var.name
     registry_name                 = var.registry_name
     runner_image_reference        = var.runner_image_reference
-  }))
+  })) : null
 }
 
-resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
-  name                         = var.name
-  location                     = var.location
-  resource_group_name          = var.resource_group_name
-  platform_fault_domain_count  = 1
-  zones                        = var.zones
-  zone_balance                 = true
-  sku_name                     = var.sku
-  instances                    = 0
-  priority                     = "Regular"
-  upgrade_mode                 = "Manual"
-  extension_operations_enabled = true
-  extensions_time_budget       = "PT30M"
-  tags                         = var.tags
+resource "azurerm_linux_virtual_machine_scale_set" "this" {
+  count = var.enable_vmss ? 1 : 0
+
+  name                            = var.name
+  location                        = var.location
+  resource_group_name             = var.resource_group_name
+  zones                           = var.zones
+  zone_balance                    = true
+  sku                             = var.sku
+  instances                       = 0
+  priority                        = "Regular"
+  upgrade_mode                    = "Manual"
+  extension_operations_enabled    = true
+  extensions_time_budget          = "PT30M"
+  admin_username                  = var.admin_username
+  disable_password_authentication = true
+  secure_boot_enabled             = true
+  vtpm_enabled                    = true
+  overprovision                   = false
+  single_placement_group          = false
+  custom_data                     = local.custom_data
+  tags                            = var.tags
 
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
     sku       = "22_04-lts-gen2"
-    version   = "latest"
+    version   = var.os_image_version
   }
 
-  os_profile {
-    custom_data = local.custom_data
-
-    linux_configuration {
-      admin_username                  = var.admin_username
-      disable_password_authentication = true
-      patch_assessment_mode           = "AutomaticByPlatform"
-      patch_mode                      = "ImageDefault"
-      provision_vm_agent              = true
-
-      admin_ssh_key {
-        username   = var.admin_username
-        public_key = var.admin_ssh_public_key
-      }
-    }
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.admin_ssh_public_key
   }
+
+  provision_vm_agent = true
 
   os_disk {
-    caching              = "ReadOnly"
+    caching              = "ReadWrite"
     storage_account_type = "StandardSSD_LRS"
-
-    diff_disk_settings {
-      option    = "Local"
-      placement = "ResourceDisk"
-    }
   }
 
   network_interface {
@@ -140,11 +136,11 @@ resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
   }
 
   extension {
-    name                               = "AzureMonitorLinuxAgent"
-    publisher                          = "Microsoft.Azure.Monitor"
-    type                               = "AzureMonitorLinuxAgent"
-    type_handler_version               = "1.33"
-    auto_upgrade_minor_version_enabled = true
+    name                       = "AzureMonitorLinuxAgent"
+    publisher                  = "Microsoft.Azure.Monitor"
+    type                       = "AzureMonitorLinuxAgent"
+    type_handler_version       = "1.33"
+    auto_upgrade_minor_version = true
     settings = jsonencode({
       authentication = {
         managedIdentity = {
@@ -164,7 +160,7 @@ resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
 
   lifecycle {
     precondition {
-      condition     = startswith(var.runner_image_reference, "${var.registry_name}.azurecr.io/") && can(regex("@sha256:[0-9a-f]{64}$", var.runner_image_reference))
+      condition     = var.runner_image_reference != null && startswith(var.runner_image_reference, "${var.registry_name}.azurecr.io/") && can(regex("@sha256:[0-9a-f]{64}$", var.runner_image_reference))
       error_message = "runner_image_reference must use this module's ACR and an immutable sha256 digest."
     }
   }
@@ -172,36 +168,13 @@ resource "azurerm_orchestrated_virtual_machine_scale_set" "this" {
   depends_on = [azurerm_role_assignment.executor_acr_pull_by_identity]
 }
 
-# AzureRM 4.81.0's azurerm_orchestrated_virtual_machine_scale_set schema exposes
-# no initial security profile, security type, Secure Boot, or vTPM fields. This
-# AzAPI update is therefore a post-create upgrade. Azure currently classifies
-# enabling Trusted Launch on an existing Flexible VMSS as preview, so live
-# deployment remains blocked until that preview is explicitly authorized and
-# verified, or the pinned provider supports an initial security profile.
-resource "azapi_update_resource" "trusted_launch" {
-  type        = "Microsoft.Compute/virtualMachineScaleSets@2024-11-01"
-  resource_id = azurerm_orchestrated_virtual_machine_scale_set.this.id
-
-  body = {
-    properties = {
-      virtualMachineProfile = {
-        securityProfile = {
-          securityType = "TrustedLaunch"
-          uefiSettings = {
-            secureBootEnabled = true
-            vTpmEnabled       = true
-          }
-        }
-      }
-    }
-  }
-}
-
 resource "azurerm_monitor_autoscale_setting" "this" {
+  count = var.enable_vmss ? 1 : 0
+
   name                = "${var.name}-queue-autoscale"
   resource_group_name = var.resource_group_name
   location            = var.location
-  target_resource_id  = azurerm_orchestrated_virtual_machine_scale_set.this.id
+  target_resource_id  = azurerm_linux_virtual_machine_scale_set.this[0].id
   enabled             = true
   tags                = var.tags
 
@@ -297,13 +270,17 @@ resource "azurerm_monitor_data_collection_rule" "runner" {
 }
 
 resource "azurerm_monitor_data_collection_rule_association" "runner" {
+  count = var.enable_vmss ? 1 : 0
+
   name                    = "${var.name}-dcr-association"
-  target_resource_id      = azurerm_orchestrated_virtual_machine_scale_set.this.id
+  target_resource_id      = azurerm_linux_virtual_machine_scale_set.this[0].id
   data_collection_rule_id = azurerm_monitor_data_collection_rule.runner.id
 }
 
 resource "azurerm_role_assignment" "executor_vmss_control" {
-  scope                = azurerm_orchestrated_virtual_machine_scale_set.this.id
+  count = var.enable_vmss ? 1 : 0
+
+  scope                = azurerm_linux_virtual_machine_scale_set.this[0].id
   role_definition_name = "Virtual Machine Contributor"
   principal_id         = data.azurerm_user_assigned_identity.executor.principal_id
   principal_type       = "ServicePrincipal"

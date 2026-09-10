@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
-    BigInteger, Column, String, DateTime, Text, Integer, Float, Boolean,
+    BigInteger, Column, String, Date, DateTime, Text, Integer, Float, Boolean,
     CheckConstraint, ForeignKey, JSON, Enum as SAEnum, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -184,6 +184,12 @@ class User(Base):
     email_verified = Column(Boolean, nullable=False, default=False)
     email_verification_token = Column(Text, nullable=True)  # SHA-256 hashed
     email_verification_expires_at = Column(DateTime, nullable=True)
+    email_verification_attempts = Column(Integer, nullable=False, default=0)
+
+    # A database-backed daily reservation prevents horizontal scaling or IP
+    # rotation from bypassing the bounded chat-provider allowance.
+    ai_chat_usage_date = Column(Date, nullable=True)
+    ai_chat_request_count = Column(Integer, nullable=False, default=0)
 
     # Phone verification is stored separately from MFA. Phone numbers are
     # normalized to E.164 before persistence and OTPs are bcrypt-hashed.
@@ -426,6 +432,156 @@ class Artifact(Base):
     )
 
 
+class TerraformPlanResult(Base):
+    """Restricted control-plane handle for one completed Terraform plan.
+
+    The history projector writes this row from a strictly validated worker
+    control record.  It is intentionally separate from the user-visible event
+    payload because the saved-plan locator is executor control data.
+    """
+
+    __tablename__ = "terraform_plan_results"
+
+    operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    plan_job_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    plan_job_digest = Column(String(64), nullable=False, unique=True)
+    revision = Column(Integer, nullable=False)
+    bundle = Column(POSTGRES_JSON, nullable=False)
+    input_variables = Column(POSTGRES_JSON, nullable=False)
+    guardrails = Column(POSTGRES_JSON, nullable=False)
+    saved_plan = Column(POSTGRES_JSON, nullable=False)
+    plan_summary = Column(POSTGRES_JSON, nullable=False, default=dict)
+    cost_estimate = Column(POSTGRES_JSON, nullable=True)
+    planned_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    operation_run = relationship("OperationRun")
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+
+    __table_args__ = (
+        Index("ix_terraform_plan_results_tenant", "tenant_id"),
+        Index("ix_terraform_plan_results_project", "project_id"),
+        CheckConstraint("revision >= 1", name="ck_terraform_plan_results_revision"),
+        CheckConstraint(
+            "plan_job_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_terraform_plan_results_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class TerraformApplyApproval(Base):
+    """Immutable, single-use authorization for an exact saved-plan apply."""
+
+    __tablename__ = "terraform_apply_approvals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("terraform_plan_results.operation_run_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    apply_job_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    status = Column(String(16), nullable=False, default="consumed")
+    plan_job_digest = Column(String(64), nullable=False)
+    plan_sha256 = Column(String(64), nullable=False)
+    plan_etag = Column(Text, nullable=False)
+    bundle_sha256 = Column(String(64), nullable=False)
+    input_variables_sha256 = Column(String(64), nullable=False)
+    scope_digest = Column(String(64), nullable=False)
+    policy_digest = Column(String(64), nullable=False)
+    cost_estimate_sha256 = Column(String(64), nullable=False)
+    currency = Column(String(3), nullable=False)
+    monthly_cost_microunits = Column(BigInteger, nullable=False)
+    approved_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    project = relationship("Project")
+    operation_run = relationship("TerraformPlanResult")
+    approved_by_user = relationship("User")
+
+    __table_args__ = (
+        Index("ix_terraform_apply_approvals_tenant", "tenant_id"),
+        Index("ix_terraform_apply_approvals_project", "project_id"),
+        CheckConstraint("status = 'consumed'", name="ck_terraform_apply_approvals_single_use"),
+        CheckConstraint("monthly_cost_microunits >= 0", name="ck_terraform_apply_approvals_cost"),
+        CheckConstraint(
+            "plan_job_digest ~ '^[0-9a-f]{64}$' AND "
+            "plan_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "bundle_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "input_variables_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "scope_digest ~ '^[0-9a-f]{64}$' AND "
+            "policy_digest ~ '^[0-9a-f]{64}$' AND "
+            "cost_estimate_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_terraform_apply_approvals_digests",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
+class WorkflowOutboxMessage(Base):
+    """Transactional Service Bus outbox with duplicate-safe message identity."""
+
+    __tablename__ = "workflow_outbox_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    operation_run_id = Column(UUID(as_uuid=True), ForeignKey("operation_runs.id", ondelete="CASCADE"), nullable=False)
+    queue_name = Column(String(64), nullable=False)
+    message_id = Column(String(128), nullable=False, unique=True)
+    correlation_id = Column(String(128), nullable=False)
+    session_id = Column(String(128), nullable=True)
+    payload = Column(POSTGRES_JSON, nullable=False)
+    payload_digest = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_code = Column(String(96), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    tenant = relationship("Tenant")
+    operation_run = relationship("OperationRun")
+
+    __table_args__ = (
+        Index("ix_workflow_outbox_dispatch", "status", "next_attempt_at"),
+        Index("ix_workflow_outbox_operation_run", "operation_run_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "operation_run_id",
+            "queue_name",
+            name="uq_workflow_outbox_run_queue",
+        ),
+        CheckConstraint(
+            "queue_name IN ('repo-analysis', 'terraform-generation', 'terraform-apply')",
+            name="ck_workflow_outbox_queue",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'sent')",
+            name="ck_workflow_outbox_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_workflow_outbox_attempts"),
+        CheckConstraint(
+            "payload_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_workflow_outbox_digest",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -611,6 +767,11 @@ class Deployment(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    terraform_operation_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status = Column(Text, default=DeploymentStatus.queued.value)
     environment = Column(Text, default=DeploymentEnv.production.value)
     branch = Column(Text, default="main")
@@ -631,10 +792,12 @@ class Deployment(Base):
     logs = relationship("DeploymentLog", back_populates="deployment", cascade="all, delete-orphan", order_by="DeploymentLog.line_number")
     metrics = relationship("DeploymentMetric", back_populates="deployment", cascade="all, delete-orphan")
     failure_analysis = relationship("FailureAnalysis", back_populates="deployment", uselist=False, cascade="all, delete-orphan")
+    terraform_operation_run = relationship("OperationRun")
 
     __table_args__ = (
         Index("ix_deployments_user_id", "user_id"),
         Index("ix_deployments_project_id", "project_id"),
+        Index("ix_deployments_terraform_operation_run_id", "terraform_operation_run_id"),
     )
 
 
@@ -1247,10 +1410,13 @@ class DatabaseInstance(Base):
     type = Column(Text, nullable=False)  # PostgreSQL, MySQL, MongoDB, Redis
     db_name = Column(Text, nullable=False)
     username = Column(Text, nullable=False)
-    password = Column(Text, nullable=False)
+    # Compatibility-only fields are cleared into Key Vault during startup.
+    # New application code must use the non-secret Key Vault reference.
+    legacy_password = Column("password", Text, nullable=False, default="")
     host = Column(Text, nullable=False)
     port = Column(Integer, nullable=False)
-    connection_string = Column(Text, nullable=False)
+    legacy_connection_string = Column("connection_string", Text, nullable=False, default="")
+    secret_reference = Column(Text, nullable=True)
     status = Column(Text, default="provisioning")  # provisioning, available, failed
     created_at = Column(DateTime, default=datetime.utcnow)
 

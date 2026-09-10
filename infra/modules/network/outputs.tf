@@ -20,9 +20,9 @@ output "private_dns_zone_ids" {
 }
 
 output "nat_gateway_id" {
-  value = azurerm_nat_gateway.this.id
+  value = try(azurerm_nat_gateway.this[0].id, null)
 }
 
 output "nat_public_ip_address" {
-  value = azurerm_public_ip.nat.ip_address
+  value = try(azurerm_public_ip.nat[0].ip_address, null)
 }

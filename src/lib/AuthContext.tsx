@@ -109,6 +109,12 @@ function notifyAuthenticationSucceeded() {
   }
 }
 
+function notifySignedOut() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("zeroops:signed-out"));
+  }
+}
+
 async function authFetch(path: string, init?: RequestInit, timeoutMs = 15_000) {
   const controller = new AbortController();
   const upstreamSignal = init?.signal;
@@ -168,9 +174,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } else {
         setUser(null);
+        notifySignedOut();
       }
     } catch {
       setUser(null);
+      notifySignedOut();
     } finally {
       setLoading(false);
     }
@@ -378,13 +386,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Logout handler
   const logout = async () => {
     try {
-      await authFetch("/api/auth/logout", {
+      const response = await authFetch("/api/auth/logout", {
         method: "POST",
       });
+      if (!response.ok) {
+        throw new Error(`Logout failed with status ${response.status}`);
+      }
     } catch {
-      // Local state still needs to clear when the backend is unavailable.
+      addToast(
+        "Sign-out could not be confirmed. Your session remains active; please retry.",
+        "error",
+      );
+      return;
     }
     setUser(null);
+    notifySignedOut();
     sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
     sessionStorage.removeItem(GOOGLE_OAUTH_PENDING_KEY);
     addToast("Logged out successfully", "info");

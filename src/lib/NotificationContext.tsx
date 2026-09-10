@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { api, type Notification, type Project, type DashboardStats } from "./api";
 
@@ -57,6 +57,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [dashboardStatsState, setDashboardStatsState] =
     useState<WorkspaceDataState>("idle");
   const [isLoading, setIsLoading] = useState(true);
+  const workspaceGeneration = useRef(0);
+
+  const clearWorkspace = useCallback(() => {
+    // A response started by the previous session must never populate the next one.
+    workspaceGeneration.current += 1;
+    setNotifications([]);
+    setProjects([]);
+    setDashboardStats(null);
+    setToasts([]);
+    setNotificationsState("idle");
+    setProjectsState("idle");
+    setDashboardStatsState("idle");
+    setIsLoading(false);
+  }, []);
 
   const hasDeployed = projects.some(
     (project) =>
@@ -70,8 +84,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     let cancelled = false;
 
     async function loadData() {
-      // Skip API calls when no session exists — prevents 3× 401 cascades
-      // that hit the rate limiter and pollute the browser console.
+      const generation = workspaceGeneration.current;
       setIsLoading(true);
       setNotificationsState("loading");
       setProjectsState("loading");
@@ -83,7 +96,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           api.getDashboardStats(),
         ]);
 
-        if (cancelled) return;
+        if (cancelled || generation !== workspaceGeneration.current) return;
 
         if (notifData.status === "fulfilled") {
           setNotifications(notifData.value);
@@ -104,14 +117,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           setDashboardStatsState("error");
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && generation === workspaceGeneration.current) {
           setNotificationsState("error");
           setProjectsState("error");
           setDashboardStatsState("error");
         }
         // User may not be authenticated yet — that's OK
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && generation === workspaceGeneration.current) setIsLoading(false);
       }
     }
 
@@ -120,47 +133,59 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     } else {
       setIsLoading(false);
     }
-    window.addEventListener("zeroops:authenticated", loadData);
+    const onAuthenticated = () => {
+      clearWorkspace();
+      void loadData();
+    };
+    window.addEventListener("zeroops:authenticated", onAuthenticated);
+    window.addEventListener("zeroops:signed-out", clearWorkspace);
     return () => {
       cancelled = true;
-      window.removeEventListener("zeroops:authenticated", loadData);
+      window.removeEventListener("zeroops:authenticated", onAuthenticated);
+      window.removeEventListener("zeroops:signed-out", clearWorkspace);
     };
-  }, [isDashboardRoute]);
+  }, [isDashboardRoute, clearWorkspace]);
 
   // Directly derive unread count
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   // ── Refresh helpers ──
   const refreshProjects = useCallback(async () => {
+    const generation = workspaceGeneration.current;
     setProjectsState("loading");
     try {
       const data = await api.getProjects();
+      if (generation !== workspaceGeneration.current) return;
       setProjects(data);
       setProjectsState("ready");
     } catch {
-      setProjectsState("error");
+      if (generation === workspaceGeneration.current) setProjectsState("error");
     }
   }, []);
 
   const refreshStats = useCallback(async () => {
+    const generation = workspaceGeneration.current;
     setDashboardStatsState("loading");
     try {
       const data = await api.getDashboardStats();
+      if (generation !== workspaceGeneration.current) return;
       setDashboardStats(data);
       setDashboardStatsState("ready");
     } catch {
-      setDashboardStatsState("error");
+      if (generation === workspaceGeneration.current) setDashboardStatsState("error");
     }
   }, []);
 
   const refreshNotifications = useCallback(async () => {
+    const generation = workspaceGeneration.current;
     setNotificationsState("loading");
     try {
       const data = await api.getNotifications();
+      if (generation !== workspaceGeneration.current) return;
       setNotifications(data);
       setNotificationsState("ready");
     } catch {
-      setNotificationsState("error");
+      if (generation === workspaceGeneration.current) setNotificationsState("error");
     }
   }, []);
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from worker.queue import PostgresJobQueue, QueueUnavailableError
+from worker.job_queue import PostgresJobQueue, QueueUnavailableError
 
 
 class RecordingCursor:

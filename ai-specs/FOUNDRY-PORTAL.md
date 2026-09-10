@@ -80,8 +80,8 @@ The checked-in GitHub Models prompt assets remain available for manual prompt
 evaluation at `https://models.github.ai/inference`; they are not a runtime
 fallback and do not receive either workload credential.
 
-After the managed identity Foundry runtime adapter is deployed for the
-workload, use these settings and leave both API-key settings empty:
+For a Foundry prompt-agent route authenticated with managed identity, use these
+settings and leave both API-key settings empty:
 
 ```text
 AI_REPOSITORY_PROVIDER=azure-foundry
@@ -97,12 +97,30 @@ Grant each workload identity only the Foundry role required to invoke its own
 agent. The API, Terraform VMSS, and the other AI workload must not be able to
 read that workload's model credential.
 
-The current Azure Function client pins the primary to the approved NVIDIA
-origin/model and the only fallback to the approved Groq origin/model. It never
-crosses workload credentials or recursively selects another provider. Creating
-the portal agents does not authorize a runtime switch; promote the
-managed-identity adapter and pass its regression suite before changing either
-primary provider setting to `azure-foundry`.
+For a Microsoft Foundry **Azure OpenAI model deployment** using an API key, the
+runtime now supports the OpenAI v1 Responses API. This is separate from the
+managed-identity prompt-agent route above. Keep NVIDIA as the default unless
+you deliberately switch a workload:
+
+```text
+AI_REPOSITORY_PROVIDER=azure-openai
+AI_REPOSITORY_ENDPOINT=https://<resource>.openai.azure.com/openai/v1
+AI_REPOSITORY_MODEL=<repository deployment name>
+AI_REPOSITORY_API_KEY=<repository-vault API-key secret>
+
+AI_TERRAFORM_PROVIDER=azure-openai
+AI_TERRAFORM_ENDPOINT=https://<resource>.openai.azure.com/openai/v1
+AI_TERRAFORM_MODEL=<terraform deployment name>
+AI_TERRAFORM_API_KEY=<terraform-vault API-key secret>
+```
+
+The API key is only read from the existing workload-specific key setting; it
+is never logged or shared across workers. The endpoint and model/deployment
+name are non-secret app settings. `foundry-openai` is accepted as an alias, but
+use `azure-openai` in new configuration. The existing Groq fallback remains
+unchanged. After a Terraform-managed deployment, set the corresponding
+`repository_ai_*` or `terraform_ai_*` Terraform variables too, so a later
+apply does not restore the NVIDIA defaults.
 
 ## Application invocation contract
 

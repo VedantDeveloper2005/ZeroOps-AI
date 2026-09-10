@@ -45,6 +45,7 @@ _EXECUTOR_ONLY_KINDS = {
     "terraform_state",
     "terraform_state_backup",
 }
+_TOKEN_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default"
 
 
 class ArtifactIntegrityError(RuntimeError):
@@ -128,7 +129,7 @@ class ArtifactStore(ABC):
 
 
 class AzureBlobArtifactStore(ArtifactStore):
-    """Azure Blob implementation authenticated with a managed identity."""
+    """Azure Blob implementation authenticated with an Entra workload identity."""
 
     def __init__(
         self,
@@ -137,6 +138,8 @@ class AzureBlobArtifactStore(ArtifactStore):
         namespace_key: str,
         max_download_bytes: int,
         managed_identity_client_id: Optional[str] = None,
+        target_tenant_id: Optional[str] = None,
+        multitenant_app_client_id: Optional[str] = None,
     ) -> None:
         super().__init__(namespace_key=namespace_key, max_download_bytes=max_download_bytes)
         if not account_url.lower().startswith("https://") or not account_url.lower().endswith(
@@ -144,12 +147,45 @@ class AzureBlobArtifactStore(ArtifactStore):
         ):
             raise ValueError("Artifact storage account URL must be an Azure Blob HTTPS endpoint.")
 
+        self.managed_identity_client_id = (managed_identity_client_id or "").strip() or None
+        self.target_tenant_id = (target_tenant_id or "").strip() or None
+        self.multitenant_app_client_id = (multitenant_app_client_id or "").strip() or None
+        if bool(self.target_tenant_id) != bool(self.multitenant_app_client_id):
+            raise ValueError(
+                "Cross-tenant Blob artifact access requires both a target tenant "
+                "and multitenant application client ID."
+            )
+        if self.target_tenant_id and not self.managed_identity_client_id:
+            raise ValueError(
+                "Cross-tenant Blob artifact access requires an explicit user-assigned managed identity."
+            )
+
         # Imports remain lazy so unit tests can run without contacting Azure.
-        from azure.identity.aio import DefaultAzureCredential, ManagedIdentityCredential
+        from azure.identity.aio import (
+            ClientAssertionCredential,
+            DefaultAzureCredential,
+            ManagedIdentityCredential,
+        )
         from azure.storage.blob.aio import BlobServiceClient
 
-        if managed_identity_client_id:
-            credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
+        self._assertion_credential = None
+        if self.target_tenant_id:
+            # A target-tenant Entra application trusts this source UAMI through
+            # a federated identity credential. The Blob SDK requests its own
+            # storage scope from the resulting target-tenant credential.
+            from azure.identity import ManagedIdentityCredential as AssertionManagedIdentityCredential
+
+            assertion_credential = AssertionManagedIdentityCredential(
+                client_id=self.managed_identity_client_id
+            )
+            self._assertion_credential = assertion_credential
+            credential = ClientAssertionCredential(
+                tenant_id=self.target_tenant_id,
+                client_id=self.multitenant_app_client_id,
+                func=lambda: assertion_credential.get_token(_TOKEN_EXCHANGE_SCOPE).token,
+            )
+        elif self.managed_identity_client_id:
+            credential = ManagedIdentityCredential(client_id=self.managed_identity_client_id)
         else:
             credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
         self._credential = credential
@@ -293,10 +329,15 @@ def get_artifact_store() -> ArtifactStore:
         raise ArtifactStoreUnavailable(
             "Azure artifact storage is not configured. Set its account URL and namespace key in Key Vault."
         )
+    # The execution-plane bridge grants this target-tenant application Blob
+    # access on the target artifact account. Keep both settings blank when the
+    # configured artifact account remains in the App Service tenant.
     return AzureBlobArtifactStore(
         account_url=account_url,
         namespace_key=namespace_key,
         managed_identity_client_id=config.ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID or None,
+        target_tenant_id=config.SERVICEBUS_TARGET_TENANT_ID or None,
+        multitenant_app_client_id=config.SERVICEBUS_MULTITENANT_APP_CLIENT_ID or None,
         max_download_bytes=config.ARTIFACT_STORAGE_MAX_DOWNLOAD_MB * 1024 * 1024,
     )
 

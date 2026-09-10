@@ -21,7 +21,8 @@ from sqlalchemy.orm import selectinload
 try:
     from backend import auth, config, models
     from backend.database import get_db
-    from backend.services import app_service, deployment_targets, pipeline_approval, vault
+    from backend.services import artifacts, app_service, deployment_targets, git, pipeline_approval, terraform_workflow, vault
+    from backend.contracts.workflow import VerifiedCostEstimateV1
     from backend.services.incident_detection import evaluate_incident_rules
     from backend.services.pipeline_state import (
         PipelineContext,
@@ -35,7 +36,8 @@ try:
 except ImportError:  # pragma: no cover - package execution fallback
     import auth, config, models
     from database import get_db
-    from services import app_service, deployment_targets, pipeline_approval, vault
+    from services import artifacts, app_service, deployment_targets, git, pipeline_approval, terraform_workflow, vault
+    from contracts.workflow import VerifiedCostEstimateV1
     from services.incident_detection import evaluate_incident_rules
     from services.pipeline_state import (
         PipelineContext,
@@ -131,10 +133,24 @@ class PipelineConfigurationUpdate(BaseModel):
     @field_validator("branch")
     @classmethod
     def validate_branch(cls, value: str) -> str:
-        branch = value.strip()
-        if branch.startswith("-") or ".." in branch or any(char.isspace() for char in branch):
-            raise ValueError("branch is not a valid Git ref name")
-        return branch
+        return git._validated_branch_name(value.strip())
+
+
+class TerraformApplyApprovalRequest(BaseModel):
+    """Exact values the owner reviewed before authorizing one apply."""
+
+    model_config = {"extra": "forbid"}
+
+    confirm_apply: Literal[True]
+    plan_job_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_variables_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scope_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cost_estimate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    monthly_cost_microunits: int = Field(ge=0)
 
 
 def _pipeline_config_response(
@@ -181,8 +197,18 @@ async def _latest_config(
     return result.scalars().first()
 
 
+def _github_webhook_secret(project_id: uuid.UUID) -> str | None:
+    try:
+        return vault.get_project_secret(str(project_id), "GITHUB_WEBHOOK_SECRET")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Azure Key Vault is unavailable. GitHub webhook configuration could not be checked.",
+        ) from None
+
+
 def _webhook_secret_configured(project_id: uuid.UUID) -> bool:
-    return bool(vault.get_project_secret(str(project_id), "GITHUB_WEBHOOK_SECRET"))
+    return bool(_github_webhook_secret(project_id))
 
 
 @router.get("/api/projects/{project_id}/pipeline-config")
@@ -1537,7 +1563,7 @@ async def _exact_approval_inputs(
         deployment.commit_sha != pipeline_run.source_revision
         or deployment.branch != pipeline_run.branch
         or metadata.get("target_provider") != pipeline_run.target_type
-        or pipeline_run.target_type not in {"azure-app-service", "azure-aks"}
+        or pipeline_run.target_type != "azure-app-service"
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1634,6 +1660,32 @@ async def approve_pipeline_run(
         user_id=current_user.id,
         tenant_id=tenant.id,
     )
+    azure_connection = await _active_azure_connection(db, current_user.id)
+    if azure_connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Connect and verify the Azure deployment target before approving deployment.",
+        )
+    target_type = pipeline_run.target_type or "azure-app-service"
+    is_app_service_reused = deployment_targets.is_app_service_reused_deployment(
+        target=target_type,
+        connection=azure_connection,
+        infrastructure_change=False,
+        has_iac=False,
+    )
+    terraform_apply_proof = None
+    try:
+        terraform_apply_proof = await terraform_workflow.require_completed_apply_for_plan(
+            db,
+            tenant=tenant,
+            user=current_user,
+            project=project,
+            plan=plan,
+            azure_connection=azure_connection,
+        )
+    except HTTPException:
+        if not is_app_service_reused:
+            raise
 
     approved_deployment_id = uuid.uuid4()
     approved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -1653,10 +1705,15 @@ async def approve_pipeline_run(
         if key in metadata
     }
     approved_metadata["requested_target"] = pipeline_run.target_type
+    approved_metadata["app_service_reused"] = is_app_service_reused
+    approved_metadata["terraform_apply_required"] = not is_app_service_reused
+    if terraform_apply_proof:
+        approved_metadata["terraform_apply"] = terraform_apply_proof.deployment_metadata()
     approved_deployment = models.Deployment(
         id=approved_deployment_id,
         user_id=current_user.id,
         project_id=project.id,
+        terraform_operation_run_id=terraform_apply_proof.operation_run_id if terraform_apply_proof else None,
         status="queued",
         environment=deployment.environment,
         branch=pipeline_run.branch,
@@ -1860,6 +1917,269 @@ async def reject_pipeline_run(
     }
 
 
+@router.post("/api/terraform-runs/{operation_run_id}/cost-evidence")
+async def refresh_terraform_cost_evidence(
+    operation_run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Issue immutable, digest-bound cost evidence for a supported saved plan."""
+
+    tenant = await resolve_tenant(db, user=current_user)
+    plan_result_query = await db.execute(
+        select(models.TerraformPlanResult).where(
+            models.TerraformPlanResult.operation_run_id == operation_run_id,
+            models.TerraformPlanResult.tenant_id == tenant.id,
+        )
+    )
+    plan_result = plan_result_query.scalars().first()
+    if plan_result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
+    project = await _project_for_user(db, plan_result.project_id, current_user.id)
+    try:
+        store = artifacts.get_artifact_store()
+    except artifacts.ArtifactStoreUnavailable as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Immutable artifact storage is unavailable; cost evidence cannot be issued.",
+        ) from error
+    cost = await terraform_workflow.issue_verified_cost_evidence(
+        db,
+        store=store,
+        user=current_user,
+        project=project,
+        tenant=tenant,
+        operation_run_id=operation_run_id,
+    )
+    await db.commit()
+    return {
+        "status": "verified",
+        "idempotent": cost.idempotent,
+        "operation_run_id": str(cost.operation_run_id),
+        "artifact_id": str(cost.artifact_id),
+        "artifact_sha256": cost.artifact_sha256,
+        "currency": cost.currency,
+        "monthly_cost_microunits": cost.monthly_cost_microunits,
+        "captured_at": cost.captured_at.isoformat(),
+    }
+
+
+@router.get("/api/terraform-runs/{operation_run_id}/approval")
+async def get_terraform_apply_approval(
+    operation_run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Return review-safe digests and verified cost; never a saved-plan locator."""
+
+    tenant = await resolve_tenant(db, user=current_user)
+    result = await db.execute(
+        select(models.TerraformPlanResult, models.OperationRun)
+        .join(models.OperationRun, models.OperationRun.id == models.TerraformPlanResult.operation_run_id)
+        .where(
+            models.TerraformPlanResult.operation_run_id == operation_run_id,
+            models.TerraformPlanResult.tenant_id == tenant.id,
+            models.OperationRun.requested_by_user_id == current_user.id,
+        )
+    )
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
+    plan_result, operation_run = row
+    await _project_for_user(db, plan_result.project_id, current_user.id)
+    bundle = plan_result.bundle if isinstance(plan_result.bundle, dict) else {}
+    variables = plan_result.input_variables if isinstance(plan_result.input_variables, dict) else {}
+    guardrails = plan_result.guardrails if isinstance(plan_result.guardrails, dict) else {}
+    saved_plan = plan_result.saved_plan if isinstance(plan_result.saved_plan, dict) else {}
+    try:
+        cost = VerifiedCostEstimateV1.model_validate(plan_result.cost_estimate)
+    except (TypeError, ValueError):
+        cost = None
+    approval_result = await db.execute(
+        select(models.TerraformApplyApproval).where(
+            models.TerraformApplyApproval.operation_run_id == operation_run_id
+        )
+    )
+    approval = approval_result.scalars().first()
+    review_summary = terraform_workflow.review_safe_plan_summary(plan_result)
+    return {
+        "operation_run_id": str(operation_run_id),
+        "project_id": str(plan_result.project_id),
+        "revision": plan_result.revision,
+        "status": "approved_consumed" if approval else ("ready_for_approval" if cost else "awaiting_verified_cost"),
+        "plan_job_digest": plan_result.plan_job_digest,
+        "plan_sha256": saved_plan.get("sha256"),
+        "bundle_sha256": bundle.get("sha256"),
+        "input_variables_sha256": variables.get("sha256"),
+        "scope_digest": guardrails.get("scope_digest"),
+        "policy_digest": guardrails.get("policy_digest"),
+        "guardrails": {
+            key: guardrails.get(key)
+            for key in (
+                "target_resource_group",
+                "allowed_resource_types",
+                "maximum_resource_changes",
+                "maximum_delete_count",
+                "maximum_replace_count",
+                "monthly_budget_microunits",
+                "budget_currency",
+            )
+        },
+        "plan_summary": review_summary,
+        "cost_estimate": cost.model_dump(mode="json") if cost else None,
+        "planned_at": _iso(plan_result.planned_at),
+        "approval": (
+            {
+                "approval_id": str(approval.id),
+                "apply_job_id": str(approval.apply_job_id),
+                "approved_at": _iso(approval.approved_at),
+                "expires_at": _iso(approval.expires_at),
+                "consumed_at": _iso(approval.consumed_at),
+            }
+            if approval
+            else None
+        ),
+    }
+
+
+@router.get("/api/projects/{project_id}/terraform-review")
+async def get_project_terraform_review(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Return the current architecture revision's safe plan/apply review state."""
+
+    project = await _project_for_user(db, project_id, current_user.id)
+    tenant = await resolve_tenant(db, user=current_user)
+    plan = await _approved_plan(db, project.id, current_user.id)
+    if plan is None:
+        return {"status": "not_approved", "project_id": str(project.id)}
+    plan_digest = terraform_workflow.approved_plan_digest(plan)
+    run_result = await db.execute(
+        select(models.OperationRun)
+        .where(
+            models.OperationRun.tenant_id == tenant.id,
+            models.OperationRun.project_id == project.id,
+            models.OperationRun.requested_by_user_id == current_user.id,
+            models.OperationRun.operation_type == "infrastructure_pipeline",
+            models.OperationRun.input_digest == plan_digest,
+        )
+        .order_by(desc(models.OperationRun.created_at), desc(models.OperationRun.id))
+        .limit(1)
+    )
+    operation_run = run_result.scalars().first()
+    if operation_run is None:
+        return {
+            "status": "not_queued",
+            "project_id": str(project.id),
+            "plan_id": str(plan.id),
+            "revision": plan.revision,
+        }
+    result = await db.execute(
+        select(models.TerraformPlanResult).where(
+            models.TerraformPlanResult.operation_run_id == operation_run.id,
+            models.TerraformPlanResult.tenant_id == tenant.id,
+            models.TerraformPlanResult.project_id == project.id,
+        )
+    )
+    plan_result = result.scalars().first()
+    if plan_result is None:
+        failed = operation_run.status == "failed"
+        return {
+            "status": "failed" if failed else "planning",
+            "project_id": str(project.id),
+            "plan_id": str(plan.id),
+            "revision": plan.revision,
+            "operation_run_id": str(operation_run.id),
+            "error_code": operation_run.error_code if failed else None,
+            "message": (
+                operation_run.redacted_error
+                if failed
+                else "The isolated runner is generating and validating the exact Terraform plan."
+            ),
+        }
+
+    payload = await get_terraform_apply_approval(
+        operation_run.id,
+        db=db,
+        current_user=current_user,
+    )
+    if payload["status"] == "approved_consumed":
+        azure_connection = await _active_azure_connection(db, current_user.id)
+        proof = (
+            await terraform_workflow.find_completed_apply_for_plan(
+                db,
+                tenant=tenant,
+                user=current_user,
+                project=project,
+                plan=plan,
+                azure_connection=azure_connection,
+            )
+            if azure_connection is not None
+            else None
+        )
+        payload["status"] = (
+            "applied"
+            if proof is not None
+            else ("failed" if operation_run.status == "failed" else "applying")
+        )
+        payload["apply_proof"] = proof.deployment_metadata() if proof is not None else None
+    return payload
+
+
+@router.post("/api/terraform-runs/{operation_run_id}/approve")
+async def approve_terraform_apply(
+    operation_run_id: uuid.UUID,
+    request: TerraformApplyApprovalRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Consume one owner decision into one digest-bound Service Bus command."""
+
+    tenant = await resolve_tenant(db, user=current_user)
+    plan_result_query = await db.execute(
+        select(models.TerraformPlanResult).where(
+            models.TerraformPlanResult.operation_run_id == operation_run_id,
+            models.TerraformPlanResult.tenant_id == tenant.id,
+        )
+    )
+    plan_result = plan_result_query.scalars().first()
+    if plan_result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
+    project = await _project_for_user(db, plan_result.project_id, current_user.id)
+    azure_connection = await _active_azure_connection(db, current_user.id)
+    if azure_connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A connected and verified Azure deployment target is required before apply.",
+        )
+    consumed = await terraform_workflow.approve_and_enqueue_apply(
+        db,
+        user=current_user,
+        project=project,
+        tenant=tenant,
+        operation_run_id=operation_run_id,
+        expected=request.model_dump(exclude={"confirm_apply"}),
+        azure_connection=azure_connection,
+    )
+    db.add(models.Notification(
+        user_id=current_user.id,
+        title="Terraform Apply Approved",
+        message=f"The exact saved Terraform plan for {project.name} was approved and queued once.",
+        type="info",
+        category="deployment",
+    ))
+    await db.commit()
+    return {
+        "status": "approved_consumed",
+        "idempotent": consumed.idempotent,
+        "operation_run_id": str(consumed.operation_run_id),
+        "approval_id": str(consumed.approval_id),
+        "apply_job_id": str(consumed.apply_job_id),
+    }
+
+
 async def _queue_push_deployment(
     db: AsyncSession,
     *,
@@ -1894,23 +2214,46 @@ async def _queue_push_deployment(
             detail="The GitHub push was verified, but the project has no approved infrastructure plan.",
         )
     connection = await _active_azure_connection(db, owner.id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The GitHub push was verified, but the Azure deployment target is unavailable.",
+        )
     hint = await _latest_analysis_hint(db, project)
     try:
-        selected_target = deployment_targets.choose_target(hint, connection, "auto")
+        selected_target = deployment_targets.choose_target(hint, connection, "azure-app-service")
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
+    is_app_service_reused = deployment_targets.is_app_service_reused_deployment(
+        target=selected_target.provider,
+        connection=connection,
+        infrastructure_change=False,
+        has_iac=False,
+    )
+    terraform_apply_proof = None
+    try:
+        terraform_apply_proof = await terraform_workflow.require_completed_apply_for_plan(
+            db,
+            tenant=tenant,
+            user=owner,
+            project=project,
+            plan=plan,
+            azure_connection=connection,
+        )
+    except HTTPException:
+        if not is_app_service_reused:
+            raise
+
     deployment_id = uuid.uuid4()
     version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d')}.{deployment_id.hex[:12]}"
-    name_prefix = deployment_targets.namespace_prefix(selected_target, owner.id)
-    image_name = re.sub(
-        r"-+", "-", re.sub(r"[^a-z0-9-]", "-", f"{name_prefix}-{project.name}-{str(project.id)[:8]}".lower())
-    ).strip("-")
+    image_name = deployment_targets.app_service_application_name(project.name, project.id)
     image_ref = deployment_targets.image_ref_for_target(selected_target, image_name, version)
     deployment = models.Deployment(
         id=deployment_id,
         user_id=owner.id,
         project_id=project.id,
+        terraform_operation_run_id=terraform_apply_proof.operation_run_id if terraform_apply_proof else None,
         status="queued",
         environment="production",
         branch=branch,
@@ -1922,7 +2265,7 @@ async def _queue_push_deployment(
             # The worker must re-resolve an automatic target from the current
             # immutable clone.  The selected target below is only a preflight
             # readiness hint until that deterministic inspection completes.
-            "requested_target": "auto",
+            "requested_target": "azure-app-service",
             "target_provider": selected_target.provider,
             "target_reason": selected_target.reason,
             "target": deployment_targets.metadata_for_target(selected_target),
@@ -1934,6 +2277,9 @@ async def _queue_push_deployment(
                 "provider": plan.provider,
                 "region": plan.region,
             },
+            "app_service_reused": is_app_service_reused,
+            "terraform_apply_required": not is_app_service_reused,
+            **({"terraform_apply": terraform_apply_proof.deployment_metadata()} if terraform_apply_proof else {}),
             "pipeline_configuration": {
                 "id": str(configuration.id),
                 "version": configuration.version,
@@ -2032,7 +2378,7 @@ async def github_push_webhook(
     if project is None:
         # Do not confirm project identifiers to unsigned callers.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature.")
-    webhook_secret = vault.get_project_secret(str(project.id), "GITHUB_WEBHOOK_SECRET")
+    webhook_secret = _github_webhook_secret(project.id)
     if not webhook_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

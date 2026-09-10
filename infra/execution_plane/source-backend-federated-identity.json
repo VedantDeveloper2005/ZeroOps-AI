@@ -1,0 +1,9 @@
+{
+  "name": "zeroops-backend-uami",
+  "issuer": "https://login.microsoftonline.com/a99f8a86-256f-4146-ad3c-e658a27f7a47/v2.0",
+  "subject": "0b5297d8-d73f-420a-87b5-1fb9ba37c282",
+  "description": "Allow the ZeroOps backend managed identity to obtain target-tenant execution-plane tokens.",
+  "audiences": [
+    "api://AzureADTokenExchange"
+  ]
+}

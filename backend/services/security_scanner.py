@@ -138,7 +138,11 @@ def _bounded(value: str) -> str:
     return redact_sensitive_text(str(value or ""), maximum_length=_MAX_OUTPUT_CHARS)
 
 
-def _scanner_environment(home: Path | None = None) -> dict[str, str]:
+def _scanner_environment(
+    home: Path | None = None,
+    *,
+    executable_directory: Path | None = None,
+) -> dict[str, str]:
     """Return the minimum host environment needed to launch scanner CLIs.
 
     Deployment credentials are intentionally not inherited by repository
@@ -162,7 +166,33 @@ def _scanner_environment(home: Path | None = None) -> dict[str, str]:
             "TMP": str(home / "tmp"),
             "TMPDIR": str(home / "tmp"),
         })
+    # Python-installed Windows scanner launchers (notably Semgrep) delegate
+    # to a sibling executable such as ``pysemgrep.exe``.  The scanner itself
+    # is selected as an absolute path, but its installation directory may not
+    # be on the sanitized PATH above.  Add only that already-selected tool's
+    # directory; never add the untrusted repository directory to PATH.
+    if executable_directory is not None:
+        tool_path = str(executable_directory)
+        current_path = environment.get("PATH", "")
+        environment["PATH"] = (
+            f"{tool_path}{os.pathsep}{current_path}" if current_path else tool_path
+        )
     return environment
+
+
+def _command_executable_directory(command: Sequence[str]) -> Path | None:
+    """Return the parent of an existing absolute scanner executable only."""
+
+    if not command:
+        return None
+    candidate = Path(command[0])
+    if not candidate.is_absolute():
+        return None
+    try:
+        executable = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    return executable.parent if executable.is_file() else None
 
 
 def _default_runner(command: Sequence[str], cwd: str, timeout_seconds: int) -> _ToolExecution:
@@ -183,7 +213,10 @@ def _default_runner(command: Sequence[str], cwd: str, timeout_seconds: int) -> _
                 timeout=timeout_seconds,
                 check=False,
                 shell=False,
-                env=_scanner_environment(home),
+                env=_scanner_environment(
+                    home,
+                    executable_directory=_command_executable_directory(command),
+                ),
             )
     except subprocess.TimeoutExpired as error:
         raise TimeoutError(f"Scanner exceeded its {timeout_seconds}s execution limit.") from error
@@ -251,7 +284,10 @@ def _registry_authenticated_runner(
                     timeout=timeout_seconds,
                     check=False,
                     shell=False,
-                    env=_scanner_environment(home),
+                    env=_scanner_environment(
+                        home,
+                        executable_directory=_command_executable_directory(command),
+                    ),
                 )
         except subprocess.TimeoutExpired as error:
             raise TimeoutError(
@@ -519,6 +555,26 @@ def _unavailable(kind: ScanKind, tool: str, required: bool, started_at: str, rea
     )
 
 
+def _find_executable(tool: str) -> str | None:
+    found = shutil.which(tool) or shutil.which(f"{tool}.exe")
+    if found:
+        return found
+    home = Path.home()
+    for directory in (
+        home / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links",
+        home / "AppData" / "Roaming" / "Python" / "Python314" / "Scripts",
+        home / "AppData" / "Local" / "Programs" / "Python" / "Python313" / "Scripts",
+        home / ".local" / "bin",
+        Path("/usr/local/bin"),
+        Path("/opt/homebrew/bin"),
+    ):
+        if directory.is_dir():
+            resolved = shutil.which(tool, path=str(directory)) or shutil.which(f"{tool}.exe", path=str(directory))
+            if resolved:
+                return resolved
+    return None
+
+
 def run_scan(
     kind: ScanKind,
     repo_path: str | os.PathLike[str],
@@ -528,7 +584,7 @@ def run_scan(
     policy: ScanPolicy | None = None,
     timeout_seconds: int = 300,
     runner: Runner = _default_runner,
-    which: Which = shutil.which,
+    which: Which = _find_executable,
 ) -> SecurityScanResult:
     """Run one deterministic scan and return only safe, bounded evidence."""
 

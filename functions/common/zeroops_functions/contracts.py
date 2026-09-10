@@ -9,16 +9,31 @@ from __future__ import annotations
 
 import re
 import uuid
+import math
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _CONTAINER_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 _TENANT_CONTAINER_PATTERN = re.compile(r"^t-[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_TERRAFORM_VARIABLE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_TERRAFORM_RESOURCE_TYPE_PATTERN = re.compile(r"^azurerm_[a-z0-9_]{1,96}$")
+_SECRET_VARIABLE_NAME_PATTERN = re.compile(
+    r"(?:password|passwd|secret|token|authorization|api[_-]?key|"
+    r"connection[_-]?string|private[_-]?key|sas|client[_-]?secret)",
+    re.IGNORECASE,
+)
+_SECRET_VALUE_PATTERN = re.compile(
+    r"(?:-----BEGIN [A-Z ]+PRIVATE KEY-----|"
+    r"(?:AccountKey|SharedAccessSignature|client_secret|password)\s*=|"
+    r"(?:Bearer|Basic)\s+[A-Za-z0-9+/=_-]{8,}|[?&](?:sig|se|sp|sv)=)",
+    re.IGNORECASE,
+)
+_RESOURCE_GROUP_PATTERN = re.compile(r"^[A-Za-z0-9._()\-]{1,90}$")
 
 
 def utc_now() -> datetime:
@@ -164,6 +179,50 @@ class RepositoryAnalysisJobV1(JobIdentityV1):
         return value
 
 
+class TerraformInputVariableV1(StrictContract):
+    """One explicitly approved, non-secret Terraform input value.
+
+    These values are accepted only by the generation function. The VMSS queue
+    envelope carries a digest and type definitions, never the values.
+    """
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    type: Literal["string", "number", "bool", "list(string)"]
+    value: str | int | float | bool | list[str]
+
+    @model_validator(mode="after")
+    def validate_non_secret_typed_value(self) -> "TerraformInputVariableV1":
+        if _SECRET_VARIABLE_NAME_PATTERN.search(self.name):
+            raise ValueError("Secret-like Terraform variables cannot use the non-secret channel")
+
+        value = self.value
+        if self.type == "string":
+            valid_type = type(value) is str
+            string_values = [value] if valid_type else []
+        elif self.type == "number":
+            valid_type = type(value) in {int, float} and (
+                type(value) is int or math.isfinite(value)
+            )
+            string_values = []
+        elif self.type == "bool":
+            valid_type = type(value) is bool
+            string_values = []
+        else:
+            valid_type = isinstance(value, list) and len(value) <= 64 and all(
+                type(item) is str for item in value
+            )
+            string_values = value if valid_type else []
+        if not valid_type:
+            raise ValueError("Terraform input value does not match its declared type")
+
+        for item in string_values:
+            if len(item) > 1024 or any(ord(character) < 32 for character in item):
+                raise ValueError("Terraform input strings must be bounded printable text")
+            if _SECRET_VALUE_PATTERN.search(item):
+                raise ValueError("Secret-like values cannot use the non-secret Terraform channel")
+        return self
+
+
 class TerraformGenerationJobV1(JobIdentityV1):
     schema_version: Literal["terraform-generation-job.v1"] = "terraform-generation-job.v1"
     enqueued_at: datetime
@@ -177,7 +236,12 @@ class TerraformGenerationJobV1(JobIdentityV1):
     target_environment: Literal["test", "production"]
     target_subscription_id: str
     target_tenant_id: str
+    target_resource_group: str
     terraform_version: Literal["1.15.8"]
+    input_variables: list[TerraformInputVariableV1] = Field(max_length=64)
+    maximum_resource_changes: int = Field(ge=1, le=500)
+    maximum_delete_count: int = Field(ge=0, le=100)
+    maximum_replace_count: int = Field(ge=0, le=100)
 
     @field_validator(
         "job_id",
@@ -215,6 +279,27 @@ class TerraformGenerationJobV1(JobIdentityV1):
         if not _TENANT_CONTAINER_PATTERN.fullmatch(value):
             raise ValueError("output_container must be an opaque tenant container")
         return value
+
+    @field_validator("target_resource_group")
+    @classmethod
+    def validate_target_resource_group(cls, value: str) -> str:
+        if not _RESOURCE_GROUP_PATTERN.fullmatch(value) or value.endswith("."):
+            raise ValueError("target_resource_group is not a canonical Azure resource group name")
+        return value
+
+    @model_validator(mode="after")
+    def validate_execution_inputs(self) -> "TerraformGenerationJobV1":
+        names = [item.name for item in self.input_variables]
+        if len(names) != len(set(names)):
+            raise ValueError("Terraform input variable names must be unique")
+        if self.maximum_delete_count > self.maximum_resource_changes:
+            raise ValueError("maximum_delete_count cannot exceed maximum_resource_changes")
+        if self.maximum_replace_count > self.maximum_resource_changes:
+            raise ValueError("maximum_replace_count cannot exceed maximum_resource_changes")
+        encoded = self.model_dump_json(exclude={"approved_plan_artifact"})
+        if len(encoded.encode("utf-8")) > 64 * 1024:
+            raise ValueError("Terraform execution inputs exceed the 64 KiB contract limit")
+        return self
 
 
 class EventArtifactV1(StrictContract):
@@ -264,6 +349,107 @@ class EventArtifactV1(StrictContract):
         return normalized
 
 
+class TerraformPlanControlRecordV1(StrictContract):
+    """Executor-only plan handle projected outside user-visible event data."""
+
+    schema_version: Literal["terraform-plan-control.v1"] = "terraform-plan-control.v1"
+    plan_job_id: str
+    plan_job_digest: str
+    revision: int = Field(ge=1)
+    bundle: dict[str, Any]
+    input_variables: dict[str, Any]
+    guardrails: dict[str, Any]
+    saved_plan: dict[str, Any]
+    plan_summary: dict[str, Any] = Field(default_factory=dict)
+    planned_at: datetime
+
+    @field_validator("plan_job_id")
+    @classmethod
+    def validate_plan_job_id(cls, value: str) -> str:
+        return canonical_uuid(value, field="plan_job_id")
+
+    @field_validator("plan_job_digest")
+    @classmethod
+    def validate_plan_job_digest(cls, value: str) -> str:
+        if not _SHA256_PATTERN.fullmatch(value):
+            raise ValueError("plan_job_digest must be a lowercase SHA-256 digest")
+        return value
+
+    @field_validator("planned_at")
+    @classmethod
+    def validate_planned_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("planned_at must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_private_control_bindings(self) -> "TerraformPlanControlRecordV1":
+        expected = {
+            "bundle": {"uri", "etag", "sha256", "size_bytes"},
+            "input_variables": {"file_name", "sha256", "definitions"},
+            "guardrails": {
+                "target_resource_group",
+                "allowed_resource_types",
+                "maximum_resource_changes",
+                "maximum_delete_count",
+                "maximum_replace_count",
+                "scope_digest",
+                "policy_digest",
+                "monthly_budget_microunits",
+                "budget_currency",
+            },
+            "saved_plan": {
+                "blob_name",
+                "etag",
+                "sha256",
+                "plan_job_digest",
+                "bundle_sha256",
+                "input_variables_sha256",
+                "scope_digest",
+                "policy_digest",
+            },
+        }
+        values = {
+            "bundle": self.bundle,
+            "input_variables": self.input_variables,
+            "guardrails": self.guardrails,
+            "saved_plan": self.saved_plan,
+        }
+        for label, fields in expected.items():
+            if set(values[label]) != fields:
+                raise ValueError(f"{label} contains unsupported or missing fields")
+        digests = (
+            self.bundle.get("sha256"),
+            self.input_variables.get("sha256"),
+            self.guardrails.get("scope_digest"),
+            self.guardrails.get("policy_digest"),
+            self.saved_plan.get("sha256"),
+            self.saved_plan.get("plan_job_digest"),
+            self.saved_plan.get("bundle_sha256"),
+            self.saved_plan.get("input_variables_sha256"),
+            self.saved_plan.get("scope_digest"),
+            self.saved_plan.get("policy_digest"),
+        )
+        if any(not isinstance(item, str) or not _SHA256_PATTERN.fullmatch(item) for item in digests):
+            raise ValueError("Terraform plan control record contains an invalid digest")
+        if self.saved_plan["plan_job_digest"] != self.plan_job_digest:
+            raise ValueError("Saved plan does not match the plan job")
+        if self.saved_plan["bundle_sha256"] != self.bundle["sha256"]:
+            raise ValueError("Saved plan does not match the Terraform bundle")
+        if self.saved_plan["input_variables_sha256"] != self.input_variables["sha256"]:
+            raise ValueError("Saved plan does not match the Terraform input values")
+        if self.saved_plan["scope_digest"] != self.guardrails["scope_digest"]:
+            raise ValueError("Saved plan does not match the approved scope")
+        if self.saved_plan["policy_digest"] != self.guardrails["policy_digest"]:
+            raise ValueError("Saved plan does not match the approved policy")
+        encoded_size = len(
+            self.model_dump_json(exclude={"plan_summary"}).encode("utf-8")
+        )
+        if encoded_size > 128 * 1024:
+            raise ValueError("Terraform plan control record exceeds 128 KiB")
+        return self
+
+
 class WorkflowEventV1(StrictContract):
     schema_version: Literal["workflow-event.v1"] = "workflow-event.v1"
     event_id: str
@@ -282,6 +468,7 @@ class WorkflowEventV1(StrictContract):
     safe_metadata: dict[str, Any] = Field(default_factory=dict)
     error_code: str | None = Field(default=None, max_length=96)
     safe_message: str | None = Field(default=None, max_length=1024)
+    control_record: TerraformPlanControlRecordV1 | None = None
 
     @field_validator(
         "event_id",

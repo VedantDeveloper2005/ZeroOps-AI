@@ -17,7 +17,8 @@ from worker.execution_gate import (
     require_provider_lockfile,
     safe_extract_zip,
     sha256_file,
-    summarize_plan_json,
+    validate_input_variables_file,
+    validate_plan_guardrails,
     validate_saved_plan_gate,
     verify_file_digest,
 )
@@ -84,6 +85,11 @@ class TerraformExecutor:
                 "ARM_CLIENT_ID": self.managed_identity_client_id,
                 "ARM_SUBSCRIPTION_ID": envelope.target_subscription_id,
                 "ARM_TENANT_ID": envelope.target_tenant_id,
+                # The runner container has a read-only root filesystem. TFLint
+                # installs any explicitly requested ruleset plugins under its
+                # plugin directory, so keep that directory in the writable
+                # per-runner /work tmpfs rather than under $HOME.
+                "TFLINT_PLUGIN_DIR": "/work/.tflint.d/plugins",
             }
         )
         return environment
@@ -237,6 +243,7 @@ class TerraformExecutor:
         if bundle_path.stat().st_size != envelope.bundle.size_bytes:
             raise ExecutionGateError("Terraform bundle size does not match its contract.")
         safe_extract_zip(bundle_path, source_root)
+        validate_input_variables_file(envelope, source_root)
         return source_root
 
     def execute(
@@ -289,7 +296,7 @@ class TerraformExecutor:
             phase="Terraform plan summarization",
             return_stdout=True,
         )
-        summary = summarize_plan_json(raw_plan_json)
+        summary = validate_plan_guardrails(raw_plan_json, envelope)
         del raw_plan_json
 
         plan_sha256 = sha256_file(plan_path)

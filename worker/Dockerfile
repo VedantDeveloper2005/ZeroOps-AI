@@ -1,4 +1,7 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/azure-cli:2.87.0-azurelinux3.0@sha256:ae2b53ff3933260ebfd0b1fd0e58650ceb6233bdc7a8f20cef1bea9ebb72dc7e
+# ACR Tasks' dependency scanner does not support a `FROM --platform` prefix.
+# The deployment command explicitly selects linux/amd64 and this digest stays
+# pinned, so retain compatibility with both ACR Tasks and the x86-64 VMSS.
+FROM mcr.microsoft.com/azure-cli:2.87.0-azurelinux3.0@sha256:ae2b53ff3933260ebfd0b1fd0e58650ceb6233bdc7a8f20cef1bea9ebb72dc7e
 
 ARG TERRAFORM_VERSION=1.15.8
 ARG TERRAFORM_SHA256=d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d

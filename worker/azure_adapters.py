@@ -81,18 +81,21 @@ def _validated_arm_resource_url(url: str) -> str:
     parsed = urlparse(url)
     segments = parsed.path.split("/")
     if (
-        len(segments) != 9
+        len(segments) != 11
         or segments[0] != ""
         or segments[1] != "subscriptions"
         or not segments[2]
         or segments[3] != "resourceGroups"
         or not segments[4]
-        or segments[5:8] != ["providers", "Microsoft.Compute", "virtualMachines"]
+        or segments[5:8]
+        != ["providers", "Microsoft.Compute", "virtualMachineScaleSets"]
         or not segments[8]
+        or segments[9] != "virtualMachines"
+        or not segments[10]
         or parsed.params
         or parsed.query != f"api-version={_ARM_API_VERSION}"
     ):
-        raise ExecutionGateError("ARM request is outside the approved VM endpoint.")
+        raise ExecutionGateError("ARM request is outside the approved VMSS instance endpoint.")
     return url
 
 
@@ -223,6 +226,9 @@ class AzureBlobArtifactStore:
             "sha256": plan_sha256,
             "plan_job_digest": envelope.job_digest,
             "bundle_sha256": envelope.bundle.sha256,
+            "input_variables_sha256": envelope.input_variables.sha256,
+            "scope_digest": envelope.guardrails.scope_digest,
+            "policy_digest": envelope.guardrails.policy_digest,
         }
         try:
             with plan_path.open("rb") as stream:
@@ -246,6 +252,9 @@ class AzureBlobArtifactStore:
             sha256=plan_sha256,
             plan_job_digest=envelope.job_digest,
             bundle_sha256=envelope.bundle.sha256,
+            input_variables_sha256=envelope.input_variables.sha256,
+            scope_digest=envelope.guardrails.scope_digest,
+            policy_digest=envelope.guardrails.policy_digest,
         )
 
     def download_private_plan(
@@ -329,6 +338,59 @@ class AzureBlobArtifactStore:
     def was_completed(self, envelope: ExecutionEnvelope) -> bool:
         return self._receipt_client(envelope).exists()
 
+    def claim_approval(self, envelope: ExecutionEnvelope) -> None:
+        """Bind one approval to one deterministic apply job before execution."""
+
+        if (
+            envelope.operation != "apply"
+            or envelope.approval is None
+            or envelope.saved_plan is None
+        ):
+            raise ExecutionGateError("Only apply jobs can consume an approval.")
+        claim = {
+            "schema_version": "1.0",
+            "approval_id": envelope.approval.approval_id,
+            "apply_job_id": envelope.job_id,
+            "apply_job_digest": envelope.job_digest,
+            "plan_sha256": envelope.saved_plan.sha256,
+            "scope_digest": envelope.guardrails.scope_digest,
+            "policy_digest": envelope.guardrails.policy_digest,
+            "cost_estimate_sha256": envelope.approval.cost_estimate_sha256,
+        }
+        encoded = json.dumps(
+            claim,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        metadata = {
+            "claim_digest": hashlib.sha256(encoded).hexdigest(),
+            "apply_job_id": envelope.job_id,
+            "apply_job_digest": envelope.job_digest,
+        }
+        client = self.executor_service.get_blob_client(
+            container=self.plan_container_name,
+            blob=(
+                f"approval-claims/{envelope.tenant_id}/"
+                f"{envelope.approval.approval_id}.json"
+            ),
+        )
+        try:
+            client.upload_blob(
+                encoded,
+                overwrite=False,
+                metadata=metadata,
+                content_settings=ContentSettings(
+                    content_type="application/json",
+                    cache_control="no-store",
+                ),
+            )
+        except ResourceExistsError:
+            existing = client.get_blob_properties()
+            if existing.metadata != metadata:
+                raise ExecutionGateError(
+                    "Approval was already consumed by a different apply job."
+                )
+
     def mark_completed(
         self,
         envelope: ExecutionEnvelope,
@@ -350,6 +412,9 @@ class AzureBlobArtifactStore:
                 "sha256",
                 "plan_job_digest",
                 "bundle_sha256",
+                "input_variables_sha256",
+                "scope_digest",
+                "policy_digest",
             )
             if all(
                 isinstance(plan_handle.get(field), str)
@@ -491,7 +556,12 @@ class VmssScaleInProtection:
                 document = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
             raise ExecutionGateError("VM instance metadata is unavailable.") from error
-        required = ["subscriptionId", "resourceGroupName", "name"]
+        required = [
+            "subscriptionId",
+            "resourceGroupName",
+            "vmScaleSetName",
+            "instanceId",
+        ]
         if not isinstance(document, dict) or any(
             not isinstance(document.get(key), str) or not document[key]
             for key in required
@@ -511,14 +581,18 @@ class VmssScaleInProtection:
         resource_group = _encoded_arm_segment(
             metadata["resourceGroupName"], label="resource group", maximum_length=90
         )
-        virtual_machine = _encoded_arm_segment(
-            metadata["name"], label="virtual machine name", maximum_length=64
+        scale_set = _encoded_arm_segment(
+            metadata["vmScaleSetName"], label="scale set name", maximum_length=64
+        )
+        instance_id = _encoded_arm_segment(
+            metadata["instanceId"], label="scale set instance ID", maximum_length=64
         )
         resource_url = _validated_arm_resource_url(
             "https://management.azure.com/subscriptions/"
             f"{subscription_id}/resourceGroups/"
             f"{resource_group}/providers/Microsoft.Compute/"
-            f"virtualMachines/{virtual_machine}?api-version={_ARM_API_VERSION}"
+            f"virtualMachineScaleSets/{scale_set}/virtualMachines/"
+            f"{instance_id}?api-version={_ARM_API_VERSION}"
         )
         body = json.dumps(
             {

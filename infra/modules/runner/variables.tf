@@ -26,6 +26,10 @@ variable "identity_client_id" {
   type = string
 }
 
+variable "tenant_id" {
+  type = string
+}
+
 variable "service_bus_namespace" {
   type = string
 }
@@ -35,6 +39,14 @@ variable "plan_queue_name" {
 }
 
 variable "plan_queue_id" {
+  type = string
+}
+
+variable "apply_queue_name" {
+  type = string
+}
+
+variable "apply_queue_id" {
   type = string
 }
 
@@ -59,6 +71,15 @@ variable "executor_state_container_name" {
 }
 
 variable "runner_image_reference" {
+  type     = string
+  nullable = true
+}
+
+variable "enable_vmss" {
+  type = bool
+}
+
+variable "os_image_version" {
   type = string
 }
 

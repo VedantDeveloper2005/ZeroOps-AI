@@ -70,6 +70,10 @@ output "analysis_deployment_container_name" {
   value = azurerm_storage_container.analysis_deployment.name
 }
 
+output "analysis_deployment_container_id" {
+  value = azurerm_storage_container.analysis_deployment.id
+}
+
 output "tfgen_host_account_id" {
   value = azurerm_storage_account.tfgen_host.id
 }
@@ -82,6 +86,10 @@ output "tfgen_deployment_container_name" {
   value = azurerm_storage_container.tfgen_deployment.name
 }
 
+output "tfgen_deployment_container_id" {
+  value = azurerm_storage_container.tfgen_deployment.id
+}
+
 output "history_host_account_id" {
   value = azurerm_storage_account.history_host.id
 }
@@ -92,4 +100,8 @@ output "history_host_account_name" {
 
 output "history_deployment_container_name" {
   value = azurerm_storage_container.history_deployment.name
+}
+
+output "history_deployment_container_id" {
+  value = azurerm_storage_container.history_deployment.id
 }

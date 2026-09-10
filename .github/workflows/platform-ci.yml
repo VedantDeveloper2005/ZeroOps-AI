@@ -28,6 +28,7 @@ on:
       - ".github/workflows/platform-ci.yml"
       - ".github/workflows/main_zeroopsai.yml"
       - ".github/workflows/main_zeroops-backend.yml"
+      - ".github/workflows/platform-deploy.yml"
   push:
     branches:
       - main
@@ -55,6 +56,7 @@ on:
       - ".github/workflows/platform-ci.yml"
       - ".github/workflows/main_zeroopsai.yml"
       - ".github/workflows/main_zeroops-backend.yml"
+      - ".github/workflows/platform-deploy.yml"
   workflow_dispatch:
 
 concurrency:
@@ -195,13 +197,31 @@ jobs:
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive infra
 
+      - name: Verify cross-platform provider checksums
+        run: |
+          terraform -chdir=infra providers lock \
+            -platform=linux_amd64 \
+            -platform=windows_amd64
+          terraform -chdir=infra/bootstrap providers lock \
+            -platform=linux_amd64 \
+            -platform=windows_amd64
+          git diff --exit-code -- \
+            infra/.terraform.lock.hcl \
+            infra/bootstrap/.terraform.lock.hcl
+
       - name: Initialize without remote state
         working-directory: infra
-        run: terraform init -backend=false -input=false
+        run: terraform init -backend=false -input=false -lockfile=readonly
 
       - name: Validate Terraform graph
         working-directory: infra
         run: terraform validate -no-color
+
+      - name: Validate deployment identity bootstrap
+        working-directory: infra/bootstrap
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate -no-color
 
       - name: Set up TFLint
         uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6.2.2

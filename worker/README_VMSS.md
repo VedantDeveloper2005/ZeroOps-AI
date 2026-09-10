@@ -30,14 +30,18 @@ tokens.
 5. Download the immutable source bundle by HTTPS URI, ETag, size, and SHA-256.
 6. Extract it without links, path traversal, embedded state/plans/keys, or an
    existing `.terraform` directory.
-7. Require `.terraform.lock.hcl`, verify the exact Terraform version, initialize
-   the Entra-authenticated backend, then run fmt, validate, TFLint, and Checkov.
+7. Verify the application-owned canonical `zeroops.auto.tfvars.json` by digest,
+   declared type, and non-secret policy. Require `.terraform.lock.hcl`, verify
+   the exact Terraform version, initialize the Entra-authenticated backend,
+   then run fmt, validate, TFLint, and Checkov.
 8. For `plan`, create a saved binary plan, reduce `terraform show -json` in
-   memory to action counts/resource kinds, and store the binary in the
+   memory to action counts/resource kinds, enforce the approved resource-type,
+   resource-group, change/delete/replace limits, and store the binary in the
    executor-only container.
 9. For `apply`, download the already-saved binary plan and require exact matches
-   across plan digest, ETag, plan job digest, bundle digest, and approval
-   record. The only apply command supplies the saved plan path.
+   across plan digest, ETag, plan job digest, bundle/input/scope/policy digests,
+   verified cost estimate, and approval record. Atomically bind the approval to
+   one apply job. The only apply command supplies the saved plan path.
 10. Publish sanitized history, write a completion receipt, settle the queue
     message, release the state lease, and finally release scale-in protection.
 
@@ -69,21 +73,26 @@ receipts are written back into the same opaque tenant container using the same
 An apply message also carries:
 
 - `saved_plan`: executor blob name, ETag, SHA-256, original plan job digest, and
-  bundle digest.
-- `approval`: immutable approval ID, approving user, UTC timestamp, decision
-  `approved`, and the same four plan/bundle identifiers.
+  bundle/input/scope/policy digests.
+- `cost_estimate`: digest, currency, monthly cost in integer microunits, and
+  capture time.
+- `approval`: immutable approval ID, approving user, apply job ID, UTC approval
+  and expiry timestamps, decision `approved`, and exact plan, bundle, input,
+  scope, policy, and cost identifiers.
 
 Approval expires after 24 hours. Apply messages whose queue, operation, ETag,
 digest, tenant prefix, or approval differs are dead-lettered without invoking
 Terraform.
 
-The executor returns a `plan_handle` only on its private control result and
-persists an allowlisted copy in the executor-only completion receipt so the
-trusted orchestration path can construct a later apply request. The
-user-history event is a separate `workflow-event.v1` document with UUID
+The executor persists the plan handle in its executor-only completion receipt
+and includes a strictly validated `control_record` in the trusted projector
+message so the backend can construct a later apply request. The projector puts
+that record in `terraform_plan_results` and deliberately removes it from
+user-visible activity data. The user-history portion of the
+`workflow-event.v1` document has UUID
 tenant/project/run/correlation fields, `actor_type=vmss`, bounded safe
-metadata, and at most a sanitized user-artifact reference. It never contains
-that plan handle, executor Blob paths, state keys, ETags, SAS URLs, source
+metadata, and at most a sanitized user-artifact reference. It never exposes
+the plan handle, executor Blob paths, state keys, ETags, SAS URLs, source
 values, or raw tool output. Its deterministic event ID includes the tenant,
 run, job, and event type so the Functions history projector can process
 retries idempotently.

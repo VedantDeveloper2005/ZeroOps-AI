@@ -1,5 +1,9 @@
-# Production profile: private PaaS access, Premium Service Bus/ACR, durable
-# storage, and a regular zone-spread VMSS that scales from zero to ten.
+# Production-style demo profile: private PaaS access, Premium Service Bus/ACR,
+# durable storage, and a regular zone-spread VMSS that scales from zero to two.
+# Central India has four regional vCPUs free in the connected Azure for Students
+# subscription; the existing validation VM uses two. This cap is therefore the
+# largest currently deployable runner capacity. Raise it only after live quota
+# validation confirms the requested capacity.
 subscription_id = "00000000-0000-0000-0000-000000000000"
 tenant_id       = "00000000-0000-0000-0000-000000000000"
 
@@ -22,12 +26,15 @@ terraform_function_max_instances = 20
 history_function_max_instances   = 10
 function_instance_memory_mb       = 2048
 
-vmss_sku           = "Standard_D2ads_v5"
+vmss_sku           = "Standard_B2as_v2"
 vmss_zones         = ["1", "2"]
-vmss_max_instances = 10
+vmss_max_instances = 2
+deploy_runner       = false
+runner_os_image_version = "22.04.202608060"
 
 runner_admin_ssh_public_key = "ssh-ed25519 AAAAREPLACEWITHAREALPUBLICKEY zeroops-production"
-runner_image_reference      = "crzeroopsprod2f871a.azurecr.io/terraform-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+runner_image_reference      = null
+deployment_identity_principal_id = null
 
 # Example only. Replace with the dedicated customer workload resource group.
 execution_scope_resource_id = null

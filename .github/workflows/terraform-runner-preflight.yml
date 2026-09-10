@@ -9,7 +9,7 @@ jobs:
   validate-runner-prerequisites:
     name: Validate Terraform runner prerequisites
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -19,8 +19,8 @@ jobs:
       AZURE_CORE_OUTPUT: none
       TARGET_RESOURCE_GROUP: zeroops-rg
       TARGET_LOCATION: centralindia
-      TARGET_VM_SIZE: Standard_D2ads_v5
-      TARGET_IMAGE_URN: Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest
+      TARGET_VM_SIZE: Standard_B2as_v2
+      TARGET_IMAGE_URN: Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:22.04.202608060
       TARGET_VNET_CIDR: 10.72.0.0/16
       REQUIRED_VCPUS: "2"
 
@@ -178,11 +178,10 @@ jobs:
                 fail_check "VM size ${TARGET_VM_SIZE} did not report a quota family."
               fi
               if [[ "${sku_accelerated_networking}" == "true" ]] && \
-                [[ "${sku_ephemeral_os_disk}" == "true" ]] && \
                 [[ "${sku_trusted_launch_disabled}" != "true" ]]; then
-                pass_check "VM size ${TARGET_VM_SIZE} supports accelerated networking, ephemeral OS disks, and Trusted Launch."
+                pass_check "VM size ${TARGET_VM_SIZE} supports accelerated networking and Trusted Launch; the runner intentionally uses a managed OS disk."
               else
-                fail_check "VM size ${TARGET_VM_SIZE} does not satisfy the fixed networking, disk, and Trusted Launch contract."
+                fail_check "VM size ${TARGET_VM_SIZE} does not satisfy the fixed networking and Trusted Launch contract."
               fi
             elif [[ "${sku_count}" -eq 0 ]]; then
               fail_check "VM size ${TARGET_VM_SIZE} is not published in ${TARGET_LOCATION}."
@@ -370,7 +369,6 @@ jobs:
                           vcpus == required_vcpus
                           and memory_gb >= 4
                           and accelerated_networking
-                          and ephemeral_os_disk
                           and trusted_launch
                           and {"1", "2"}.issubset(zones)
                           and not restricted
@@ -388,7 +386,7 @@ jobs:
               if [[ -n "${viable_alternatives}" ]]; then
                 warn_check "Validated 2-vCPU alternatives are available: ${viable_alternatives}. The fixed plan still requires separate approval before changing SKU."
               else
-                warn_check 'No evaluated 2-vCPU alternative currently satisfies size, memory, zones, restriction, and family-quota checks.'
+                warn_check 'No evaluated 2-vCPU alternative currently satisfies size, memory, networking, Trusted Launch, zones, restriction, and family-quota checks.'
               fi
             else
               warn_check 'Alternative VM size evidence could not be read.'

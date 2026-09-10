@@ -29,6 +29,8 @@ try:
         AI_REPOSITORY_PROMPT_VERSION,
         AI_REPOSITORY_PROVIDER,
         AI_GITHUB_API_VERSION,
+        AI_CHAT_MAX_CONTEXT_CHARS,
+        AI_CHAT_MAX_OUTPUT_TOKENS,
         IS_PRODUCTION,
         GITHUB_MODELS_API_KEY,
         GITHUB_MODELS_ENDPOINT,
@@ -39,6 +41,7 @@ try:
     )
     from backend.contracts.ai import AIWorkload
     from backend.services.model_gateway import ModelGateway
+    from backend.services.redaction import redact_sensitive_values
     from backend.services.providers import (
         ProviderConfiguration,
     )
@@ -60,6 +63,8 @@ except ImportError:
         AI_REPOSITORY_PROMPT_VERSION,
         AI_REPOSITORY_PROVIDER,
         AI_GITHUB_API_VERSION,
+        AI_CHAT_MAX_CONTEXT_CHARS,
+        AI_CHAT_MAX_OUTPUT_TOKENS,
         IS_PRODUCTION,
         GITHUB_MODELS_API_KEY,
         GITHUB_MODELS_ENDPOINT,
@@ -70,6 +75,7 @@ except ImportError:
     )
     from contracts.ai import AIWorkload
     from services.model_gateway import ModelGateway
+    from services.redaction import redact_sensitive_values
     from services.providers import (
         ProviderConfiguration,
     )
@@ -747,6 +753,8 @@ def analyze_repo_local(repo_path, project_id: str = "default") -> dict:
                     start_commands = "python app.py"
                 elif framework == "Django" and has_file(repo_path, "manage.py"):
                     start_commands = "python manage.py runserver"
+                elif framework == "FastAPI" and has_file(repo_path, "app.py"):
+                    start_commands = "uvicorn app:app --host 0.0.0.0 --port 8000"
 
                 # Database dependencies detection
                 db_keywords = {
@@ -1000,6 +1008,20 @@ def log_ai_request(provider: str, model: str, latency_s: float, success: bool,
         "AI_REQUEST | provider=%s | model=%s | latency=%.3fs | tokens=%d | status=%s | error=%s",
         provider, model, latency_s, tokens_used, status, error or "none"
     )
+
+
+def _bounded_chat_context(value: Any) -> str:
+    """Serialize redacted provider context inside a deterministic size bound."""
+
+    serialized = json.dumps(
+        redact_sensitive_values(value or {}),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(serialized) <= AI_CHAT_MAX_CONTEXT_CHARS:
+        return serialized
+    return serialized[:AI_CHAT_MAX_CONTEXT_CHARS] + "\n...[context truncated]"
 
 
 def analyze_repository(
@@ -1505,6 +1527,12 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
     provider = "github-models" if GITHUB_MODELS_API_KEY else "openai"
 
     if api_key:
+        bounded_context = _bounded_chat_context(project_metadata)
+        output_limit = (
+            {"max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
+            if provider == "github-models"
+            else {"max_completion_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
+        )
         prompt = f"""
         You are the ZeroOps project assistant. Provide a concise, practical answer using only the supplied project context.
         Clearly distinguish recorded facts from checks that still need to happen. Do not invent deployment status, costs,
@@ -1512,7 +1540,7 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
         model or infrastructure implementation details unless the user explicitly asks about a supported product setting.
         
         Project Context:
-        {json.dumps(project_metadata or {}, indent=2)}
+        {bounded_context}
         
         User Message: "{message}"
         """
@@ -1522,6 +1550,7 @@ def generate_chat_response(message: str, project_metadata: dict = None) -> str:
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
+                **output_limit,
             )
             latency = time.time() - start_time
             content = str(response.choices[0].message.content or "").strip()
@@ -1741,20 +1770,24 @@ or monitored. Plan mutations are handled separately by deterministic commands. N
 availability, costs, telemetry, security results, or runtime outcomes.
 
 Current Architecture Design:
-""" + json.dumps(plan, indent=2)
+""" + _bounded_chat_context(plan)
 
     if api_key:
         try:
             start_time = time.time()
             client = OpenAI(api_key=api_key, base_url=base_url, timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=1)
+            output_limit = (
+                {"max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
+                if provider == "github-models"
+                else {"max_completion_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
+            )
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
                 ],
-                temperature=0.7,
-                max_tokens=600
+                **output_limit,
             )
             latency = time.time() - start_time
             reply = str(response.choices[0].message.content or "").strip()

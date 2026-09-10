@@ -57,6 +57,9 @@ class ArtifactStore(Protocol):
     def was_completed(self, envelope: ExecutionEnvelope) -> bool:
         """Return whether an immutable completion receipt exists."""
 
+    def claim_approval(self, envelope: ExecutionEnvelope) -> None:
+        """Atomically bind an apply approval to its immutable apply job."""
+
     def mark_completed(
         self,
         envelope: ExecutionEnvelope,

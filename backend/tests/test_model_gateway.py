@@ -13,11 +13,13 @@ from backend.services.model_gateway import (
     ModelGateway,
     ModelOutputValidationError,
     ModelRouteNotConfiguredError,
+    build_provider,
     generate_repository_assessment,
     route_configuration,
 )
 from backend.services.providers import (
     AzureFoundryProvider,
+    AzureOpenAIProvider,
     GitHubModelsProvider,
     ProviderConfiguration,
     ProviderConfigurationError,
@@ -505,3 +507,17 @@ def test_foundry_route_rejects_api_keys_and_accepts_managed_identity_shape():
         openai_client=SimpleNamespace(),
     )
     assert provider.configuration.agent_name == "zeroops-repository-analyst"
+
+
+def test_build_provider_supports_foundry_openai_api_key_route():
+    provider = build_provider(
+        ProviderConfiguration(
+            provider="foundry-openai",
+            endpoint="https://zeroops-foundry.openai.azure.com/openai/v1",
+            model="zeroops-gpt-5-mini",
+            api_key="test-only-key",
+        )
+    )
+
+    assert isinstance(provider, AzureOpenAIProvider)
+    assert provider.configuration.provider == "azure-openai"

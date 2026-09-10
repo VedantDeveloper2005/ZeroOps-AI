@@ -12,11 +12,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowRight,
-  CheckCircle2,
   FolderGit2,
   Loader2,
   MessageSquareText,
-  Rocket,
   Send,
   Sparkles,
 } from "lucide-react";
@@ -24,6 +22,7 @@ import { DecisionIntelligencePanel } from "@/components/dashboard/DecisionIntell
 import { InfrastructurePlan as InfrastructurePlanView } from "@/components/dashboard/InfrastructurePlan";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
+import { TerraformApplyReview } from "@/components/dashboard/TerraformApplyReview";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   api,
@@ -33,6 +32,7 @@ import {
   type InfrastructurePlanUpdate,
 } from "@/lib/api";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 
 type PlanAction = "generate" | "update" | "approve" | "deploy" | null;
 
@@ -54,12 +54,13 @@ function InfrastructureWorkspace() {
     refreshProjects,
     refreshStats,
   } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [plan, setPlan] = useState<InfrastructurePlan | null>(null);
   const [preflight, setPreflight] = useState<DigitalTwinSimulation | null>(null);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [planAction, setPlanAction] = useState<PlanAction>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
+  const [advisorBusy, setAdvisorBusy] = useState(false);
   const [planMissing, setPlanMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
@@ -74,17 +75,6 @@ function InfrastructureWorkspace() {
       revision: plan?.revision ?? null,
     };
   }, [plan?.revision, selectedProjectId]);
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadPlan = useCallback(async (projectId: string) => {
     if (!projectId) return;
@@ -176,7 +166,7 @@ function InfrastructureWorkspace() {
         setPreflight(null);
       }
       addToast(
-        "Plan approved. Deployment prerequisites and runtime validation still apply.",
+        "Architecture approved. Terraform planning started; review the exact saved plan before deployment.",
         "success",
       );
       return true;
@@ -243,6 +233,21 @@ function InfrastructureWorkspace() {
     }
   };
 
+  const consultAdvisor = async () => {
+    if (!selectedProjectId) return;
+    setAdvisorBusy(true);
+    setError(null);
+    try {
+      await api.consultArchitectureAdvisor(selectedProjectId);
+      await loadPlan(selectedProjectId);
+      addToast("Architecture recommendations updated from Microsoft Foundry Agent.", "success");
+    } catch (err) {
+      setError(getErrorMessage(err, "Failed to consult Microsoft Foundry Advisor."));
+    } finally {
+      setAdvisorBusy(false);
+    }
+  };
+
   const selectProject = (projectId: string) => {
     setPlan(null);
     setPreflight(null);
@@ -283,14 +288,14 @@ function InfrastructureWorkspace() {
     );
   }
 
-  const busy = planAction !== null;
+  const busy = planAction !== null || advisorBusy;
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <PageHeader
         eyebrow="AI Architect"
         title="Architecture"
-        description="Review the source-backed Azure plan, make supported changes, and approve one revision before deployment."
+        description="Approve the source-backed architecture, then review and authorize its exact saved Terraform plan before deployment."
         actions={
           <fieldset
             disabled={busy || preflightBusy}
@@ -335,6 +340,8 @@ function InfrastructureWorkspace() {
             onUpdate={updatePlan}
             onApprove={approvePlan}
             onRegenerate={generatePlan}
+            onConsultAdvisor={consultAdvisor}
+            advisorBusy={advisorBusy}
             busy={busy || preflightBusy}
           />
 
@@ -360,31 +367,14 @@ function InfrastructureWorkspace() {
           </div>
 
           {plan.status === "approved" && (
-            <div className="flex flex-col gap-4 rounded-2xl border border-success/25 bg-success/10 p-5 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <CheckCircle2 size={16} className="text-success" aria-hidden="true" />
-                  Revision {plan.revision} is approved
-                </p>
-                <p className="mt-1 text-xs leading-5 text-foreground-muted">
-                  Starting deployment reruns prerequisites. Provisioning and the runtime health
-                  check can still fail and will be recorded in deployment logs.
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={busy || preflightBusy}
-                onClick={() => void startDeployment()}
-                className="ops-primary min-h-11 shrink-0 px-5 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {planAction === "deploy" ? (
-                  <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                ) : (
-                  <Rocket size={16} aria-hidden="true" />
-                )}
-                {planAction === "deploy" ? "Starting deployment" : "Start deployment"}
-              </button>
-            </div>
+            <TerraformApplyReview
+              key={`${selectedProjectId}:${plan.revision}`}
+              projectId={selectedProjectId}
+              revision={plan.revision}
+              disabled={busy || preflightBusy}
+              deploymentBusy={planAction === "deploy"}
+              onStartDeployment={startDeployment}
+            />
           )}
         </>
       ) : planMissing ? (

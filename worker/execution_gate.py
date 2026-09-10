@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import stat
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -29,6 +31,12 @@ FORBIDDEN_BUNDLE_SUFFIXES = {
     ".tfplan",
     ".tfstate",
 }
+_SECRET_VALUE_PATTERN = re.compile(
+    r"(?:-----BEGIN [A-Z ]+PRIVATE KEY-----|"
+    r"(?:AccountKey|SharedAccessSignature|client_secret|password)\s*=|"
+    r"(?:Bearer|Basic)\s+[A-Za-z0-9+/=_-]{8,}|[?&](?:sig|se|sp|sv)=)",
+    re.IGNORECASE,
+)
 
 
 class ExecutionGateError(RuntimeError):
@@ -108,6 +116,65 @@ def require_provider_lockfile(terraform_root: Path) -> None:
         )
 
 
+def validate_input_variables_file(
+    envelope: ExecutionEnvelope,
+    terraform_root: Path,
+) -> None:
+    """Verify canonical, typed, non-secret tfvars before Terraform sees them."""
+
+    path = terraform_root / envelope.input_variables.file_name
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > 64 * 1024:
+        raise ExecutionGateError("Terraform input variables file is missing or invalid.")
+    verify_file_digest(path, envelope.input_variables.sha256, label="Terraform inputs")
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ExecutionGateError("Terraform input variables are not valid JSON.") from error
+    if not isinstance(value, dict):
+        raise ExecutionGateError("Terraform input variables must be a JSON object.")
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    if raw != canonical:
+        raise ExecutionGateError("Terraform input variables are not canonical JSON.")
+
+    definitions = {item.name: item.type for item in envelope.input_variables.definitions}
+    if set(value) != set(definitions):
+        raise ExecutionGateError("Terraform input values differ from their approved definitions.")
+    for name, expected_type in definitions.items():
+        item = value[name]
+        if expected_type == "string":
+            valid = type(item) is str
+            strings = [item] if valid else []
+        elif expected_type == "number":
+            valid = type(item) in {int, float} and (
+                type(item) is int or math.isfinite(item)
+            )
+            strings = []
+        elif expected_type == "bool":
+            valid = type(item) is bool
+            strings = []
+        else:
+            valid = isinstance(item, list) and len(item) <= 64 and all(
+                type(child) is str for child in item
+            )
+            strings = item if valid else []
+        if not valid:
+            raise ExecutionGateError("Terraform input value has the wrong approved type.")
+        if any(
+            len(child) > 1024
+            or any(ord(character) < 32 for character in child)
+            or _SECRET_VALUE_PATTERN.search(child)
+            for child in strings
+        ):
+            raise ExecutionGateError("Terraform input contains secret-like or unsafe text.")
+
+
 def validate_saved_plan_gate(
     envelope: ExecutionEnvelope,
     saved_plan_path: Path,
@@ -121,6 +188,8 @@ def validate_saved_plan_gate(
     verify_file_digest(saved_plan_path, envelope.saved_plan.sha256, label="Saved plan")
     if datetime.now(timezone.utc) - envelope.approval.approved_at > maximum_approval_age:
         raise ExecutionGateError("Approval is older than the permitted apply window.")
+    if datetime.now(timezone.utc) >= envelope.approval.expires_at:
+        raise ExecutionGateError("Approval has expired.")
     if envelope.approval.plan_sha256 != sha256_file(saved_plan_path):
         raise ExecutionGateError("Approved plan digest does not match downloaded plan.")
     if envelope.approval.bundle_sha256 != envelope.bundle.sha256:
@@ -128,7 +197,7 @@ def validate_saved_plan_gate(
 
 
 def summarize_plan_json(raw_json: bytes) -> dict[str, Any]:
-    """Reduce Terraform's sensitive plan JSON to counts and resource kinds."""
+    """Reduce a plan to counts and review-safe addresses; never retain values."""
 
     try:
         document = json.loads(raw_json)
@@ -146,6 +215,7 @@ def summarize_plan_json(raw_json: bytes) -> dict[str, Any]:
         "no_op": 0,
     }
     resource_kinds: set[str] = set()
+    safe_changes: list[dict[str, Any]] = []
     changes = document.get("resource_changes")
     if not isinstance(changes, list):
         changes = []
@@ -158,6 +228,29 @@ def summarize_plan_json(raw_json: bytes) -> dict[str, Any]:
             resource_kinds.add(resource_type)
         change_body = change.get("change")
         actions = change_body.get("actions") if isinstance(change_body, dict) else None
+        address = change.get("address")
+        if (
+            isinstance(address, str)
+            and re.fullmatch(r"azurerm_[a-z0-9_]+\.[A-Za-z0-9_-]+", address)
+            and isinstance(resource_type, str)
+            and re.fullmatch(r"azurerm_[a-z0-9_]+", resource_type)
+            and actions in (
+                ["create"],
+                ["update"],
+                ["delete"],
+                ["delete", "create"],
+                ["create", "delete"],
+                ["read"],
+                ["no-op"],
+            )
+        ):
+            safe_changes.append(
+                {
+                    "address": address,
+                    "type": resource_type,
+                    "actions": list(actions),
+                }
+            )
         if actions == ["create"]:
             action_counts["create"] += 1
         elif actions == ["update"]:
@@ -176,7 +269,106 @@ def summarize_plan_json(raw_json: bytes) -> dict[str, Any]:
         "terraform_version": str(document.get("terraform_version", ""))[:32],
         "actions": action_counts,
         "resource_kinds": sorted(resource_kinds),
+        "changes": sorted(
+            safe_changes,
+            key=lambda item: (item["address"], item["type"], item["actions"]),
+        )[:500],
     }
+
+
+def validate_plan_guardrails(
+    raw_json: bytes,
+    envelope: ExecutionEnvelope,
+) -> dict[str, Any]:
+    """Validate resource types, action counts, and resource-group scope."""
+
+    try:
+        document = json.loads(raw_json)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ExecutionGateError("Terraform returned invalid plan JSON.") from error
+    if not isinstance(document, dict):
+        raise ExecutionGateError("Terraform returned invalid plan JSON.")
+    summary = summarize_plan_json(raw_json)
+    actions = summary["actions"]
+    total_changes = sum(
+        actions[name] for name in ("create", "update", "delete", "replace")
+    )
+    guardrails = envelope.guardrails
+    if total_changes > guardrails.maximum_resource_changes:
+        raise ExecutionGateError("Terraform plan exceeds the approved change count.")
+    if actions["delete"] > guardrails.maximum_delete_count:
+        raise ExecutionGateError("Terraform plan exceeds the approved delete count.")
+    if actions["replace"] > guardrails.maximum_replace_count:
+        raise ExecutionGateError("Terraform plan exceeds the approved replacement count.")
+    if not set(summary["resource_kinds"]).issubset(
+        set(guardrails.allowed_resource_types)
+    ):
+        raise ExecutionGateError("Terraform plan contains a resource type outside approval.")
+
+    target_prefix = (
+        f"/subscriptions/{envelope.target_subscription_id}/resourceGroups/"
+        f"{guardrails.target_resource_group}"
+    ).lower()
+    changes = document.get("resource_changes")
+    if not isinstance(changes, list):
+        changes = []
+    for change in changes:
+        if not isinstance(change, dict) or change.get("mode", "managed") != "managed":
+            continue
+        change_body = change.get("change")
+        actions_value = change_body.get("actions") if isinstance(change_body, dict) else None
+        if actions_value in (["read"], ["no-op"]):
+            continue
+        resource_type = change.get("type")
+        if resource_type not in guardrails.allowed_resource_types:
+            raise ExecutionGateError("Terraform plan contains a resource type outside approval.")
+        bodies = []
+        if isinstance(change_body, dict):
+            bodies = [
+                item
+                for item in (change_body.get("after"), change_body.get("before"))
+                if isinstance(item, dict)
+            ]
+        scoped = False
+        for body in bodies:
+            resource_group = body.get("resource_group_name")
+            if isinstance(resource_group, str):
+                if resource_group.lower() != guardrails.target_resource_group.lower():
+                    raise ExecutionGateError("Terraform plan escapes the approved resource group.")
+                scoped = True
+            scope = body.get("scope")
+            if isinstance(scope, str):
+                normalized_scope = scope.rstrip("/").lower()
+                if not (
+                    normalized_scope == target_prefix
+                    or normalized_scope.startswith(target_prefix + "/")
+                ):
+                    raise ExecutionGateError("Terraform plan escapes the approved ARM scope.")
+                scoped = True
+            for key, item in body.items():
+                if (
+                    isinstance(key, str)
+                    and (key == "id" or key.endswith("_id"))
+                    and isinstance(item, str)
+                    and (
+                        item.lower() == target_prefix
+                        or item.lower().startswith(target_prefix + "/")
+                    )
+                ):
+                    scoped = True
+            if resource_type == "azurerm_resource_group":
+                name = body.get("name")
+                if isinstance(name, str):
+                    if name.lower() != guardrails.target_resource_group.lower():
+                        raise ExecutionGateError(
+                            "Terraform plan targets an unapproved resource group."
+                        )
+                    scoped = True
+        if not scoped:
+            raise ExecutionGateError(
+                "Terraform plan resource scope cannot be proven inside the approved group."
+            )
+    return summary
 
 
 def decode_envelope_json(raw_message: bytes) -> ExecutionEnvelope:
@@ -187,4 +379,3 @@ def decode_envelope_json(raw_message: bytes) -> ExecutionEnvelope:
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ContractError("Execution envelope is not valid UTF-8 JSON.") from error
     return ExecutionEnvelope.from_mapping(payload)
-

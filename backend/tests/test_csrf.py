@@ -3,13 +3,14 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 try:
-    from backend.main import app
+    from backend.main import app, database
 except ImportError:
-    from main import app
+    from main import app, database
 
 client = TestClient(app)
 
-def test_csrf_middleware_gating():
+def test_csrf_middleware_gating(monkeypatch):
+    monkeypatch.setattr(database, "database_available", True)
     # 1. GET requests should pass even without CSRF header (since CSRF only applies to state-changing methods)
     response = client.get("/api/health")
     assert response.status_code == 200

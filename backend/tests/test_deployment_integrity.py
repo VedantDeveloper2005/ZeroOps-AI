@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 try:
     from backend.services import app_service, pipeline
     from worker import terraform_runner
@@ -211,6 +213,19 @@ def test_worker_generates_internal_artifact_and_persists_metadata_only(monkeypat
     connection = Connection()
     runner = TerraformRunner("postgresql://example.invalid/zeroops")
     monkeypatch.setattr(runner, "_get_connection", lambda: connection)
+    monkeypatch.setattr(
+        runner,
+        "_require_completed_terraform_apply",
+        lambda *_args, **_kwargs: (
+            actions.append("terraform-gate")
+            or {
+                "operation_run_id": "10000000-0000-0000-0000-000000000001",
+                "plan_id": "20000000-0000-0000-0000-000000000001",
+                "plan_revision": 8,
+                "plan_digest": "a" * 64,
+            }
+        ),
+    )
     monkeypatch.setattr(terraform_runner.terraform_generator.config, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(
         terraform_runner.github_oauth,
@@ -266,7 +281,7 @@ def test_worker_generates_internal_artifact_and_persists_metadata_only(monkeypat
     })
 
     assert succeeded is True
-    assert actions == ["generate", "persist", "pipeline"]
+    assert actions == ["generate", "persist", "terraform-gate", "pipeline"]
     assert connection.closed is True
 
     artifact_path = tmp_path / "internal-iac" / deployment_id / "main.tf"
@@ -294,3 +309,308 @@ def test_worker_generates_internal_artifact_and_persists_metadata_only(monkeypat
     assert "variables" not in internal_iac
     assert "client_secret" not in internal_iac
     assert "artifact_path" not in internal_iac
+
+
+def _completed_apply_gate_fixture():
+    tenant_id = uuid.UUID("a1000000-0000-0000-0000-000000000001")
+    project_id = uuid.UUID("a2000000-0000-0000-0000-000000000001")
+    user_id = uuid.UUID("a3000000-0000-0000-0000-000000000001")
+    plan_id = uuid.UUID("a4000000-0000-0000-0000-000000000001")
+    operation_run_id = uuid.UUID("a5000000-0000-0000-0000-000000000001")
+    approval_id = uuid.UUID("a6000000-0000-0000-0000-000000000001")
+    apply_job_id = uuid.UUID("a7000000-0000-0000-0000-000000000001")
+    plan_job_digest = "1" * 64
+    plan_sha256 = "2" * 64
+    bundle_sha256 = "3" * 64
+    input_variables_sha256 = "4" * 64
+    scope_digest = "5" * 64
+    policy_digest = "6" * 64
+    cost_digest = "7" * 64
+    event_id = "evt-completed-exact-apply"
+    plan_data = {
+        "components": [
+            {
+                "id": "application",
+                "service": "Azure App Service",
+                "tier": "zeroops-linux-plan",
+                "deployable": True,
+            }
+        ]
+    }
+    azure_connection = SimpleNamespace(
+        tenant_id="entra-tenant",
+        subscription_id="azure-subscription",
+        client_id="service-principal-client",
+        connection_status="connected",
+        region="eastus",
+        resource_group="zeroops-test",
+        acr_login_server="zeroopstest.azurecr.io",
+        app_service_plan="zeroops-linux-plan",
+        deployment_target_fingerprint=None,
+        deployment_target_verified_at=datetime(2026, 1, 1),
+        namespace_prefix=None,
+        is_active=True,
+    )
+    azure_connection.deployment_target_fingerprint = (
+        terraform_runner.deployment_targets.configuration_fingerprint(azure_connection)
+    )
+    plan_digest = terraform_runner.canonical_digest(
+        {
+            "id": str(plan_id),
+            "project_id": str(project_id),
+            "provider": "azure",
+            "region": "eastus",
+            "status": "approved",
+            "revision": 3,
+            "plan": plan_data,
+            "cost_estimate": None,
+        }
+    )
+    proof = {
+        "schema_version": "terraform-apply-proof.v1",
+        "operation_run_id": str(operation_run_id),
+        "approval_id": str(approval_id),
+        "apply_job_id": str(apply_job_id),
+        "approved_plan_digest": plan_digest,
+        "plan_job_digest": plan_job_digest,
+        "plan_sha256": plan_sha256,
+        "bundle_sha256": bundle_sha256,
+        "target_fingerprint": azure_connection.deployment_target_fingerprint,
+        "completion_event_id": event_id,
+        "completed_at": "2026-01-01T00:00:00+00:00",
+    }
+    current = {
+        "terraform_operation_run_id": operation_run_id,
+        "infrastructure_metadata": {
+            "architecture_plan": {"id": str(plan_id), "revision": 3},
+            "terraform_apply": proof,
+        },
+        "deployment_tenant_id": tenant_id,
+        "plan_id": plan_id,
+        "plan_project_id": project_id,
+        "plan_user_id": user_id,
+        "plan_provider": "azure",
+        "plan_region": "eastus",
+        "plan_status": "approved",
+        "plan_revision": 3,
+        "plan_data": plan_data,
+        "plan_cost_estimate": None,
+        "azure_tenant_id": azure_connection.tenant_id,
+        "azure_subscription_id": azure_connection.subscription_id,
+        "azure_client_id": azure_connection.client_id,
+        "azure_connection_status": azure_connection.connection_status,
+        "azure_region": azure_connection.region,
+        "azure_resource_group": azure_connection.resource_group,
+        "azure_acr_login_server": azure_connection.acr_login_server,
+        "azure_app_service_plan": azure_connection.app_service_plan,
+        "deployment_target_fingerprint": azure_connection.deployment_target_fingerprint,
+        "deployment_target_verified_at": azure_connection.deployment_target_verified_at,
+        "azure_namespace_prefix": None,
+        "azure_is_active": True,
+    }
+    applied = {
+        "input_digest": plan_digest,
+        "operation_tenant_id": tenant_id,
+        "operation_status": "completed",
+        "summary": {
+            "approved_plan_id": str(plan_id),
+            "approved_plan_revision": 3,
+            "approved_plan_digest": plan_digest,
+            "target_fingerprint": azure_connection.deployment_target_fingerprint,
+        },
+        "plan_job_digest": plan_job_digest,
+        "plan_tenant_id": tenant_id,
+        "terraform_revision": 3,
+        "bundle": {"sha256": bundle_sha256},
+        "input_variables": {"sha256": input_variables_sha256},
+        "guardrails": {"scope_digest": scope_digest, "policy_digest": policy_digest},
+        "saved_plan": {
+            "sha256": plan_sha256,
+            "plan_job_digest": plan_job_digest,
+            "bundle_sha256": bundle_sha256,
+            "input_variables_sha256": input_variables_sha256,
+            "scope_digest": scope_digest,
+            "policy_digest": policy_digest,
+        },
+        "cost_estimate": {
+            "artifact_sha256": cost_digest,
+            "currency": "USD",
+            "monthly_cost_microunits": 0,
+        },
+        "approval_id": approval_id,
+        "approval_tenant_id": tenant_id,
+        "apply_job_id": apply_job_id,
+        "approval_status": "consumed",
+        "approved_plan_job_digest": plan_job_digest,
+        "approved_plan_sha256": plan_sha256,
+        "approved_bundle_sha256": bundle_sha256,
+        "approved_input_variables_sha256": input_variables_sha256,
+        "approved_scope_digest": scope_digest,
+        "approved_policy_digest": policy_digest,
+        "approved_cost_estimate_sha256": cost_digest,
+        "approved_currency": "USD",
+        "approved_monthly_cost_microunits": 0,
+        "event_data": {
+            "status": "completed",
+            "stage": "terraform-apply",
+            "metadata": {
+                "operation": "apply",
+                "job_id": str(apply_job_id),
+                "approval_id": str(approval_id),
+                "plan_sha256": plan_sha256,
+                "bundle_sha256": bundle_sha256,
+            },
+        },
+        "event_tenant_id": tenant_id,
+        "external_event_id": event_id,
+        "event_fingerprint": "8" * 64,
+    }
+    job = {
+        "deployment_id": "a8000000-0000-0000-0000-000000000001",
+        "project_id": str(project_id),
+        "user_id": str(user_id),
+    }
+    return current, applied, job
+
+
+class _GateConnection:
+    def __init__(self, current, applied):
+        self.current = current
+        self.applied = applied
+
+    def cursor(self, **_kwargs):
+        connection = self
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, statement, _params):
+                normalized = " ".join(statement.split())
+                self.result = (
+                    connection.current
+                    if "d.terraform_operation_run_id" in normalized
+                    else connection.applied
+                )
+
+            def fetchone(self):
+                return self.result
+
+        return Cursor()
+
+
+def test_worker_requires_the_exact_completed_terraform_operation_before_cloud_execution():
+    current, applied, job = _completed_apply_gate_fixture()
+    runner = TerraformRunner("postgresql://example.invalid/zeroops")
+
+    proof = runner._require_completed_terraform_apply(
+        _GateConnection(current, applied),
+        job,
+    )
+
+    assert proof["operation_run_id"] == str(current["terraform_operation_run_id"])
+    assert proof["plan_revision"] == 3
+
+
+@pytest.mark.parametrize(
+    "operation_binding",
+    [
+        None,
+        uuid.UUID("a5000000-0000-0000-0000-000000000099"),
+    ],
+    ids=["legacy-missing-fk", "rebound-to-different-operation"],
+)
+def test_worker_rejects_legacy_or_rebound_deployment_without_matching_operation_fk(
+    operation_binding,
+):
+    current, applied, job = _completed_apply_gate_fixture()
+    current["terraform_operation_run_id"] = operation_binding
+    runner = TerraformRunner("postgresql://example.invalid/zeroops")
+
+    with pytest.raises(RuntimeError, match="operation binding"):
+        runner._require_completed_terraform_apply(
+            _GateConnection(current, applied),
+            job,
+        )
+
+
+def test_app_code_only_existing_app_service_deployment_does_not_require_terraform():
+    """App-code-only existing App Service deployment does not require Terraform."""
+    current, applied, job = _completed_apply_gate_fixture()
+    current["terraform_operation_run_id"] = None
+    current["infrastructure_metadata"] = {
+        "target_provider": "azure-app-service",
+        "app_service_reused": True,
+        "terraform_apply_required": False,
+    }
+    runner = TerraformRunner("postgresql://example.invalid/zeroops")
+
+    proof = runner._require_completed_terraform_apply(
+        _GateConnection(current, applied),
+        job,
+    )
+
+    assert proof is not None
+    assert proof.get("app_service_reused") is True
+    assert proof.get("plan_id") == str(current["plan_id"])
+    assert proof.get("plan_revision") == current["plan_revision"]
+
+
+def test_infrastructure_changing_deployment_still_requires_real_terraform_approval_apply_evidence():
+    """Infrastructure-changing deployment still requires real Terraform approval/apply evidence."""
+    current, applied, job = _completed_apply_gate_fixture()
+    current["terraform_operation_run_id"] = None
+    current["infrastructure_metadata"] = {
+        "target_provider": "azure-app-service",
+        "app_service_reused": False,
+        "terraform_apply_required": True,
+    }
+    runner = TerraformRunner("postgresql://example.invalid/zeroops")
+
+    with pytest.raises(RuntimeError, match="Terraform apply proof is invalid|no exact completed Terraform apply proof"):
+        runner._require_completed_terraform_apply(
+            _GateConnection(current, applied),
+            job,
+        )
+
+
+def test_no_terraform_apply_completed_record_created_for_app_service_reused():
+    """No fake terraform.apply.completed record is created when Terraform never ran."""
+    from backend.services.deployment_targets import is_app_service_reused_deployment
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        connection_status="connected",
+        is_active=True,
+        deployment_target_verified_at=datetime.utcnow(),
+        deployment_target_fingerprint="dummy",
+    )
+    from backend.services.deployment_targets import configuration_fingerprint
+    connection.deployment_target_fingerprint = configuration_fingerprint(connection)
+
+    # Reused when no infrastructure change
+    assert is_app_service_reused_deployment(
+        target="azure-app-service",
+        connection=connection,
+        infrastructure_change=False,
+        has_iac=False,
+    ) is True
+
+    # Not reused when infrastructure changed
+    assert is_app_service_reused_deployment(
+        target="azure-app-service",
+        connection=connection,
+        infrastructure_change=True,
+        has_iac=False,
+    ) is False
+
+    # Not reused when IaC files present
+    assert is_app_service_reused_deployment(
+        target="azure-app-service",
+        connection=connection,
+        infrastructure_change=False,
+        has_iac=True,
+    ) is False

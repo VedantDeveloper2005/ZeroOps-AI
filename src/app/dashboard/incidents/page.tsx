@@ -19,6 +19,7 @@ import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatePanel } from "@/components/ui/StatePanel";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 import {
   ApiError,
   api,
@@ -67,24 +68,13 @@ export default function IncidentsPage() {
 function IncidentsWorkspace() {
   const searchParams = useSearchParams();
   const { addToast, projects, isLoading: projectsLoading } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [state, setState] = useState<IncidentResponseState>("idle");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const requestSequence = useRef(0);
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadIncidents = useCallback(async (projectId: string) => {
     if (!projectId) return;

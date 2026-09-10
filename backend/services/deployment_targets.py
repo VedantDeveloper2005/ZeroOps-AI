@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import json
+import re
 from typing import Any
 
 
@@ -230,6 +231,21 @@ def namespace_prefix(target: SelectedTarget, user_id: Any) -> str:
     return existing or f"{default}-{str(user_id)[:8]}"
 
 
+def app_service_application_name(project_name: str, project_id: Any) -> str:
+    """Return the one Web App and image-repository name used by plan and release."""
+
+    slug = re.sub(
+        r"-+",
+        "-",
+        re.sub(r"[^a-z0-9-]", "-", str(project_name or "").lower()),
+    ).strip("-")
+    slug = slug[:38] or "app"
+    project_key = re.sub(r"[^0-9a-f]", "", str(project_id).lower())[:8]
+    if len(project_key) != 8:
+        raise ValueError("Project ID cannot produce a deterministic App Service name.")
+    return f"zo-{slug}-{project_key}"
+
+
 def image_ref_for_target(target: SelectedTarget, project_slug: str, version: str) -> str:
     registry = _clean(getattr(target.connection, "acr_login_server", "")).rstrip("/")
     if not registry:
@@ -250,3 +266,30 @@ def metadata_for_target(target: SelectedTarget) -> dict:
         metadata["aks_cluster_name"] = getattr(target.connection, "aks_cluster_name", None)
         metadata.pop("app_service_plan", None)
     return metadata
+
+
+def is_app_service_reused_deployment(
+    *,
+    target: str | None,
+    connection: Any | None,
+    infrastructure_change: bool = False,
+    has_iac: bool = False,
+) -> bool:
+    """Check if deployment is an application-only release to an existing verified Azure App Service.
+
+    For an application-only deployment to an EXISTING Azure App Service:
+    - target must be azure-app-service
+    - existing App Service target must be verified
+    - no IaC/infrastructure mutation can be pending
+    - change detection must not classify the change as infrastructure-changing
+    - no new infrastructure provisioning may be requested
+
+    In this case, Terraform plan/apply stages are skipped, and no Terraform
+    apply evidence/proof is required or manufactured.
+    """
+    target_name = _clean(target).casefold()
+    if target_name not in {"azure-app-service", "app-service", "appservice"}:
+        return False
+    if infrastructure_change or has_iac:
+        return False
+    return has_verified_app_service_target(connection)

@@ -1,0 +1,152 @@
+#cloud-config
+write_files:
+  - path: /etc/zeroops-runner.env
+    owner: root:root
+    permissions: "0600"
+    content: |
+      AZURE_CLIENT_ID=${identity_client_id}
+      ZEROOPS_SERVICE_BUS_NAMESPACE=${service_bus_namespace}
+      ZEROOPS_PLAN_QUEUE=${plan_queue_name}
+      ZEROOPS_APPLY_QUEUE=${apply_queue_name}
+      ZEROOPS_EVENT_QUEUE=${event_queue_name}
+      ZEROOPS_ARTIFACT_ACCOUNT=${artifact_storage_account_name}
+      ZEROOPS_EXECUTOR_ACCOUNT=${executor_storage_account_name}
+      ZEROOPS_PRIVATE_PLAN_CONTAINER=${executor_plan_container_name}
+      ZEROOPS_STATE_CONTAINER=${executor_state_container_name}
+      ZEROOPS_VMSS_RESOURCE_ID=${vmss_resource_id}
+      ZEROOPS_RESOURCE_GROUP=${resource_group_name}
+      ZEROOPS_VMSS_NAME=${vmss_name}
+  - path: /usr/local/sbin/zeroops-install-docker
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/usr/bin/python3
+      import hashlib
+      import os
+      import pathlib
+      import shutil
+      import subprocess
+      import urllib.request
+
+      url = "https://download.docker.com/linux/static/stable/x86_64/docker-29.7.1.tgz"
+      expected = "0fcea2a8b4d1b54ccc9010e3451b78504a369d414f37eb3bb79300e1b5c22ce6"
+      archive = pathlib.Path("/run/docker-29.7.1.tgz")
+      staging = pathlib.Path("/run/zeroops-docker-install")
+      digest = hashlib.sha256()
+      request = urllib.request.Request(url, headers={"User-Agent": "ZeroOps-bootstrap/1"})
+      with urllib.request.urlopen(request, timeout=120) as response, archive.open("wb") as output:
+          while chunk := response.read(1024 * 1024):
+              digest.update(chunk)
+              output.write(chunk)
+      if digest.hexdigest() != expected:
+          raise SystemExit("Docker archive checksum mismatch")
+      if staging.exists():
+          shutil.rmtree(staging)
+      staging.mkdir(mode=0o700)
+      subprocess.run(["tar", "-xzf", str(archive), "-C", str(staging)], check=True)
+      for binary in (staging / "docker").iterdir():
+          destination = pathlib.Path("/usr/local/bin") / binary.name
+          # /run is a tmpfs while /usr/local is on the OS disk, so an atomic
+          # rename raises EXDEV. shutil.move safely falls back to copy+unlink.
+          shutil.move(str(binary), destination)
+          destination.chmod(0o755)
+      archive.unlink()
+      shutil.rmtree(staging)
+  - path: /usr/local/sbin/zeroops-acr-login
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/usr/bin/python3
+      import json
+      import os
+      import subprocess
+      import urllib.parse
+      import urllib.request
+
+      registry = "${registry_name}.azurecr.io"
+      imds_query = urllib.parse.urlencode({
+          "api-version": "2018-02-01",
+          "client_id": "${identity_client_id}",
+          "resource": "https://management.azure.com/",
+      })
+      imds_request = urllib.request.Request(
+          f"http://169.254.169.254/metadata/identity/oauth2/token?{imds_query}",
+          headers={"Metadata": "true"},
+      )
+      with urllib.request.urlopen(imds_request, timeout=30) as response:
+          arm_token = json.load(response)["access_token"]
+      exchange_body = urllib.parse.urlencode({
+          "grant_type": "access_token",
+          "service": registry,
+          "tenant": "${tenant_id}",
+          "access_token": arm_token,
+      }).encode("ascii")
+      exchange_request = urllib.request.Request(
+          f"https://{registry}/oauth2/exchange",
+          data=exchange_body,
+          headers={"Content-Type": "application/x-www-form-urlencoded"},
+      )
+      with urllib.request.urlopen(exchange_request, timeout=30) as response:
+          refresh_token = json.load(response)["refresh_token"]
+      subprocess.run(
+          ["/usr/local/bin/docker", "login", registry, "--username", "00000000-0000-0000-0000-000000000000", "--password-stdin"],
+          input=refresh_token,
+          text=True,
+          check=True,
+          env={**os.environ, "DOCKER_CONFIG": "/run/zeroops-docker"},
+      )
+  - path: /etc/systemd/system/docker.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Checksum-pinned Docker Engine for ZeroOps
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=notify
+      ExecStart=/usr/local/bin/dockerd --host=unix:///var/run/docker.sock
+      ExecReload=/bin/kill -s HUP $MAINPID
+      Restart=always
+      RestartSec=5
+      TimeoutStartSec=0
+      Delegate=yes
+      KillMode=process
+      LimitNOFILE=infinity
+      LimitNPROC=infinity
+      LimitCORE=infinity
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/systemd/system/zeroops-runner.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=ZeroOps immutable Terraform executor
+      Wants=network-online.target docker.service
+      After=network-online.target docker.service
+
+      [Service]
+      Type=simple
+      Restart=on-failure
+      RestartSec=15
+      EnvironmentFile=/etc/zeroops-runner.env
+      Environment=DOCKER_CONFIG=/run/zeroops-docker
+      ExecStartPre=/usr/bin/install -d -o root -g root -m 0700 /run/zeroops-docker
+      ExecStartPre=/usr/local/sbin/zeroops-acr-login
+      ExecStartPre=/usr/local/bin/docker pull ${runner_image_reference}
+      ExecStart=/usr/local/bin/docker run --rm --name zeroops-runner --network host --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=512m --tmpfs /work:rw,nosuid,nodev,size=4096m --env-file /etc/zeroops-runner.env ${runner_image_reference}
+      ExecStop=/usr/local/bin/docker stop --time 300 zeroops-runner
+      TimeoutStopSec=330
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - /usr/local/sbin/zeroops-install-docker
+  - test "$(printf '%s' '${runner_image_reference}' | sed -n 's/.*@sha256:\\([0-9a-f]\\{64\\}\\)$/\\1/p' | wc -c)" -eq 65
+  - systemctl daemon-reload
+  - systemctl enable --now docker
+  - systemctl enable --now zeroops-runner

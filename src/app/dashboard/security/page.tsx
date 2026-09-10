@@ -18,6 +18,7 @@ import { StatePanel } from "@/components/ui/StatePanel";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 import {
   ApiError,
   api,
@@ -63,7 +64,7 @@ export default function SecurityPage() {
 function SecurityWorkspace() {
   const searchParams = useSearchParams();
   const { projects, isLoading: projectsLoading } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [configuration, setConfiguration] = useState<SecurityStatus | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [scans, setScans] = useState<SecurityScan[]>([]);
@@ -71,17 +72,6 @@ function SecurityWorkspace() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const requestSequence = useRef(0);
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadSecurity = useCallback(async (projectId: string) => {
     if (!projectId) return;

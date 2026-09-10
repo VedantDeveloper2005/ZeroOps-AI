@@ -3,6 +3,8 @@ import subprocess
 import uuid
 from types import SimpleNamespace
 
+import pytest
+
 try:
     from backend import main, models
 except ImportError:
@@ -19,6 +21,9 @@ class ScalarResult:
         return self
 
     def first(self):
+        return self._first
+
+    def scalar(self):
         return self._first
 
     def all(self):
@@ -65,18 +70,26 @@ def test_project_analyze_uses_project_branch_and_persists_supported_fields(monke
         framework="Next.js",
         language="TypeScript",
     )
-    user = SimpleNamespace(id=user_id, github_access_token_encrypted=None)
+    user = SimpleNamespace(id=user_id, github_access_token_encrypted="encrypted-token")
     clone_call = {}
     cleaned = []
 
     async def owned_project(*_):
         return project
 
+    async def resolve_branch_commit(token, full_name, branch):
+        assert token == "decrypted-token"
+        assert full_name == "owner/repository"
+        assert branch == "release/selected"
+        return "a" * 40
+
     def clone_repo(full_name, token, **kwargs):
         clone_call.update(full_name=full_name, token=token, **kwargs)
         return str(main.config.WORKSPACE_DIR) + "/deployments/analysis-test"
 
     monkeypatch.setattr(main, "_owned_project_or_404", owned_project)
+    monkeypatch.setattr(main.github_oauth, "decrypt_token", lambda _: "decrypted-token")
+    monkeypatch.setattr(main.github_oauth, "resolve_branch_commit", resolve_branch_commit)
     monkeypatch.setattr(main.git, "clone_repo", clone_repo)
     monkeypatch.setattr(main.git, "cleanup_workspace", cleaned.append)
     monkeypatch.setattr(
@@ -103,7 +116,7 @@ def test_project_analyze_uses_project_branch_and_persists_supported_fields(monke
 
     assert result["deployment_risk"].startswith("Runtime credentials")
     assert clone_call["full_name"] == "owner/repository"
-    assert clone_call["branch"] == "release/selected"
+    assert clone_call["commit_sha"] == "a" * 40
     assert clone_call["workspace_key"].startswith("analysis-")
     assert cleaned == [str(main.config.WORKSPACE_DIR) + "/deployments/analysis-test"]
     stored_analysis = next(item for item in db.added if isinstance(item, models.AIAnalysis))
@@ -184,6 +197,7 @@ def test_security_status_reports_only_available_controls(monkeypatch):
     analysis = SimpleNamespace(vulnerabilities=["CVE-record"])
     responses = iter([
         ScalarResult(first=project),
+        ScalarResult(first=1),
         ScalarResult(first=analysis),
     ])
 
@@ -206,6 +220,31 @@ def test_security_status_reports_only_available_controls(monkeypatch):
     assert result["threatLevel"] == "Unavailable"
     assert result["namespaceIsolated"] is False
     assert result["rbacEnabled"] is False
+    assert result["secretsManaged"] == 1
+
+
+def test_security_status_does_not_report_zero_when_analysis_storage_fails():
+    project = SimpleNamespace(id=uuid.uuid4())
+    responses = iter([
+        ScalarResult(first=project),
+        ScalarResult(first=0),
+    ])
+
+    class Session:
+        async def execute(self, _):
+            try:
+                return next(responses)
+            except StopIteration:
+                raise RuntimeError("analysis storage unavailable") from None
+
+    with pytest.raises(RuntimeError, match="analysis storage unavailable"):
+        asyncio.run(
+            main.get_security_status(
+                project.id,
+                Session(),
+                SimpleNamespace(id=uuid.uuid4()),
+            )
+        )
 
 
 def test_empty_activity_reads_do_not_insert_synthetic_events():

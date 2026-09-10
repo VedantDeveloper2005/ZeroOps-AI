@@ -357,6 +357,82 @@ class ModelClientTests(unittest.TestCase):
         self.assertFalse(request_body["stream"])
         self.assertNotIn("response_format", request_body)
 
+    def test_foundry_openai_client_uses_v1_responses_api_and_api_key_header(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "model": "zeroops-gpt-5-mini",
+                    "output_text": json.dumps(
+                        {
+                            "schema_version": "test-output.v1",
+                            "summary": "Evidence-bound result",
+                        }
+                    ),
+                    "usage": {"input_tokens": 8, "output_tokens": 3},
+                },
+            )
+
+        class Output(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            schema_version: str
+            summary: str
+
+        client = StructuredModelClient(
+            provider="azure-openai",
+            endpoint="https://ZEROOPS-FOUNDRY.openai.azure.com/",
+            model="zeroops-gpt-5-mini",
+            api_key="foundry-route-token",
+            workload="repository-analysis",
+            prompt_version="repository-analysis.v1",
+            maximum_input_chars=10_000,
+            maximum_output_tokens=100,
+            transport=httpx.MockTransport(handler),
+        )
+        result, provenance = client.generate(
+            system_instructions="Return strict JSON.",
+            input_value={"evidence": []},
+            output_model=Output,
+            schema_version="test-output.v1",
+        )
+
+        self.assertEqual(result.summary, "Evidence-bound result")
+        self.assertEqual(provenance.provider, "azure-openai")
+        self.assertEqual(provenance.input_tokens, 8)
+        self.assertEqual(provenance.output_tokens, 3)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            str(requests[0].url),
+            "https://zeroops-foundry.openai.azure.com/openai/v1/responses",
+        )
+        self.assertEqual(requests[0].headers["api-key"], "foundry-route-token")
+        body = json.loads(requests[0].content)
+        self.assertEqual(body["model"], "zeroops-gpt-5-mini")
+        self.assertEqual(body["max_output_tokens"], 100)
+        self.assertTrue(body["text"]["format"]["strict"])
+        self.assertFalse(body["store"])
+
+    def test_foundry_openai_client_rejects_non_azure_or_non_v1_routes(self):
+        common = {
+            "provider": "azure-openai",
+            "model": "zeroops-gpt-5-mini",
+            "api_key": "foundry-route-token",
+            "workload": "repository-analysis",
+            "prompt_version": "v1",
+            "maximum_input_chars": 1_000,
+            "maximum_output_tokens": 100,
+        }
+        with self.assertRaises(ValueError):
+            StructuredModelClient(endpoint="https://api.openai.com/v1", **common)
+        with self.assertRaises(ValueError):
+            StructuredModelClient(
+                endpoint="https://zeroops-foundry.openai.azure.com/openai/deployments/demo",
+                **common,
+            )
+
     def test_nvidia_client_rejects_cross_route_origin_and_unqualified_model(self):
         common = {
             "provider": "nvidia",
@@ -977,13 +1053,24 @@ class FakeTerraformStore(FakeStore):
             "region": "centralindia",
             "components": [
                 {
-                    "id": "component-rg",
-                    "service": "Azure Resource Group",
-                    "tier": None,
-                    "properties": {"public_network_access": False},
+                    "id": "application",
+                    "service": "Azure App Service",
+                    "tier": "customer-linux-plan",
+                    "properties": {
+                        "target_resource_group": "rg-zeroops-target",
+                        "existing_app_service_plan_name": "customer-linux-plan",
+                        "create_resource_group": False,
+                        "public_network_access": True,
+                        "managed_identity": "SystemAssigned",
+                        "container_registry_role": "AcrPull",
+                        "container_registry_scope": "configured-registry-only",
+                    },
                 }
             ],
-            "allowed_resource_types": ["azurerm_resource_group"],
+            "allowed_resource_types": [
+                "azurerm_linux_web_app",
+                "azurerm_role_assignment",
+            ],
             "module_catalog_version": "zeroops-modules.v1",
             "policy_version": "zeroops-policy.v1",
             "constraints": [],
@@ -1032,6 +1119,21 @@ class FakeTerraformStore(FakeStore):
         ):
             raise AssertionError("Terraform artifact path is not canonical")
         uuid.UUID(parts[1])
+
+
+class UnsupportedTerraformStore(FakeTerraformStore):
+    def download_verified_json(self, *_args, **_kwargs):
+        value = super().download_verified_json(*_args, **_kwargs)
+        value["components"] = [
+            {
+                "id": "component-rg",
+                "service": "Azure Resource Group",
+                "tier": None,
+                "properties": {"public_network_access": False},
+            }
+        ]
+        value["allowed_resource_types"] = ["azurerm_resource_group"]
+        return value
 
 
 class FakeTerraformModel:
@@ -1253,7 +1355,38 @@ class TerraformGenerationTests(unittest.TestCase):
             "target_environment": "test",
             "target_subscription_id": "60000000-0000-4000-8000-000000000001",
             "target_tenant_id": "70000000-0000-4000-8000-000000000001",
+            "target_resource_group": "rg-zeroops-target",
             "terraform_version": "1.15.8",
+            "input_variables": [
+                {
+                    "name": "application_name",
+                    "type": "string",
+                    "value": "zo-example-00000000",
+                },
+                {
+                    "name": "app_service_plan_id",
+                    "type": "string",
+                    "value": "/subscriptions/60000000-0000-4000-8000-000000000001/resourceGroups/rg-zeroops-target/providers/Microsoft.Web/serverfarms/customer-linux-plan",
+                },
+                {
+                    "name": "container_registry_id",
+                    "type": "string",
+                    "value": "/subscriptions/60000000-0000-4000-8000-000000000001/resourceGroups/rg-zeroops-target/providers/Microsoft.ContainerRegistry/registries/zeroopsapps",
+                },
+                {
+                    "name": "location",
+                    "type": "string",
+                    "value": "centralindia",
+                },
+                {
+                    "name": "resource_group_name",
+                    "type": "string",
+                    "value": "rg-zeroops-target",
+                },
+            ],
+            "maximum_resource_changes": 10,
+            "maximum_delete_count": 0,
+            "maximum_replace_count": 0,
         }
 
     def test_valid_bundle_enqueues_exact_vmss_envelope_and_deterministic_zip(self):
@@ -1262,7 +1395,7 @@ class TerraformGenerationTests(unittest.TestCase):
         dependencies = terraform_handler.TerraformHandlerDependencies(
             store=store,
             publisher=publisher,
-            model_client=FakeTerraformModel(),
+            model_client=FailingTerraformModel(),
             workflow_events_queue="workflow-events",
             terraform_plan_queue="terraform-plan",
             instructions="strict output",
@@ -1271,6 +1404,8 @@ class TerraformGenerationTests(unittest.TestCase):
             json.dumps(self.terraform_job()).encode(),
             dependencies,
         )
+        self.assertEqual(result["provenance"]["execution_mode"], "deterministic_only")
+        self.assertEqual(result["provenance"]["provider"], "zeroops")
         self.assertEqual(result["validation_status"], "not_run")
         self.assertEqual(result["plan_status"], "not_run")
         self.assertEqual(result["apply_status"], "not_run")
@@ -1313,7 +1448,18 @@ class TerraformGenerationTests(unittest.TestCase):
                     "providers.tf",
                     "variables.tf",
                     "versions.tf",
+                    "zeroops.auto.tfvars.json",
                 ],
+            )
+            self.assertEqual(
+                json.loads(archive.read("zeroops.auto.tfvars.json")),
+                {
+                    "application_name": "zo-example-00000000",
+                    "app_service_plan_id": "/subscriptions/60000000-0000-4000-8000-000000000001/resourceGroups/rg-zeroops-target/providers/Microsoft.Web/serverfarms/customer-linux-plan",
+                    "container_registry_id": "/subscriptions/60000000-0000-4000-8000-000000000001/resourceGroups/rg-zeroops-target/providers/Microsoft.ContainerRegistry/registries/zeroopsapps",
+                    "location": "centralindia",
+                    "resource_group_name": "rg-zeroops-target",
+                },
             )
             lock = archive.read(".terraform.lock.hcl").decode()
             self.assertIn("registry.terraform.io/hashicorp/azurerm", lock)
@@ -1355,7 +1501,7 @@ class TerraformGenerationTests(unittest.TestCase):
 
     def test_blocked_bundle_is_persisted_but_never_enqueues_plan(self):
         publisher = FakePublisher()
-        store = FakeTerraformStore()
+        store = UnsupportedTerraformStore()
         dependencies = terraform_handler.TerraformHandlerDependencies(
             store=store,
             publisher=publisher,
@@ -1378,102 +1524,6 @@ class TerraformGenerationTests(unittest.TestCase):
             [event.event_type for _, event in publisher.events],
             ["terraform.generation.started", "terraform.generation.blocked"],
         )
-
-    def test_provider_failure_is_fail_closed_and_enqueues_no_plan(self):
-        publisher = FakePublisher()
-        dependencies = terraform_handler.TerraformHandlerDependencies(
-            store=FakeTerraformStore(),
-            publisher=publisher,
-            model_client=FailingTerraformModel(),
-            workflow_events_queue="workflow-events",
-            terraform_plan_queue="terraform-plan",
-            instructions="strict output",
-        )
-        with self.assertRaises(ModelUnavailableError):
-            terraform_handler.handle_terraform_generation(
-                json.dumps(self.terraform_job()).encode(),
-                dependencies,
-            )
-        self.assertFalse(hasattr(publisher, "messages"))
-        self.assertEqual([event.status for _, event in publisher.events], ["started", "failed"])
-
-    def test_nvidia_failure_uses_groq_then_enqueues_plan_only(self):
-        publisher = FakePublisher()
-        store = FakeTerraformStore()
-        dependencies = terraform_handler.TerraformHandlerDependencies(
-            store=store,
-            publisher=publisher,
-            model_client=FailingTerraformModel(),
-            fallback_model_client=GroqTerraformModel(),
-            workflow_events_queue="workflow-events",
-            terraform_plan_queue="terraform-plan",
-            instructions="strict output",
-        )
-        result = terraform_handler.handle_terraform_generation(
-            json.dumps(self.terraform_job()).encode(),
-            dependencies,
-        )
-
-        self.assertEqual(result["provenance"]["provider"], "groq")
-        self.assertEqual(result["provenance"]["selected_route"], "fallback")
-        self.assertTrue(result["provenance"]["fallback_attempted"])
-        self.assertEqual(len(publisher.messages), 1)
-        self.assertEqual(publisher.messages[0][0], "terraform-plan")
-        self.assertEqual(result["validation_status"], "not_run")
-        self.assertEqual(result["plan_status"], "not_run")
-        self.assertEqual(result["apply_status"], "not_run")
-
-    def test_both_terraform_routes_fail_closed_and_enqueue_nothing(self):
-        publisher = FakePublisher()
-        dependencies = terraform_handler.TerraformHandlerDependencies(
-            store=FakeTerraformStore(),
-            publisher=publisher,
-            model_client=FailingTerraformModel(),
-            fallback_model_client=FailingGroqModel(),
-            workflow_events_queue="workflow-events",
-            terraform_plan_queue="terraform-plan",
-            instructions="strict output",
-        )
-        with self.assertRaises(ModelRoutesExhaustedError):
-            terraform_handler.handle_terraform_generation(
-                json.dumps(self.terraform_job()).encode(),
-                dependencies,
-            )
-
-        self.assertFalse(hasattr(publisher, "messages"))
-        failure = publisher.events[-1][1]
-        self.assertEqual(failure.status, "failed")
-        self.assertEqual(failure.safe_metadata["selected_route"], "none")
-        self.assertTrue(failure.safe_metadata["fallback_attempted"])
-        self.assertEqual(
-            failure.safe_metadata["fallback_failure_code"],
-            "unavailable",
-        )
-
-    def test_terraform_input_overflow_fails_closed_without_calling_groq(self):
-        publisher = FakePublisher()
-        dependencies = terraform_handler.TerraformHandlerDependencies(
-            store=FakeTerraformStore(),
-            publisher=publisher,
-            model_client=InputBudgetModel(),
-            fallback_model_client=GroqTerraformModel(),
-            workflow_events_queue="workflow-events",
-            terraform_plan_queue="terraform-plan",
-            instructions="strict output",
-        )
-        with self.assertRaises(ModelRoutesExhaustedError) as raised:
-            terraform_handler.handle_terraform_generation(
-                json.dumps(self.terraform_job()).encode(),
-                dependencies,
-            )
-
-        self.assertFalse(hasattr(publisher, "messages"))
-        self.assertFalse(raised.exception.routing.fallback_attempted)
-        self.assertEqual(
-            raised.exception.routing.primary_failure_code,
-            "input_budget_exceeded",
-        )
-
 
 class FakeProjector:
     def __init__(self):

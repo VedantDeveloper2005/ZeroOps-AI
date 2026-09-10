@@ -15,17 +15,20 @@ recreated, resized, or reconfigured by this root.
   Terraform creates no secrets. NVIDIA primary and Groq fallback credentials
   must be written out of band to four workload-specific secret names.
 - Service Bus queues for repository analysis, generation, plan, apply, and
-  workflow events. The apply queue is retained as a reserved contract name but
-  has no application sender, executor receiver, or autoscale rule in the
-  current plan-only phase. Plan/apply queues use sessions and duplicate
-  detection.
+  workflow events. Plan/apply queues use sessions and duplicate detection. The
+  backend can send only to the apply queue; the executor can receive only from
+  the plan/apply queues and send only workflow events.
 - A versioned tenant artifact account and a different executor-only account for
   Terraform state, leases, completion receipts, and saved binary plans.
 - A Basic ACR in test or Premium ACR in production, with admin access disabled.
-- A regular `Standard_D2ads_v5` Flexible VMSS spread across zones 1 and 2. It
-  starts at zero, scales from Terraform plan queue depth to one in test or at
-  most ten in production, and uses a static NAT egress IP with no per-VM public
-  IP.
+- A regular `Standard_B2as_v2` Uniform VMSS spread across zones 1 and 2 for the
+  test profile. It starts at zero, scales from Terraform plan/apply queue depth
+  to one, uses a managed Standard SSD, and has a static NAT egress IP with no
+  per-VM public IP. Trusted Launch, Secure Boot, and vTPM are set on the initial
+  VMSS model; both the Ubuntu base image and worker container are immutable.
+  Cloud-init installs a checksum-pinned Docker static bundle and exchanges the
+  VMSS managed-identity token directly with ACR, so it neither upgrades moving
+  OS packages nor installs Azure CLI on the host.
 - VNet integration, private DNS, and production private endpoints, plus Log
   Analytics, Application Insights, Azure Monitor diagnostics, DCR, alerting,
   and an optional resource-group budget.
@@ -41,20 +44,21 @@ approved migration after private connectivity is tested.
 
 | Identity | Can receive | Can send | Storage | Key Vault |
 |---|---|---|---|---|
-| Existing backend | none | repository-analysis and Terraform-generation requests | tenant artifacts only | existing control vault remains external |
+| Existing backend | none | repository-analysis, Terraform-generation, and approved apply requests | tenant artifacts only | existing control vault remains external |
 | Analysis Function | repository analysis | workflow events | tenant artifacts | analysis model vault only |
 | Terraform generation Function | Terraform generation | Terraform plan | tenant artifacts | generation model vault only |
-| VMSS executor | Terraform plan only | workflow events | tenant artifacts plus executor-only plans/state | no model key vault |
+| VMSS executor | Terraform plan and apply | workflow events | tenant artifacts plus executor-only plans/state | no model key vault |
 | History projector Function | workflow events | none | none | none; PostgreSQL Entra login only |
 
 The backend and AI Functions receive no RBAC on the executor storage account.
 Saved `.tfplan` files, Terraform state, and lease blobs therefore cannot be read
 through the user-facing application. User history receives only sanitized
 action counts, resource kinds, immutable digests, status, and timestamps.
-The optional customer workload scope grants the executor Reader, not
-Contributor. Apply message contracts and execution code are retained for future
-work, but the deployed entry point does not read an apply queue and neither the
-backend nor executor identity has apply-queue RBAC.
+The customer workload scope is explicit and grants the executor Contributor on
+one dedicated resource group only. Terraform rejects the platform resource
+group and subscription scope. Apply remains bound to the durable, single-use
+approval contract and an exact saved plan; the worker receives no general
+platform or subscription write role.
 
 ## Cost profile
 
@@ -63,15 +67,20 @@ Standard Service Bus, Basic ACR, FC1 Functions, LRS Function host storage, and a
 VMSS maximum of one. The executor stays at zero when the plan queue is empty.
 
 `environments/production.tfvars.example` enables private endpoints, Premium
-Service Bus/ACR, ZRS storage, longer retention, and a VMSS cap of ten. Premium
-services are explicit rather than silently enabled in test. The monthly budget
-is also explicit and refuses to enable without dates, an amount, and a receiver.
+Service Bus/ACR, ZRS storage, longer retention, and a two-instance
+`Standard_B2as_v2` VMSS cap. That is the maximum currently deployable runner
+capacity for the connected Azure for Students subscription: the existing
+validation VM consumes two regional vCPUs and Central India exposes four more.
+Raise the cap or change the SKU only after a fresh quota and zone-capacity
+check. Premium services are explicit rather than silently enabled in test. The
+monthly budget is also explicit and refuses to enable without dates, an amount,
+and a receiver.
 
-The regular VMSS is intentional so a future, separately authorized apply path
-does not require changing the compute safety model. In the current plan-only
-phase, the worker uses plan-queue-driven scale-to-zero, ephemeral OS disks, a
-bounded SKU, lifecycle tiering, FC1 serverless compute, and per-environment
-caps.
+The regular VMSS uses plan/apply-queue-driven scale-to-zero, a bounded SKU,
+lifecycle tiering, FC1 serverless compute, and per-environment caps. Central
+India live quota validation selected `Standard_B2as_v2` for test (2 vCPU,
+8 GiB); this SKU requires a managed OS disk. No runner VM or disk exists during
+the foundation stage or while the VMSS capacity is zero.
 
 ## Template composition provenance
 
@@ -99,34 +108,30 @@ generated. References:
 
 Prerequisites that are currently external to this code:
 
-1. Treat Trusted Launch as a deployment blocker, not as a validated property of
-   the current Flexible VMSS. The pinned AzureRM `4.81.0`
-   `azurerm_orchestrated_virtual_machine_scale_set` schema has no initial
-   security-profile, security-type, Secure Boot, or vTPM fields. The module's
-   AzAPI update therefore enables Trusted Launch after creation, a path Azure
-   currently classifies as preview for Flexible VMSS. Do not apply until that
-   preview is explicitly authorized and verified for the subscription, or the
-   VMSS is migrated to an initial-create resource/provider schema that exposes
-   the complete security profile.
-2. Confirm all required providers are registered with explicit authorization.
+1. Confirm all required providers are registered with explicit authorization.
    `Microsoft.App` is required by Flex Consumption subnet delegation, and
    `Microsoft.Quota` is required only if the generic live quota API is used.
    A previous planning attempt automatically registered 31 subscription
    providers; `providers.tf` now sets
    `resource_provider_registrations = "none"` to prevent any future implicit
    registration. Never unregister providers without an explicit approval.
-3. Bootstrap the separate platform backend account described by
-   `backend.hcl.example`, grant the deployment identity data-plane access, and
-   copy the example to ignored `backend.hcl`.
-4. Replace the SSH public key and IDs in the selected profile.
-5. Build `worker/Dockerfile`, push it to the profile ACR, resolve the manifest
-   digest, and replace `runner_image_reference`. The reference must end in
-   `@sha256:<64 lowercase hex characters>`.
-6. Set `execution_scope_resource_id` only to a dedicated customer workload
-   resource group. A Terraform check rejects the ZeroOps platform group. The
-   current plan-only deployment grants Reader on this scope; it intentionally
-   cannot apply changes.
-7. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
+2. Run the explicit [`bootstrap/`](bootstrap/) sequence to create the separate
+   Entra-only state account and federated plan/apply identities. Configure a
+   required reviewer on the `azure-test-apply` GitHub environment. The
+   temporary validation VM remains read-only and is never reused for release.
+3. Use `plan-foundation`, review its sanitized summary and exact plan digest,
+   then invoke `apply-saved-plan` with `APPLY <digest>`. This creates the ACR and
+   platform with `deploy_runner=false`; it does not accept a fake image digest
+   and does not create the VMSS, NAT gateway, or apply-queue send/receive roles.
+4. Run `publish-artifacts` with `PUBLISH <commit>`. It pushes the worker image,
+   resolves its registry digest, retains versioned Function ZIPs, and deploys
+   the Functions through Flex Consumption One Deploy.
+5. Use the returned `@sha256:` reference in `plan-runner`, set
+   `execution_scope_resource_id` to one dedicated customer workload resource
+   group, review the exact plan, then consume it once with
+   `apply-saved-plan`. The VMSS model pins Ubuntu `22.04.202608060` and the
+   worker digest.
+6. Put `ai-repository-api-key` and `ai-repository-fallback-api-key` in the
    analysis vault, and `ai-terraform-api-key` and
    `ai-terraform-fallback-api-key` in the Terraform-generation vault, outside
    Terraform. Their versionless app-setting references are
@@ -135,12 +140,13 @@ Prerequisites that are currently external to this code:
    `GROQ_API_KEY` is not wired. The same Groq value may be entered into both
    fallback secrets only for an explicit local test; production credentials
    must remain independently rotatable.
-8. Map the history managed identity to PostgreSQL principal
+7. Map the history managed identity to PostgreSQL principal
    `POSTGRES_ENTRA_USER` and grant only the required `operation_runs`,
    `activity_events`, `artifacts`, and tenant membership permissions. Azure
    RBAC cannot create that database-local role without crossing the existing
    database administration boundary.
-9. Package and deploy the three Function projects separately.
+8. Configure the non-secret GitHub IDs/state names returned by the bootstrap
+   output plus the dedicated execution scope and runner SSH public key.
 
 Run locally before any deployment:
 
@@ -148,17 +154,13 @@ Run locally before any deployment:
 terraform -chdir=infra fmt -check -recursive
 terraform -chdir=infra init -backend=false
 terraform -chdir=infra validate
+terraform -chdir=infra providers lock -platform=linux_amd64 -platform=windows_amd64
 tflint --chdir=infra --recursive
 checkov --config-file infra/.checkov.yml --directory infra --framework terraform --var-file infra/environments/production.tfvars.example --compact
 ```
 
-For a real plan, initialize with `-backend-config=backend.hcl` and use a copied,
-ignored tfvars file. Save the exact plan. Applying it is not permitted in the
-current phase; the isolated VMSS only produces plan evidence:
-
-```powershell
-terraform -chdir=infra plan -out=platform.tfplan -var-file=environments/test.tfvars
-```
-
-Never publish `backend.hcl`, `.tfstate`, `.tfplan`, plan JSON, or `terraform
-show` output. The repository-specific `.gitignore` blocks these file types.
+The deployment workflow escrows a saved binary plan in the separate
+`deployment-plans` container, records its SHA-256, validates the commit and
+metadata before apply, and deletes it after the first apply attempt. A lifecycle
+rule removes abandoned plans after two days. Full plan JSON, state, backend
+credentials, and binary plans are never uploaded as GitHub artifacts or logged.

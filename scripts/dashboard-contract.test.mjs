@@ -243,3 +243,27 @@ test("dashboard motion and shared control contracts remain accessible", () => {
     }
   }
 });
+
+test("logout only clears client state after server-side revocation succeeds", () => {
+  const source = readProjectFile("src/lib/AuthContext.tsx");
+  const handler = source.match(
+    /const\s+logout\s*=\s*async\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\};/,
+  );
+
+  assert.ok(handler, "AuthContext must retain an explicit logout handler.");
+  assert.match(handler[1], /if\s*\(!response\.ok\)\s*\{/);
+  assert.match(handler[1], /Your session remains active; please retry\./);
+  assert.ok(
+    handler[1].indexOf("return;") < handler[1].indexOf("setUser(null)"),
+    "A failed server logout must return before clearing authenticated client state.",
+  );
+  assert.match(handler[1], /setUser\(null\);\s*notifySignedOut\(\);/);
+});
+
+test("protected pages do not mount while authentication is pending or missing", () => {
+  const source = readProjectFile("src/components/dashboard/DashboardShell.tsx");
+  const guardIndex = source.indexOf("if (loading || !user)");
+  const childrenIndex = source.indexOf("{children}");
+  assert.ok(guardIndex >= 0 && guardIndex < childrenIndex);
+  assert.match(source.slice(guardIndex, childrenIndex), /role="status"/);
+});

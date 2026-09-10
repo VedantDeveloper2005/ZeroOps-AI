@@ -321,6 +321,32 @@ def build_infrastructure_spec(
     return plan
 
 
+def attach_advisor_recommendation(
+    plan: dict[str, Any],
+    recommendation: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge Microsoft Foundry Architecture Advisor recommendations into plan data.
+
+    Preserves the strict ZeroOps capability allowlist: services not deployable by
+    the current engine are clearly marked as advisory recommendations.
+    """
+    updated = deepcopy(plan)
+    updated["advisor_recommendation"] = recommendation
+
+    explanations = updated.get("ai_explanations") or {}
+    for comp in recommendation.get("proposed_components", []):
+        comp_id = comp.get("id")
+        reason = comp.get("reason")
+        sku = comp.get("proposed_sku")
+        if comp_id and reason:
+            sku_note = f" (Advised SKU: {sku})" if sku else ""
+            explanations[comp_id] = f"{reason}{sku_note}"
+
+    updated["ai_explanations"] = explanations
+    return updated
+
+
+
 def clear_unverified_estimates(plan: dict[str, Any]) -> dict[str, Any]:
     """Remove legacy synthetic pricing, scores, and deployment estimates."""
     updated = deepcopy(plan)

@@ -1,0 +1,6 @@
+# The foundation stage intentionally creates no VMSS.
+deploy_runner = false
+
+# After `az acr build` returns the image digest, use an ignored terraform.tfvars
+# containing deploy_runner=true, a real public SSH key, and the digest-pinned
+# runner_image_reference. Do not use mutable tags or private keys.

@@ -71,6 +71,7 @@ module "network" {
   subnet_address_prefixes = var.subnet_address_prefixes
   private_dns_zones       = local.private_dns_zones
   enable_private_dns      = var.enable_private_endpoints
+  enable_nat_gateway      = var.deploy_runner
   tags                    = local.standard_tags
 }
 
@@ -168,9 +169,9 @@ module "analysis_function" {
     REPOSITORY_ANALYSIS_QUEUE_NAME           = local.queue_names.repo_analysis
     WORKFLOW_EVENTS_QUEUE_NAME               = local.queue_names.workflow_events
     ARTIFACT_STORAGE_ACCOUNT_URL             = "https://${module.storage.artifact_account_name}.blob.core.windows.net"
-    AI_REPOSITORY_PROVIDER                   = "nvidia"
-    AI_REPOSITORY_ENDPOINT                   = "https://integrate.api.nvidia.com/v1"
-    AI_REPOSITORY_MODEL                      = "z-ai/glm-5.2"
+    AI_REPOSITORY_PROVIDER                   = var.repository_ai_provider
+    AI_REPOSITORY_ENDPOINT                   = var.repository_ai_endpoint
+    AI_REPOSITORY_MODEL                      = var.repository_ai_model
     AI_REPOSITORY_PROMPT_VERSION             = "repository-analysis.v1"
     AI_REPOSITORY_FALLBACK_PROVIDER          = "groq"
     AI_REPOSITORY_FALLBACK_ENDPOINT          = "https://api.groq.com/openai/v1"
@@ -221,9 +222,9 @@ module "terraform_generation_function" {
     TERRAFORM_PLAN_QUEUE_NAME               = local.queue_names.terraform_plan
     WORKFLOW_EVENTS_QUEUE_NAME              = local.queue_names.workflow_events
     ARTIFACT_STORAGE_ACCOUNT_URL            = "https://${module.storage.artifact_account_name}.blob.core.windows.net"
-    AI_TERRAFORM_PROVIDER                   = "nvidia"
-    AI_TERRAFORM_ENDPOINT                   = "https://integrate.api.nvidia.com/v1"
-    AI_TERRAFORM_MODEL                      = "z-ai/glm-5.2"
+    AI_TERRAFORM_PROVIDER                   = var.terraform_ai_provider
+    AI_TERRAFORM_ENDPOINT                   = var.terraform_ai_endpoint
+    AI_TERRAFORM_MODEL                      = var.terraform_ai_model
     AI_TERRAFORM_PROMPT_VERSION             = "terraform-generation.v1"
     AI_TERRAFORM_FALLBACK_PROVIDER          = "groq"
     AI_TERRAFORM_FALLBACK_ENDPOINT          = "https://api.groq.com/openai/v1"
@@ -290,15 +291,20 @@ module "runner" {
   subnet_id                      = module.network.subnet_ids.executor_vmss
   identity_id                    = azurerm_user_assigned_identity.executor.id
   identity_client_id             = azurerm_user_assigned_identity.executor.client_id
+  tenant_id                      = var.tenant_id
   service_bus_namespace          = module.service_bus.fully_qualified_namespace
   plan_queue_name                = local.queue_names.terraform_plan
   plan_queue_id                  = module.service_bus.queue_ids.terraform_plan
+  apply_queue_name               = local.queue_names.terraform_apply
+  apply_queue_id                 = module.service_bus.queue_ids.terraform_apply
   event_queue_name               = local.queue_names.workflow_events
   artifact_storage_account_name  = module.storage.artifact_account_name
   executor_storage_account_name  = module.storage.executor_account_name
   executor_plan_container_name   = module.storage.executor_plan_container_name
   executor_state_container_name  = module.storage.executor_state_container_name
   runner_image_reference         = var.runner_image_reference
+  enable_vmss                    = var.deploy_runner
+  os_image_version               = var.runner_os_image_version
   admin_username                 = var.runner_admin_username
   admin_ssh_public_key           = var.runner_admin_ssh_public_key
   sku                            = var.vmss_sku
@@ -313,6 +319,7 @@ module "runner" {
 
   depends_on = [
     azurerm_role_assignment.executor_plan_receiver,
+    azurerm_role_assignment.executor_apply_receiver,
     azurerm_role_assignment.executor_event_sender,
     azurerm_role_assignment.executor_artifacts,
     azurerm_role_assignment.executor_state,
@@ -352,5 +359,22 @@ check "execution_scope_is_not_platform_scope" {
       lower(var.execution_scope_resource_id) != lower(data.azurerm_resource_group.platform.id)
     )
     error_message = "The Terraform executor must never receive Contributor on the ZeroOps platform resource group."
+  }
+}
+
+check "execution_scope_is_current_subscription" {
+  assert {
+    condition = (
+      var.execution_scope_resource_id == null ||
+      startswith(lower(var.execution_scope_resource_id), "/subscriptions/${lower(var.subscription_id)}/resourcegroups/")
+    )
+    error_message = "The customer workload resource group must be in the selected Azure subscription."
+  }
+}
+
+check "runner_stage_has_customer_scope" {
+  assert {
+    condition     = !var.deploy_runner || var.execution_scope_resource_id != null
+    error_message = "deploy_runner requires a dedicated customer workload resource-group scope."
   }
 }

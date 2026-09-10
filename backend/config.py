@@ -9,6 +9,7 @@ from Key Vault using the ``zeroops-<kebab-case-setting-name>`` convention.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import subprocess
 
@@ -19,6 +20,12 @@ except ImportError:  # Allows ``uvicorn main:app`` from the backend directory.
 
 
 def _setting(name: str, default: str = "") -> str:
+    # Local development and the test harness may deliberately provide settings
+    # through their process environment.  This keeps the documented local
+    # PostgreSQL/demo workflow usable without weakening the production trust
+    # boundary: production settings always come exclusively from Key Vault.
+    if not IS_PRODUCTION and name in os.environ:
+        return os.environ[name]
     return vault.get_application_setting(
         name,
         default=default,
@@ -56,6 +63,26 @@ def _parse_csv(name: str, default_values: list[str]) -> list[str]:
             if value not in parsed:
                 parsed.append(value)
     return parsed
+
+
+def _validate_cross_tenant_servicebus_settings(
+    *,
+    is_production: bool,
+    target_tenant_id: str,
+    multitenant_app_client_id: str,
+) -> None:
+    """Reject incomplete cross-tenant authentication in production.
+
+    Both settings are deliberately optional so the existing same-tenant
+    managed-identity path remains available.  A partial pair would otherwise
+    silently select an unintended authentication mode.
+    """
+
+    if is_production and bool(target_tenant_id) != bool(multitenant_app_client_id):
+        raise RuntimeError(
+            "SERVICEBUS_TARGET_TENANT_ID and SERVICEBUS_MULTITENANT_APP_CLIENT_ID "
+            "must be configured together in Azure Key Vault when APP_ENV=production."
+        )
 
 
 # Bootstrap settings. APP_ENV is deliberately not read from Key Vault because
@@ -195,6 +222,19 @@ AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS = _integer(
     "AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS", 1_000
 )
 
+# Microsoft Foundry Architecture Advisor. Authenticated with Microsoft Entra ID
+# via DefaultAzureCredential (az login in local dev, App Service Managed Identity
+# in production). Server-side instructions, File Search (zeroops-knowledge vector
+# store), and Web Search run on the Foundry Agent deployment.
+FOUNDRY_PROJECT_ENDPOINT = _setting(
+    "FOUNDRY_PROJECT_ENDPOINT",
+    "https://zeroops-aitest-resource.services.ai.azure.com/api/projects/zeroops-aitest",
+).rstrip("/")
+FOUNDRY_AGENT_NAME = _setting("FOUNDRY_AGENT_NAME", "zeroops-architecture-advisor")
+FOUNDRY_AGENT_VERSION = _setting("FOUNDRY_AGENT_VERSION", "2")
+FOUNDRY_REQUEST_TIMEOUT_SECONDS = _integer("FOUNDRY_REQUEST_TIMEOUT_SECONDS", 120)
+
+
 # OAuth and session security
 GITHUB_TOKEN = _setting("GITHUB_TOKEN")
 GITHUB_CLIENT_ID = _setting("GITHUB_CLIENT_ID")
@@ -221,7 +261,8 @@ SMTP_USERNAME = _setting("SMTP_USERNAME")
 SMTP_PASSWORD = _setting("SMTP_PASSWORD")
 SMTP_FROM_EMAIL = _setting("SMTP_FROM_EMAIL")
 SMTP_USE_TLS = _boolean("SMTP_USE_TLS", True)
-EMAIL_VERIFICATION_EXPIRE_HOURS = _integer("EMAIL_VERIFICATION_EXPIRE_HOURS", 24)
+EMAIL_VERIFICATION_EXPIRE_HOURS = _integer("EMAIL_VERIFICATION_EXPIRE_HOURS", 1)
+EMAIL_VERIFICATION_MAX_ATTEMPTS = _integer("EMAIL_VERIFICATION_MAX_ATTEMPTS", 5)
 EMAIL_OTP_EXPIRE_MINUTES = _integer("EMAIL_OTP_EXPIRE_MINUTES", 10)
 EMAIL_OTP_LENGTH = _integer("EMAIL_OTP_LENGTH", 6)
 PHONE_VERIFICATION_REQUIRED = _boolean("PHONE_VERIFICATION_REQUIRED", True)
@@ -245,11 +286,68 @@ ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID = _setting(
 )
 ARTIFACT_STORAGE_NAMESPACE_KEY = _setting("ARTIFACT_STORAGE_NAMESPACE_KEY", "")
 ARTIFACT_STORAGE_MAX_DOWNLOAD_MB = _integer("ARTIFACT_STORAGE_MAX_DOWNLOAD_MB", 25)
+SERVICEBUS_FULLY_QUALIFIED_NAMESPACE = _setting(
+    "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE",
+    "",
+).strip()
+SERVICEBUS_MANAGED_IDENTITY_CLIENT_ID = _setting(
+    "SERVICEBUS_MANAGED_IDENTITY_CLIENT_ID",
+    "",
+).strip()
+SERVICEBUS_TARGET_TENANT_ID = _setting(
+    "SERVICEBUS_TARGET_TENANT_ID",
+    "",
+).strip()
+SERVICEBUS_MULTITENANT_APP_CLIENT_ID = _setting(
+    "SERVICEBUS_MULTITENANT_APP_CLIENT_ID",
+    "",
+).strip()
+REPOSITORY_ANALYSIS_QUEUE_NAME = _setting(
+    "REPOSITORY_ANALYSIS_QUEUE_NAME",
+    "repo-analysis",
+).strip()
+TERRAFORM_GENERATION_QUEUE_NAME = _setting(
+    "TERRAFORM_GENERATION_QUEUE_NAME",
+    "terraform-generation",
+).strip()
+TERRAFORM_APPLY_QUEUE_NAME = _setting(
+    "TERRAFORM_APPLY_QUEUE_NAME",
+    "terraform-apply",
+).strip()
+WORKFLOW_OUTBOX_BATCH_SIZE = _integer("WORKFLOW_OUTBOX_BATCH_SIZE", 10)
+WORKFLOW_OUTBOX_INTERVAL_SECONDS = _integer(
+    "WORKFLOW_OUTBOX_INTERVAL_SECONDS",
+    5,
+)
+TERRAFORM_APPROVAL_TTL_MINUTES = _integer(
+    "TERRAFORM_APPROVAL_TTL_MINUTES",
+    60,
+)
+TERRAFORM_COST_EVIDENCE_MAX_AGE_MINUTES = _integer(
+    "TERRAFORM_COST_EVIDENCE_MAX_AGE_MINUTES",
+    1_440,
+)
+TERRAFORM_COST_DEFAULT_CURRENCY = _setting(
+    "TERRAFORM_COST_DEFAULT_CURRENCY",
+    "USD",
+).strip().upper()
+TERRAFORM_MAX_RESOURCE_CHANGES = _integer(
+    "TERRAFORM_MAX_RESOURCE_CHANGES",
+    25,
+)
+TERRAFORM_MAX_DELETE_COUNT = _integer("TERRAFORM_MAX_DELETE_COUNT", 0)
+TERRAFORM_MAX_REPLACE_COUNT = _integer("TERRAFORM_MAX_REPLACE_COUNT", 0)
 RISK_COST_THRESHOLD_CENTS = _integer("RISK_COST_THRESHOLD_CENTS", 5000)
 MAINTENANCE_WINDOW_UTC = _setting("MAINTENANCE_WINDOW_UTC", "")
 PAYMENT_PROVIDER = _setting("PAYMENT_PROVIDER", "manual")
 AI_PAID_OPERATION_PRICE_CENTS = _integer("AI_PAID_OPERATION_PRICE_CENTS", 499)
 AI_FREE_DAILY_LIMIT = _integer("AI_FREE_DAILY_LIMIT", 5)
+AI_CHAT_DAILY_REQUEST_LIMIT = _integer(
+    "AI_CHAT_DAILY_REQUEST_LIMIT",
+    AI_FREE_DAILY_LIMIT,
+)
+AI_CHAT_MAX_CONTEXT_CHARS = _integer("AI_CHAT_MAX_CONTEXT_CHARS", 12_000)
+AI_CHAT_MAX_OUTPUT_TOKENS = _integer("AI_CHAT_MAX_OUTPUT_TOKENS", 600)
 STRIPE_SECRET_KEY = _setting("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = _setting("STRIPE_WEBHOOK_SECRET")
 MAX_CODE_UPLOAD_MB = _integer("MAX_CODE_UPLOAD_MB", 50)
@@ -266,11 +364,39 @@ WORKER_HEARTBEAT_SECONDS = _integer("WORKER_HEARTBEAT_SECONDS", 30)
 WORKER_MAX_ATTEMPTS = _integer("WORKER_MAX_ATTEMPTS", 3)
 WORKER_RECOVERY_BATCH_SIZE = _integer("WORKER_RECOVERY_BATCH_SIZE", 25)
 WORKER_HEALTH_PORT = _integer("WORKER_HEALTH_PORT", 8085)
+# ZEROOPS_DEMO_EXECUTOR is defined below (line ~478) with env-var-first
+# resolution so local development works without Azure Key Vault.
 
 if WORKER_POLL_INTERVAL_SECONDS < 1:
     raise RuntimeError("WORKER_POLL_INTERVAL_SECONDS must be at least 1.")
 if not 1 <= ARTIFACT_STORAGE_MAX_DOWNLOAD_MB <= 250:
     raise RuntimeError("ARTIFACT_STORAGE_MAX_DOWNLOAD_MB must be between 1 and 250.")
+if not 1 <= EMAIL_VERIFICATION_EXPIRE_HOURS <= 2:
+    raise RuntimeError("EMAIL_VERIFICATION_EXPIRE_HOURS must be between 1 and 2.")
+if not 1 <= EMAIL_VERIFICATION_MAX_ATTEMPTS <= 10:
+    raise RuntimeError("EMAIL_VERIFICATION_MAX_ATTEMPTS must be between 1 and 10.")
+if not 1 <= AI_CHAT_DAILY_REQUEST_LIMIT <= 1_000:
+    raise RuntimeError("AI_CHAT_DAILY_REQUEST_LIMIT must be between 1 and 1000.")
+if not 1_000 <= AI_CHAT_MAX_CONTEXT_CHARS <= 40_000:
+    raise RuntimeError("AI_CHAT_MAX_CONTEXT_CHARS must be between 1000 and 40000.")
+if not 64 <= AI_CHAT_MAX_OUTPUT_TOKENS <= 2_000:
+    raise RuntimeError("AI_CHAT_MAX_OUTPUT_TOKENS must be between 64 and 2000.")
+if not 1 <= WORKFLOW_OUTBOX_BATCH_SIZE <= 100:
+    raise RuntimeError("WORKFLOW_OUTBOX_BATCH_SIZE must be between 1 and 100.")
+if not 1 <= WORKFLOW_OUTBOX_INTERVAL_SECONDS <= 300:
+    raise RuntimeError("WORKFLOW_OUTBOX_INTERVAL_SECONDS must be between 1 and 300.")
+if not 5 <= TERRAFORM_APPROVAL_TTL_MINUTES <= 1_440:
+    raise RuntimeError("TERRAFORM_APPROVAL_TTL_MINUTES must be between 5 and 1440.")
+if not 5 <= TERRAFORM_COST_EVIDENCE_MAX_AGE_MINUTES <= 10_080:
+    raise RuntimeError("TERRAFORM_COST_EVIDENCE_MAX_AGE_MINUTES must be between 5 and 10080.")
+if not re.fullmatch(r"[A-Z]{3}", TERRAFORM_COST_DEFAULT_CURRENCY):
+    raise RuntimeError("TERRAFORM_COST_DEFAULT_CURRENCY must be a three-letter currency code.")
+if not 1 <= TERRAFORM_MAX_RESOURCE_CHANGES <= 500:
+    raise RuntimeError("TERRAFORM_MAX_RESOURCE_CHANGES must be between 1 and 500.")
+if not 0 <= TERRAFORM_MAX_DELETE_COUNT <= min(100, TERRAFORM_MAX_RESOURCE_CHANGES):
+    raise RuntimeError("TERRAFORM_MAX_DELETE_COUNT is outside the resource-change limit.")
+if not 0 <= TERRAFORM_MAX_REPLACE_COUNT <= min(100, TERRAFORM_MAX_RESOURCE_CHANGES):
+    raise RuntimeError("TERRAFORM_MAX_REPLACE_COUNT is outside the resource-change limit.")
 if WORKER_LEASE_SECONDS < 30:
     raise RuntimeError("WORKER_LEASE_SECONDS must be at least 30.")
 if not 1 <= WORKER_HEARTBEAT_SECONDS < WORKER_LEASE_SECONDS:
@@ -315,6 +441,38 @@ if IS_PRODUCTION and FRONTEND_URL.lower().startswith("http://"):
     raise RuntimeError("FRONTEND_URL must use HTTPS when APP_ENV=production.")
 if IS_PRODUCTION and not ALLOWED_HOSTS:
     raise RuntimeError("ALLOWED_HOSTS must be configured in Azure Key Vault when APP_ENV=production.")
+if IS_PRODUCTION and not SERVICEBUS_FULLY_QUALIFIED_NAMESPACE:
+    raise RuntimeError(
+        "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE must be configured in Azure Key Vault when APP_ENV=production."
+    )
+_validate_cross_tenant_servicebus_settings(
+    is_production=IS_PRODUCTION,
+    target_tenant_id=SERVICEBUS_TARGET_TENANT_ID,
+    multitenant_app_client_id=SERVICEBUS_MULTITENANT_APP_CLIENT_ID,
+)
+if IS_PRODUCTION and not SERVICEBUS_MANAGED_IDENTITY_CLIENT_ID:
+    raise RuntimeError(
+        "SERVICEBUS_MANAGED_IDENTITY_CLIENT_ID must be configured in Azure Key Vault when APP_ENV=production."
+    )
+if IS_PRODUCTION and not ARTIFACT_STORAGE_ACCOUNT_URL:
+    raise RuntimeError(
+        "ARTIFACT_STORAGE_ACCOUNT_URL must be configured in Azure Key Vault when APP_ENV=production."
+    )
+if IS_PRODUCTION and not ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID:
+    raise RuntimeError(
+        "ARTIFACT_STORAGE_MANAGED_IDENTITY_CLIENT_ID must be configured in Azure Key Vault when APP_ENV=production."
+    )
+if IS_PRODUCTION and not ARTIFACT_STORAGE_NAMESPACE_KEY:
+    raise RuntimeError(
+        "ARTIFACT_STORAGE_NAMESPACE_KEY must be configured in Azure Key Vault when APP_ENV=production."
+    )
+if IS_PRODUCTION and (
+    REPOSITORY_ANALYSIS_QUEUE_NAME != "repo-analysis"
+    or TERRAFORM_GENERATION_QUEUE_NAME != "terraform-generation"
+    or TERRAFORM_APPLY_QUEUE_NAME != "terraform-apply"
+):
+    raise RuntimeError("Workflow queue names must match the versioned control-plane contract.")
+# ZEROOPS_DEMO_EXECUTOR production guard is below its definition (~line 482).
 if IS_PRODUCTION and not DB_SSL_ENABLED:
     raise RuntimeError("DB_SSL_ENABLED must remain enabled when APP_ENV=production.")
 if IS_PRODUCTION and not DB_SSL_VERIFY:
@@ -329,8 +487,17 @@ if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     print("WARNING: JWT_SECRET is not configured; generated an ephemeral development secret.")
 
+# Safe development-only demo repository executor
+ZEROOPS_DEMO_EXECUTOR = (
+    os.environ.get("ZEROOPS_DEMO_EXECUTOR", "").strip().lower() in {"true", "1", "yes", "on"}
+    or (_boolean("ZEROOPS_DEMO_EXECUTOR", False) if vault.HAS_AZURE_KV else False)
+)
+if IS_PRODUCTION and ZEROOPS_DEMO_EXECUTOR:
+    raise RuntimeError("ZEROOPS_DEMO_EXECUTOR cannot be enabled when APP_ENV=production.")
+
 print("ZeroOps Backend Config:")
 print(f"  Azure Key Vault Configured: {bool(AZURE_KEYVAULT_URL)}")
 print(f"  Azure Deployment Worker Ready: {AZURE_CLI_AVAILABLE}")
 print(f"  Environment: {APP_ENV}")
+print(f"  Demo Executor: {ZEROOPS_DEMO_EXECUTOR}")
 print(f"  Database Configured: {bool(DATABASE_URL)}")

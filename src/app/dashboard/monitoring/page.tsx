@@ -18,6 +18,7 @@ import { StatePanel } from "@/components/ui/StatePanel";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 import {
   ApiError,
   api,
@@ -150,7 +151,7 @@ export default function MonitoringPage() {
 function MonitoringWorkspace() {
   const searchParams = useSearchParams();
   const { projects, isLoading: projectsLoading } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [window, setWindow] = useState<MonitoringWindow>("live");
   const [monitoring, setMonitoring] = useState<ProjectMonitoring | null>(null);
   const [loading, setLoading] = useState(false);
@@ -159,17 +160,6 @@ function MonitoringWorkspace() {
     "idle" | "available" | "no_record" | "no_telemetry" | "unavailable" | "error"
   >("idle");
   const requestSequence = useRef(0);
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadMonitoring = useCallback(async (projectId: string, selectedWindow: MonitoringWindow) => {
     if (!projectId) return;

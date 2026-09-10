@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Terms of Service",
   description:
     "Draft terms for ZeroOps AI accounts, repository access, infrastructure approvals, deployments, and cloud-provider charges.",
+  robots: { index: false, follow: false, nocache: true },
 };
 
 export default function TermsPage() {

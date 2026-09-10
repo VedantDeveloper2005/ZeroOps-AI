@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, TypeVar
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -21,6 +22,29 @@ _GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference"
 _NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
 _GROQ_MODEL = "openai/gpt-oss-120b"
+
+
+def _azure_openai_endpoint(endpoint: str) -> str:
+    """Validate and normalize a Microsoft Foundry Azure OpenAI v1 endpoint."""
+    try:
+        parsed = urlparse(endpoint)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Microsoft Foundry OpenAI endpoint must be a valid HTTPS URL") from error
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not hostname.endswith(".openai.azure.com"):
+        raise ValueError("Microsoft Foundry OpenAI endpoint must use HTTPS *.openai.azure.com")
+    if (
+        port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") not in {"", "/openai/v1"}
+    ):
+        raise ValueError("Microsoft Foundry OpenAI endpoint must be a bare /openai/v1 URL")
+    return f"https://{hostname}/openai/v1"
 
 
 class ModelUnavailableError(RuntimeError):
@@ -264,6 +288,11 @@ class StructuredModelClient:
                 raise ValueError("Groq endpoint must use the approved inference origin")
             if self.model != _GROQ_MODEL:
                 raise ValueError("Groq fallback must use the approved GPT-OSS model")
+        elif self.provider in {"azure-openai", "foundry-openai", "microsoft-foundry-openai"}:
+            self.provider = "azure-openai"
+            self.endpoint = _azure_openai_endpoint(self.endpoint)
+            if not self.model:
+                raise ValueError("Microsoft Foundry OpenAI requires a deployment name")
         else:
             raise ModelUnavailableError("Configured model provider is not supported")
         if not self.api_key:
@@ -283,11 +312,11 @@ class StructuredModelClient:
         output_schema = output_model.model_json_schema()
         provider_output_schema = (
             strict_provider_output_schema(output_schema)
-            if self.provider == "groq"
+            if self.provider in {"groq", "azure-openai"}
             else output_schema
         )
         schema_json = canonical_json_bytes(provider_output_schema).decode("utf-8")
-        strict_schema_enabled = self.provider == "groq"
+        strict_schema_enabled = self.provider in {"groq", "azure-openai"}
         bounded_system_instructions = (
             f"{system_instructions.strip()}\n\n"
             "Return exactly one JSON object matching the enforced JSON Schema. "
@@ -386,6 +415,9 @@ class StructuredModelClient:
         *,
         output_schema: dict[str, Any],
     ) -> tuple[str, dict[str, int]]:
+        if self.provider == "azure-openai":
+            return self._request_azure_openai(messages, output_schema=output_schema)
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -446,6 +478,54 @@ class StructuredModelClient:
         return str(content), {
             "prompt_tokens": max(0, int(usage.get("prompt_tokens") or 0)),
             "completion_tokens": max(0, int(usage.get("completion_tokens") or 0)),
+        }
+
+    def _request_azure_openai(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        output_schema: dict[str, Any],
+    ) -> tuple[str, dict[str, int]]:
+        """Call the Foundry v1 Responses API with Azure's api-key header."""
+        payload = {
+            "model": self.model,
+            "input": messages,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "zeroops_structured_response",
+                    "strict": True,
+                    "schema": output_schema,
+                }
+            },
+            "max_output_tokens": self.maximum_output_tokens,
+            "store": False,
+        }
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = client.post(
+                    f"{self.endpoint}/responses",
+                    headers={
+                        "api-key": self.api_key,
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+                value = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise ModelUnavailableError("Microsoft Foundry OpenAI request failed") from error
+        try:
+            content = str(value.get("output_text") or "").strip()
+            usage = value.get("usage") or {}
+        except AttributeError as error:
+            raise ModelContractError("Microsoft Foundry OpenAI returned an invalid response envelope") from error
+        if not content:
+            raise ModelContractError("Microsoft Foundry OpenAI returned an empty response")
+        return content, {
+            "prompt_tokens": max(0, int(usage.get("input_tokens") or 0)),
+            "completion_tokens": max(0, int(usage.get("output_tokens") or 0)),
         }
 
     @staticmethod

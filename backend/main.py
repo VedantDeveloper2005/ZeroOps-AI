@@ -43,14 +43,14 @@ except ImportError:
     stripe = None
 
 try:
-    from backend import config
+    from backend import config, database
     from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
-    import config
+    import config, database
     from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
     from services import deployment_targets
     from services import github_oauth, google_oauth
@@ -85,22 +85,34 @@ app = FastAPI(
 try:
     from backend.routes.history import router as history_router
     from backend.routes.devsecops import router as devsecops_router
+    from backend.routes.architecture_advisor import router as advisor_router
 except ImportError:
     from routes.history import router as history_router
     from routes.devsecops import router as devsecops_router
+    from routes.architecture_advisor import router as advisor_router
 
 app.include_router(history_router)
 app.include_router(devsecops_router)
+app.include_router(advisor_router)
+
 
 @app.get("/health")
 @app.get("/api/health")
-async def health_check():
+async def health_check(response: Response):
+    is_available = database.database_available
+    if not is_available:
+        response.status_code = 503
     return {
-        "status": "healthy",
+        "status": "healthy" if is_available else "degraded",
         "service": "ZeroOps AI Control Plane",
         "environment": config.APP_ENV,
-        "database": database_available,
+        "database": is_available,
     }
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
@@ -5139,7 +5151,7 @@ async def add_secret(
 
 
 @app.get("/api/secrets/{project_id}")
-async def list_secrets(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+async def list_secrets(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
         select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
     )
@@ -5155,7 +5167,7 @@ async def list_secrets(project_id: str, db: AsyncSession = Depends(get_db), curr
 
 
 @app.delete("/api/secrets/{project_id}/{key}")
-async def delete_secret(project_id: str, key: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+async def delete_secret(project_id: uuid.UUID, key: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
         select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
     )
@@ -5184,7 +5196,7 @@ async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSessi
 
 
 @app.get("/api/autoscaling/{project_id}")
-async def get_autoscaling_status(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+async def get_autoscaling_status(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
         select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
     )
@@ -5197,31 +5209,30 @@ async def get_autoscaling_status(project_id: str, db: AsyncSession = Depends(get
 
 
 @app.get("/api/security/status/{project_id}")
-async def get_security_status(project_id: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+async def get_security_status(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
         select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
     )
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    secrets = vault.get_project_secrets(project_id)
-    secrets_count = len(secrets)
+    # Count managed secret records in the database for this project
+    secret_count_res = await db.execute(
+        select(func.count(models.EnvironmentVariable.id))
+        .join(models.Environment, models.EnvironmentVariable.environment_id == models.Environment.id)
+        .filter(models.Environment.project_id == project.id, models.EnvironmentVariable.is_secret == True)
+    )
+    secrets_count = secret_count_res.scalar() or 0
     
-    # These are saved repository-analysis warnings, not a live vulnerability or
-    # threat feed. Preserve the recorded count without inferring a threat level.
-    vuln_count = 0
-    try:
-        analysis_result = await db.execute(
-            select(models.AIAnalysis)
-            .filter(models.AIAnalysis.project_id == project.id)
-            .order_by(models.AIAnalysis.created_at.desc())
-            .limit(1)
-        )
-        latest_analysis = analysis_result.scalars().first()
-        if latest_analysis and latest_analysis.vulnerabilities:
-            vuln_count = len(latest_analysis.vulnerabilities)
-    except Exception:
-        pass
+    # Query latest saved repository-analysis warnings
+    analysis_result = await db.execute(
+        select(models.AIAnalysis)
+        .filter(models.AIAnalysis.project_id == project.id)
+        .order_by(models.AIAnalysis.created_at.desc())
+        .limit(1)
+    )
+    latest_analysis = analysis_result.scalars().first()
+    vuln_count = len(latest_analysis.vulnerabilities) if latest_analysis and latest_analysis.vulnerabilities else 0
 
     return {
         "securityScore": None,
@@ -5531,18 +5542,6 @@ async def get_global_activity(
 # HEALTH
 # ──────────────────────────────────────────────
 
-@app.get("/api/health")
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "service": "zeroops-backend",
-        "environment": config.APP_ENV,
-        "azureDeploymentWorker": config.AZURE_CLI_AVAILABLE,
-        "openAIConfigured": bool(config.OPENAI_API_KEY),
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
 @app.get("/api/health/database")
 @app.get("/health/database")
 async def health_database(db: AsyncSession = Depends(get_db)):
@@ -5552,7 +5551,8 @@ async def health_database(db: AsyncSession = Depends(get_db)):
         return {"status": "healthy", "details": "connected to PostgreSQL"}
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
-        raise HTTPException(status_code=503, detail=f"Database connection error: {str(e)}")
+        database.database_available = False
+        raise HTTPException(status_code=503, detail="Database connection is unavailable.")
 
 @app.get("/api/health/github")
 @app.get("/health/github")
@@ -5785,10 +5785,19 @@ async def analyze_project_repository(
     temp_dir = None
     if project.source_type != "upload" and not project.source_path:
         try:
+            commit_sha = None
+            if clone_token and project.full_name and project.branch:
+                try:
+                    commit_sha = await github_oauth.resolve_branch_commit(
+                        clone_token, project.full_name, project.branch
+                    )
+                except Exception:
+                    pass
             temp_dir = git.clone_repo(
                 project.full_name,
                 clone_token,
                 branch=project.branch or "main",
+                commit_sha=commit_sha,
                 workspace_key=f"analysis-{uuid.uuid4()}",
             )
             repo_path = temp_dir
@@ -5962,7 +5971,22 @@ async def post_architect_chat(
     if not plan:
         raise HTTPException(status_code=404, detail="Generate infrastructure plan first.")
 
-    updated_plan_data, reply = ai.architect_chat(req.message, plan.plan_data or {})
+    citations = None
+    try:
+        from backend.services import foundry_advisor
+        updated_plan_data, reply, _, raw_citations = await asyncio.to_thread(
+            foundry_advisor.advisor_chat,
+            req.message,
+            plan.plan_data or {},
+        )
+        if raw_citations:
+            citations = [c.model_dump(mode="json") for c in raw_citations]
+    except Exception:
+        updated_plan_data, reply = await asyncio.to_thread(
+            ai.architect_chat,
+            req.message,
+            plan.plan_data or {},
+        )
     
     plan_updated = False
     if updated_plan_data != plan.plan_data:
@@ -5981,7 +6005,8 @@ async def post_architect_chat(
     return schemas.ArchitectChatResponse(
         reply=reply,
         plan_updated=plan_updated,
-        plan=_serialize_infrastructure_plan(plan)
+        plan=_serialize_infrastructure_plan(plan),
+        citations=citations,
     )
 
 

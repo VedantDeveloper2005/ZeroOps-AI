@@ -13,6 +13,12 @@ const previewSource = readProjectFile(
   "src/components/landing/HomeHeroMotion.tsx",
 );
 const layoutSource = readProjectFile("src/app/layout.tsx");
+const draftPublicPages = [
+  "src/app/privacy/page.tsx",
+  "src/app/terms/page.tsx",
+  "src/app/data-processing/page.tsx",
+  "src/app/status/page.tsx",
+];
 
 function findMatchingSquareBracket(source, openingIndex) {
   let depth = 0;
@@ -259,4 +265,15 @@ test("hero preview is illustrative, reduced-motion aware, and not fake runtime p
     /\bstate\s*:\s*["'`](?:running|passed|success|succeeded|complete|completed)["'`]/i,
     "Illustrative steps must not masquerade as successful runtime states.",
   );
+});
+
+test("draft legal and status pages are excluded from search indexing", () => {
+  for (const file of draftPublicPages) {
+    const source = readProjectFile(file);
+    assert.match(
+      source,
+      /robots:\s*\{\s*index:\s*false,\s*follow:\s*false,\s*nocache:\s*true\s*\}/,
+      `${file} must remain noindex until its operator-owned content is finalized.`,
+    );
+  }
 });

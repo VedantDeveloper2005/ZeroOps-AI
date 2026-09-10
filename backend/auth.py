@@ -54,7 +54,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Hash a password using bcrypt's secure default work factor."""
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    encoded = password.encode("utf-8")
+    if len(encoded) > 72:
+        raise ValueError("bcrypt passwords must be at most 72 UTF-8 bytes.")
+    return bcrypt.hashpw(encoded, bcrypt.gensalt()).decode("utf-8")
 
 
 def _encode_token(data: dict, token_type: str, expires_delta: timedelta) -> str:
@@ -276,8 +279,8 @@ def is_recent_primary_authentication(user: User) -> bool:
 # ──────────────────────────────────────────────
 
 def create_verification_token() -> str:
-    """Create a URL-safe token for email verification links."""
-    return "".join(str(secrets.randbelow(10)) for _ in range(6))
+    """Create a high-entropy URL-safe token for email verification links."""
+    return secrets.token_urlsafe(32)
 
 
 def hash_verification_token(token: str) -> str:

@@ -67,8 +67,8 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
         for expected in (
             "TARGET_RESOURCE_GROUP: zeroops-rg",
             "TARGET_LOCATION: centralindia",
-            "TARGET_VM_SIZE: Standard_D2ads_v5",
-            "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest",
+            "TARGET_VM_SIZE: Standard_B2as_v2",
+            "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:22.04.202608060",
             "TARGET_VNET_CIDR: 10.72.0.0/16",
             "REQUIRED_VCPUS: \"2\"",
             'resource_group_location,,}" == "${TARGET_LOCATION,,}',
@@ -89,6 +89,7 @@ class TerraformRunnerPreflightWorkflowTests(unittest.TestCase):
             'with open(sku_path, encoding="utf-8")',
             '"AcceleratedNetworkingEnabled"',
             '"EphemeralOSDiskSupported"',
+            "intentionally uses a managed OS disk",
             '"TrustedLaunchDisabled"',
             "Standard_B2s",
             "Standard_D2ds_v4",

@@ -22,14 +22,20 @@ terraform_function_max_instances = 2
 history_function_max_instances   = 2
 function_instance_memory_mb       = 2048
 
-vmss_sku           = "Standard_D2ads_v5"
+vmss_sku           = "Standard_B2as_v2"
 vmss_zones         = ["1", "2"]
 vmss_max_instances = 1
+deploy_runner       = false
+runner_os_image_version = "22.04.202608060"
 
-# Replace both values before planning. The image must already be present in the
-# ACR created by this profile and the reference must use its manifest digest.
+# Foundation deployment intentionally creates the ACR without a VMSS. For the
+# runner stage, set deploy_runner=true and replace these values with a real key
+# and the digest returned by the publish workflow.
 runner_admin_ssh_public_key = "ssh-ed25519 AAAAREPLACEWITHAREALPUBLICKEY zeroops-test"
-runner_image_reference      = "crzeroopstest2f871a.azurecr.io/terraform-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+runner_image_reference      = null
+
+# Object ID of the apply UAMI created by infra/bootstrap. This is not a secret.
+deployment_identity_principal_id = null
 
 # Assigning Contributor is opt-in and must target a dedicated customer workload
 # resource group, never zeroops-rg or a subscription.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,9 +14,12 @@ from worker.tests.test_execution_contract import (
     ARTIFACT_ID,
     BUNDLE_DIGEST,
     JOB_ID,
+    INPUT_DIGEST,
     OPAQUE_CONTAINER,
     PLAN_DIGEST,
+    POLICY_DIGEST,
     PROJECT_ID,
+    SCOPE_DIGEST,
     TENANT_ID,
     USER_ID,
     WORKFLOW_ID,
@@ -51,16 +54,34 @@ def apply_envelope() -> ExecutionEnvelope:
         "sha256": PLAN_DIGEST,
         "plan_job_digest": "c" * 64,
         "bundle_sha256": BUNDLE_DIGEST,
+        "input_variables_sha256": INPUT_DIGEST,
+        "scope_digest": SCOPE_DIGEST,
+        "policy_digest": POLICY_DIGEST,
+    }
+    now = datetime.now(timezone.utc)
+    payload["cost_estimate"] = {
+        "artifact_sha256": "9" * 64,
+        "currency": "USD",
+        "monthly_cost_microunits": 1_000_000,
+        "captured_at": (now - timedelta(minutes=1)).isoformat(),
     }
     payload["approval"] = {
         "approval_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "decision": "approved",
         "approved_by": USER_ID,
-        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "approved_at": now.isoformat(),
         "plan_job_digest": "c" * 64,
         "plan_sha256": PLAN_DIGEST,
         "plan_etag": '"executor-plan-etag"',
         "bundle_sha256": BUNDLE_DIGEST,
+        "apply_job_id": JOB_ID,
+        "expires_at": (now + timedelta(hours=1)).isoformat(),
+        "input_variables_sha256": INPUT_DIGEST,
+        "scope_digest": SCOPE_DIGEST,
+        "policy_digest": POLICY_DIGEST,
+        "cost_estimate_sha256": "9" * 64,
+        "currency": "USD",
+        "monthly_cost_microunits": 1_000_000,
     }
     return ExecutionEnvelope.from_mapping(payload_with_digest(payload))
 
@@ -108,6 +129,11 @@ def sanitized_plan_result() -> dict:
             ),
             "etag": '"executor-plan-etag"',
             "sha256": PLAN_DIGEST,
+            "plan_job_digest": plan_envelope().job_digest,
+            "bundle_sha256": BUNDLE_DIGEST,
+            "input_variables_sha256": INPUT_DIGEST,
+            "scope_digest": SCOPE_DIGEST,
+            "policy_digest": POLICY_DIGEST,
         },
         "state_key": (
             f"tenants/{TENANT_ID}/workspaces/{WORKFLOW_ID}/terraform.tfstate"
@@ -148,11 +174,13 @@ class WorkflowEventCompatibilityTests(unittest.TestCase):
         changed_event = build_workflow_event(changed, sanitized_plan_result())
         self.assertNotEqual(first["event_id"], changed_event["event_id"])
 
-    def test_executor_locators_and_etags_are_not_emitted(self) -> None:
-        event_json = json.dumps(
-            build_workflow_event(plan_envelope(), sanitized_plan_result()),
-            sort_keys=True,
+    def test_executor_locators_are_isolated_from_user_event_data(self) -> None:
+        event = WorkflowEventV1.model_validate(
+            build_workflow_event(plan_envelope(), sanitized_plan_result())
         )
+        from zeroops_functions import history_store
+
+        event_json = json.dumps(history_store._safe_event_data(event), sort_keys=True)
         for forbidden in (
             "plan_handle",
             "executor-plan-etag",
@@ -221,11 +249,14 @@ class WorkflowEventCompatibilityTests(unittest.TestCase):
         self.assertEqual(properties["correlation_id"], event["correlation_id"])
         for forbidden in (
             "must-never-reach-service-bus",
-            "executor-plan-etag",
             "terraform.tfstate",
             "?sig=",
         ):
             self.assertNotIn(forbidden, body)
+        self.assertEqual(
+            event["control_record"]["saved_plan"]["etag"],
+            '"executor-plan-etag"',
+        )
 
 
 if __name__ == "__main__":

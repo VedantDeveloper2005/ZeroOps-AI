@@ -376,7 +376,7 @@ def deploy_image(
     metadata: dict[str, Any],
     environment_variables: dict[str, tuple[str, bool]] | None = None,
 ) -> Generator[str | AppServiceRelease, None, None]:
-    """Create/update a Linux App Service site and yield its Azure-reported URL."""
+    """Publish to Terraform-provisioned App Service without changing Azure RBAC."""
     app_name = normalize_app_name(app_name)
     resource_group = str(connection.resource_group)
     plan_name = str(getattr(connection, "app_service_plan", "") or "").strip()
@@ -390,40 +390,42 @@ def deploy_image(
     try:
         env = _azure_environment(connection, config_dir)
         _sign_in(connection, client_secret, env)
-        exists = True
         try:
-            _capture(["az", "webapp", "show", "--name", app_name, "--resource-group", resource_group, "--output", "none"], env=env)
-        except AzureDeploymentError:
-            exists = False
-
-        if not exists:
-            yield "Creating your application site…"
-            yield from _run([
-                "az", "webapp", "create", "--name", app_name, "--resource-group", resource_group,
-                "--plan", plan_name, "--deployment-container-image-name", image_ref, "--output", "none",
+            principal_id = _capture([
+                "az", "webapp", "show", "--name", app_name,
+                "--resource-group", resource_group,
+                "--query", "identity.principalId", "--output", "tsv",
             ], env=env)
-
-        principal_id = _capture([
-            "az", "webapp", "identity", "assign", "--name", app_name, "--resource-group", resource_group,
-            "--query", "principalId", "--output", "tsv",
-        ], env=env)
+        except AzureDeploymentError as error:
+            raise AzureDeploymentError(
+                "The approved Terraform apply has not provisioned this application site. "
+                "Apply the exact saved plan before publishing a release."
+            ) from error
         registry_id = _capture([
             "az", "acr", "show", "--name", _registry_name(registry_server), "--query", "id", "--output", "tsv",
         ], env=env)
         if not principal_id or not registry_id:
-            raise AzureDeploymentError("Azure could not configure private image access for this application.")
+            raise AzureDeploymentError(
+                "The Terraform-provisioned application identity or registry scope is unavailable."
+            )
         try:
-            _capture([
-                "az", "role", "assignment", "create", "--assignee-object-id", principal_id,
-                "--assignee-principal-type", "ServicePrincipal", "--role", ACR_PULL_ROLE_ID,
-                "--scope", registry_id, "--output", "none",
+            assignment_id = _capture([
+                "az", "role", "assignment", "list",
+                "--assignee-object-id", principal_id,
+                "--scope", registry_id,
+                "--role", ACR_PULL_ROLE_ID,
+                "--query", "[0].id", "--output", "tsv",
             ], env=env)
         except AzureDeploymentError as error:
             raise AzureDeploymentError(
-                "Azure could not grant AcrPull to the application identity on the "
-                "configured registry. Grant the deployment principal role-assignment "
-                "permission at the registry scope and retry."
+                "Azure could not verify the Terraform-managed AcrPull assignment on the "
+                "configured registry. Reconcile the exact saved plan before retrying."
             ) from error
+        if not assignment_id:
+            raise AzureDeploymentError(
+                "The exact Terraform apply has not granted AcrPull to the application "
+                "identity on the configured registry."
+            )
 
         yield "Publishing your new version…"
         yield from _run([

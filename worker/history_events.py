@@ -22,6 +22,7 @@ from worker.contracts import (
 
 
 _SAFE_RESOURCE_KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SAFE_RESOURCE_ADDRESS = re.compile(r"^azurerm_[a-z0-9_]+\.[A-Za-z0-9_-]+$")
 _SAFE_VERSION = re.compile(r"^[0-9][0-9.]{0,31}$")
 _SAFE_ARTIFACT_KIND = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _KNOWN_ACTIONS = ("create", "update", "delete", "replace", "read", "no_op")
@@ -83,6 +84,41 @@ def _safe_summary(value: Any) -> dict[str, Any] | None:
         "actions": actions,
         "resource_kinds": resource_kinds,
     }
+    changes_value = value.get("changes")
+    safe_changes: list[dict[str, Any]] = []
+    if isinstance(changes_value, list):
+        for item in changes_value[:500]:
+            if not isinstance(item, Mapping):
+                continue
+            address = item.get("address")
+            resource_type = item.get("type")
+            change_actions = item.get("actions")
+            if (
+                isinstance(address, str)
+                and _SAFE_RESOURCE_ADDRESS.fullmatch(address)
+                and isinstance(resource_type, str)
+                and _SAFE_RESOURCE_KIND.fullmatch(resource_type)
+                and change_actions in (
+                    ["create"],
+                    ["update"],
+                    ["delete"],
+                    ["delete", "create"],
+                    ["create", "delete"],
+                    ["read"],
+                    ["no-op"],
+                )
+            ):
+                safe_changes.append(
+                    {
+                        "address": address,
+                        "type": resource_type,
+                        "actions": list(change_actions),
+                    }
+                )
+    summary["changes"] = sorted(
+        safe_changes,
+        key=lambda item: (item["address"], item["type"], item["actions"]),
+    )
     for field in ("terraform_version", "format_version"):
         version = value.get(field)
         if isinstance(version, str) and _SAFE_VERSION.fullmatch(version):
@@ -159,6 +195,61 @@ def _occurred_at(value: Any) -> str:
         if parsed is not None and parsed.tzinfo is not None:
             return parsed.astimezone(timezone.utc).isoformat()
     return datetime.now(timezone.utc).isoformat()
+
+
+def _plan_control_record(
+    envelope: ExecutionEnvelope,
+    result: Mapping[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    plan_handle = result.get("plan_handle")
+    required_handle_fields = {
+        "blob_name",
+        "etag",
+        "sha256",
+        "plan_job_digest",
+        "bundle_sha256",
+        "input_variables_sha256",
+        "scope_digest",
+        "policy_digest",
+    }
+    if not isinstance(plan_handle, Mapping) or set(plan_handle) != required_handle_fields:
+        raise ValueError("Successful Terraform plan is missing its private control handle.")
+    guardrails = envelope.guardrails
+    return {
+        "schema_version": "terraform-plan-control.v1",
+        "plan_job_id": envelope.job_id,
+        "plan_job_digest": envelope.job_digest,
+        "revision": envelope.revision,
+        "bundle": {
+            "uri": envelope.bundle.uri,
+            "etag": envelope.bundle.etag,
+            "sha256": envelope.bundle.sha256,
+            "size_bytes": envelope.bundle.size_bytes,
+        },
+        "input_variables": {
+            "file_name": envelope.input_variables.file_name,
+            "sha256": envelope.input_variables.sha256,
+            "definitions": [
+                {"name": item.name, "type": item.type}
+                for item in envelope.input_variables.definitions
+            ],
+        },
+        "guardrails": {
+            "target_resource_group": guardrails.target_resource_group,
+            "allowed_resource_types": list(guardrails.allowed_resource_types),
+            "maximum_resource_changes": guardrails.maximum_resource_changes,
+            "maximum_delete_count": guardrails.maximum_delete_count,
+            "maximum_replace_count": guardrails.maximum_replace_count,
+            "scope_digest": guardrails.scope_digest,
+            "policy_digest": guardrails.policy_digest,
+            "monthly_budget_microunits": guardrails.monthly_budget_microunits,
+            "budget_currency": guardrails.budget_currency,
+        },
+        "saved_plan": dict(plan_handle),
+        "plan_summary": summary,
+        "planned_at": _occurred_at(result.get("completed_at")),
+    }
 
 
 def _event_outcome(
@@ -239,6 +330,12 @@ def build_workflow_event(
     artifact = _safe_history_artifact(result.get("history_artifact"))
     artifacts = [artifact] if artifact is not None else []
 
+    control_record = None
+    if envelope.operation == "plan" and result.get("status") == "planned":
+        if summary is None:
+            raise ValueError("Successful Terraform plan is missing a safe summary.")
+        control_record = _plan_control_record(envelope, result, summary)
+
     return {
         "schema_version": "workflow-event.v1",
         "event_id": event_id,
@@ -257,4 +354,5 @@ def build_workflow_event(
         "safe_metadata": safe_metadata,
         "error_code": error_code,
         "safe_message": safe_message,
+        "control_record": control_record,
     }

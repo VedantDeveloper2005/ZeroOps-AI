@@ -97,6 +97,7 @@ class PipelineContext:
     infrastructure_change: bool = False
     approval_required: bool = False
     kubernetes_required: bool = False
+    target_type: str = "azure-app-service"
     monitoring_registration_required: bool = True
     deployment_mode: str = "deploy_after_checks"
     run_dependency_install: bool = True
@@ -273,7 +274,9 @@ def initialize_stages(context: PipelineContext) -> tuple[PlannedStage, ...]:
         "infrastructure_validation",
         "Infrastructure Validation",
         needs_infrastructure,
-        "No infrastructure definition or infrastructure change was detected.",
+        "Existing App Service reused; no infrastructure change."
+        if context.target_type in {"azure-app-service", "app-service", "appservice"}
+        else "No infrastructure definition or infrastructure change was detected.",
         "terraform",
     )
     add(
@@ -287,7 +290,7 @@ def initialize_stages(context: PipelineContext) -> tuple[PlannedStage, ...]:
         "terraform_plan",
         "Terraform Plan",
         context.infrastructure_change,
-        "No infrastructure change requires a Terraform plan.",
+        "No infrastructure change detected.",
         "terraform",
     )
     add(
@@ -300,7 +303,9 @@ def initialize_stages(context: PipelineContext) -> tuple[PlannedStage, ...]:
         "infrastructure_provisioning",
         "Infrastructure Provisioning",
         context.infrastructure_change and performs_deployment,
-        "No approved infrastructure change requires provisioning in this run mode.",
+        "Existing Azure App Service infrastructure reused."
+        if context.target_type in {"azure-app-service", "app-service", "appservice"}
+        else "No approved infrastructure change requires provisioning in this run mode.",
         "terraform",
     )
     add(

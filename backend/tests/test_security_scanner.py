@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 from pathlib import Path
 
 from backend.services import security_scanner
@@ -213,6 +214,26 @@ def test_default_runner_does_not_forward_cloud_credentials(tmp_path: Path, monke
     assert "AZURE_CLIENT_SECRET" not in captured["env"]
     assert captured["env"]["NO_COLOR"] == "1"
     assert captured["env"]["HOME"] != str(Path.home())
+
+
+def test_default_runner_adds_only_selected_scanner_directory_to_path(tmp_path: Path, monkeypatch):
+    captured = {}
+    scanner_directory = tmp_path / "scanner-tools"
+    scanner_directory.mkdir()
+    scanner = scanner_directory / "semgrep.exe"
+    scanner.touch()
+    monkeypatch.setenv("PATH", "safe-system-path")
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+        return type("Completed", (), {"returncode": 0, "stdout": "semgrep 1", "stderr": ""})()
+
+    monkeypatch.setattr(security_scanner.subprocess, "run", fake_run)
+    security_scanner._default_runner([str(scanner), "--version"], str(tmp_path), 1)
+
+    path_entries = captured["env"]["PATH"].split(os.pathsep)
+    assert path_entries[0] == str(scanner_directory.resolve())
+    assert "safe-system-path" in path_entries
 
 
 def test_authenticated_container_scan_uses_ephemeral_exact_registry_config(

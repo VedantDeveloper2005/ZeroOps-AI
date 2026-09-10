@@ -38,6 +38,12 @@ variable "enable_private_dns" {
   default = false
 }
 
+variable "enable_nat_gateway" {
+  description = "Create dedicated runner egress only in the runner stage."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type = map(string)
 }

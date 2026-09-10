@@ -1,13 +1,14 @@
-"""Future Microsoft Foundry provider authenticated with managed identity.
+"""Microsoft Foundry provider authenticated with managed identity / DefaultAzureCredential.
 
-The SDK imports are intentionally lazy so GitHub Models testing does not add a
-Foundry runtime dependency. This provider supports a prompt agent reference or
-a direct Foundry model deployment through the same structured gateway.
+Invokes the pre-configured Microsoft Foundry Prompt Agent through an agent-bound
+client so server-side instructions, File Search (zeroops-knowledge vector store),
+and Web Search are actively executed by the agent runtime.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -15,10 +16,58 @@ from urllib.parse import urlparse
 from backend.services.providers.base import (
     ProviderConfiguration,
     ProviderConfigurationError,
+    ProviderCredentialUnavailableError,
     ProviderError,
     ProviderRequest,
     ProviderResponse,
 )
+
+logger = logging.getLogger("zeroops.foundry")
+ai_logger = logging.getLogger("zeroops.ai.observability")
+
+
+def extract_annotations(response: Any) -> list[dict[str, Any]]:
+    """Extract tool annotations and citations from a Foundry response object."""
+    annotations = []
+
+    # 1. Direct annotations attribute on the response
+    raw_annotations = getattr(response, "annotations", None)
+    if isinstance(raw_annotations, list):
+        for ann in raw_annotations:
+            ann_type = getattr(ann, "type", None) or (ann.get("type") if isinstance(ann, dict) else None)
+            url = getattr(ann, "url", None) or (ann.get("url") if isinstance(ann, dict) else None)
+            title = getattr(ann, "title", None) or (ann.get("title") if isinstance(ann, dict) else None)
+            text = getattr(ann, "text", None) or getattr(ann, "quote", None) or (ann.get("text") if isinstance(ann, dict) else None)
+            file_id = getattr(ann, "file_id", None) or (ann.get("file_id") if isinstance(ann, dict) else None)
+            annotations.append({
+                "type": str(ann_type or "citation"),
+                "url": url,
+                "title": title,
+                "text": text,
+                "file_id": file_id,
+            })
+
+    # 2. Annotations nested inside output content parts
+    output_items = getattr(response, "output", None)
+    if isinstance(output_items, list):
+        for item in output_items:
+            item_annotations = getattr(item, "annotations", None) or (item.get("annotations") if isinstance(item, dict) else None)
+            if isinstance(item_annotations, list):
+                for ann in item_annotations:
+                    ann_type = getattr(ann, "type", None) or (ann.get("type") if isinstance(ann, dict) else None)
+                    url = getattr(ann, "url", None) or (ann.get("url") if isinstance(ann, dict) else None)
+                    title = getattr(ann, "title", None) or (ann.get("title") if isinstance(ann, dict) else None)
+                    text = getattr(ann, "text", None) or getattr(ann, "quote", None) or (ann.get("text") if isinstance(ann, dict) else None)
+                    file_id = getattr(ann, "file_id", None) or (ann.get("file_id") if isinstance(ann, dict) else None)
+                    annotations.append({
+                        "type": str(ann_type or "citation"),
+                        "url": url,
+                        "title": title,
+                        "text": text,
+                        "file_id": file_id,
+                    })
+
+    return annotations
 
 
 class AzureFoundryProvider:
@@ -29,6 +78,7 @@ class AzureFoundryProvider:
         configuration: ProviderConfiguration,
         *,
         openai_client: Any | None = None,
+        project_client: Any | None = None,
     ) -> None:
         parsed = urlparse(configuration.endpoint.strip())
         if parsed.scheme != "https" or not parsed.netloc:
@@ -44,6 +94,7 @@ class AzureFoundryProvider:
 
         self.configuration = configuration
         self._openai_client = openai_client
+        self._project_client = project_client
 
     def _client(self):
         if self._openai_client is not None:
@@ -53,17 +104,107 @@ class AzureFoundryProvider:
             from azure.identity import DefaultAzureCredential
         except ImportError as error:
             raise ProviderConfigurationError(
-                "The Microsoft Foundry SDK is not installed for this workload."
+                "The Microsoft Foundry SDK (azure-ai-projects) is not installed."
             ) from error
 
-        project = AIProjectClient(
-            endpoint=self.configuration.endpoint,
-            credential=DefaultAzureCredential(
+        try:
+            credential = DefaultAzureCredential(
                 exclude_interactive_browser_credential=True,
-            ),
-        )
-        self._openai_client = project.get_openai_client()
+            )
+            if self._project_client is None:
+                self._project_client = AIProjectClient(
+                    endpoint=self.configuration.endpoint,
+                    credential=credential,
+                )
+
+            # Bind client directly to the agent so server-side instructions,
+            # File Search, and Web Search are actively executed by the agent runtime.
+            if self.configuration.agent_name:
+                self._openai_client = self._project_client.get_openai_client(
+                    agent_name=self.configuration.agent_name
+                )
+            else:
+                self._openai_client = self._project_client.get_openai_client()
+        except Exception as error:
+            error_str = str(error)
+            if "Authentication" in error_str or "Credential" in error_str:
+                raise ProviderCredentialUnavailableError(
+                    "Azure authentication unavailable for Microsoft Foundry."
+                ) from error
+            raise ProviderConfigurationError(
+                f"Failed to initialize Microsoft Foundry client: {error}"
+            ) from error
+
         return self._openai_client
+
+    def _invoke_with_retry(self, payload: dict[str, Any], max_retries: int = 2) -> Any:
+        """Invoke Foundry responses API with bounded exponential backoff for transient errors."""
+        client = self._client()
+        attempt = 0
+        backoff_s = 1.0
+
+        while True:
+            try:
+                return client.responses.create(**payload)
+            except Exception as error:
+                error_name = error.__class__.__name__
+                error_str = str(error).lower()
+                status_code = getattr(error, "status_code", None)
+
+                # 401: Never retry authentication failures
+                if status_code == 401 or "authentication" in error_str or "unauthorized" in error_str:
+                    logger.error("Microsoft Foundry authentication failed (401).")
+                    raise ProviderCredentialUnavailableError(
+                        "Microsoft Foundry authentication failed. Ensure valid Azure CLI or Managed Identity credentials."
+                    ) from error
+
+                # 403: Never retry RBAC permission failures
+                if status_code == 403 or "forbidden" in error_str or "permission" in error_str:
+                    logger.error("Microsoft Foundry RBAC authorization failed (403).")
+                    raise ProviderError(
+                        "Microsoft Foundry access denied. Ensure the Azure identity holds the 'Azure AI Developer' role on the Foundry project."
+                    ) from error
+
+                # 404: Not found
+                if status_code == 404 or "not found" in error_str:
+                    logger.error("Microsoft Foundry resource or agent not found (404).")
+                    raise ProviderConfigurationError(
+                        f"Microsoft Foundry agent or project not found at endpoint: {self.configuration.endpoint}."
+                    ) from error
+
+                # 429: Rate limit — respect Retry-After if present
+                if status_code == 429 or "rate limit" in error_str or "too many requests" in error_str:
+                    if attempt < max_retries:
+                        retry_after = getattr(error, "retry_after", None)
+                        sleep_time = float(retry_after) if retry_after is not None else backoff_s
+                        sleep_time = min(sleep_time, 15.0)
+                        logger.warning(
+                            "Microsoft Foundry rate limited (429). Retrying in %.1fs (attempt %d/%d).",
+                            sleep_time, attempt + 1, max_retries
+                        )
+                        time.sleep(sleep_time)
+                        attempt += 1
+                        backoff_s *= 2.0
+                        continue
+                    raise ProviderError("Microsoft Foundry rate limit exceeded.") from error
+
+                # 5xx or Timeout: Bounded retry
+                if attempt < max_retries and (
+                    status_code in {500, 502, 503, 504}
+                    or "timeout" in error_str
+                    or "connection" in error_str
+                ):
+                    logger.warning(
+                        "Microsoft Foundry transient error (%s). Retrying in %.1fs (attempt %d/%d).",
+                        error_name, backoff_s, attempt + 1, max_retries
+                    )
+                    time.sleep(backoff_s)
+                    attempt += 1
+                    backoff_s *= 2.0
+                    continue
+
+                logger.error("Microsoft Foundry inference failed with %s: %s", error_name, error)
+                raise ProviderError("Microsoft Foundry inference failed.") from error
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:
         schema_text = json.dumps(
@@ -108,20 +249,30 @@ class AzureFoundryProvider:
             payload["model"] = self.configuration.model
 
         started = time.perf_counter()
-        try:
-            response = self._client().responses.create(**payload)
-        except Exception as error:
-            raise ProviderError("Microsoft Foundry inference failed.") from error
+        response = self._invoke_with_retry(payload)
+        latency_ms = max(0, round((time.perf_counter() - started) * 1_000))
 
         content = str(getattr(response, "output_text", "") or "").strip()
         if not content:
             raise ProviderError("Microsoft Foundry returned an empty response.")
 
         usage = getattr(response, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+
+        ai_logger.info(
+            "FOUNDRY_REQUEST | agent=%s | model=%s | latency_ms=%d | input_tokens=%d | output_tokens=%d",
+            self.configuration.agent_name or "none",
+            str(getattr(response, "model", None) or self.configuration.model or self.configuration.agent_name),
+            latency_ms,
+            input_tokens,
+            output_tokens,
+        )
+
         return ProviderResponse(
             content=content,
             model=str(getattr(response, "model", None) or self.configuration.model or self.configuration.agent_name),
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            latency_ms=max(0, round((time.perf_counter() - started) * 1_000)),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms,
         )

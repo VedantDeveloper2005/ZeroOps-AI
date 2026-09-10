@@ -84,7 +84,8 @@ def test_vmss_metadata_and_arm_update_use_validated_endpoints(monkeypatch) -> No
     metadata = {
         "subscriptionId": "11111111-1111-4111-8111-111111111111",
         "resourceGroupName": "production/group",
-        "name": "worker?blue",
+        "vmScaleSetName": "workers/blue",
+        "instanceId": "7?slot",
     }
     opened: list[tuple[str, int]] = []
 
@@ -110,8 +111,8 @@ def test_vmss_metadata_and_arm_update_use_validated_endpoints(monkeypatch) -> No
         (
             "https://management.azure.com/subscriptions/"
             "11111111-1111-4111-8111-111111111111/resourceGroups/"
-            "production%2Fgroup/providers/Microsoft.Compute/virtualMachines/"
-            "worker%3Fblue?api-version=2024-11-01",
+            "production%2Fgroup/providers/Microsoft.Compute/virtualMachineScaleSets/"
+            "workers%2Fblue/virtualMachines/7%3Fslot?api-version=2024-11-01",
             30,
         ),
     ]

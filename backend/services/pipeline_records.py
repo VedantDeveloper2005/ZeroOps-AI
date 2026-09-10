@@ -111,6 +111,7 @@ def context_from_configuration(
         infrastructure_change=infrastructure_change,
         approval_required=bool(config and config.deployment_mode == "require_approval"),
         kubernetes_required=target_type == "azure-aks",
+        target_type=target_type,
         monitoring_registration_required=True,
         deployment_mode=config.deployment_mode if config else "deploy_after_checks",
         run_dependency_install=bool(config.run_dependency_install) if config else True,

@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Data Processing and Retention",
   description:
     "How ZeroOps AI processes source, account, infrastructure, deployment, log, and monitoring data, plus open DPA decisions.",
+  robots: { index: false, follow: false, nocache: true },
 };
 
 export default function DataProcessingPage() {

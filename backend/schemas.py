@@ -529,6 +529,12 @@ class ArchitectChatResponse(BaseModel):
     reply: str
     plan_updated: bool = False
     plan: Optional[InfrastructurePlanResponse] = None
+    citations: Optional[List[dict]] = None
+
+
+class ArchitectureAdvisorRequest(BaseModel):
+    user_query: Optional[str] = Field(default=None, max_length=1000)
+
 
 
 class KnowledgeGraphResponse(BaseModel):

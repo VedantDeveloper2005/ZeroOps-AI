@@ -14,9 +14,9 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from worker.azure import is_azure_cli_available
+from worker.azure_cli import is_azure_cli_available
 from worker.health import WorkerHealth, start_health_server
-from worker.queue import PostgresJobQueue, QueueUnavailableError
+from worker.job_queue import PostgresJobQueue, QueueUnavailableError
 from worker.terraform_runner import TerraformRunner
 
 try:

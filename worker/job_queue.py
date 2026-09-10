@@ -1,4 +1,8 @@
-"""PostgreSQL-backed deployment queue with bounded, renewable worker leases."""
+"""PostgreSQL-backed deployment queue with bounded, renewable worker leases.
+
+The filename deliberately avoids ``queue.py`` so launching Python from the
+worker directory cannot shadow the standard-library :mod:`queue` module.
+"""
 
 from __future__ import annotations
 

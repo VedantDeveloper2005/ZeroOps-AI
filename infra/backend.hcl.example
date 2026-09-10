@@ -7,3 +7,6 @@ container_name       = "platform-tfstate"
 key                  = "zeroops/platform/test.tfstate"
 use_azuread_auth     = true
 
+# Authentication is selected out of band. GitHub sets ARM_USE_OIDC=true and
+# ARM_CLIENT_ID; an authorized local operator sets ARM_USE_CLI=true. Never put
+# tokens, client secrets, access keys, or SAS values in this file.

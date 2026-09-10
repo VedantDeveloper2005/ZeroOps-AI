@@ -1,0 +1,9 @@
+resource_group_name  = "zeroops-tfstate-rg"
+storage_account_name = "replacewithstateaccount"
+container_name       = "platform-tfstate"
+key                  = "zeroops/bootstrap/identity.tfstate"
+use_azuread_auth     = true
+
+# For the first authorized bootstrap, authenticate interactively with Azure CLI
+# and set ARM_USE_CLI=true. No access key, SAS, certificate, or client secret is
+# accepted by this backend.

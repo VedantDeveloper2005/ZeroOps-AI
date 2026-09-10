@@ -68,6 +68,26 @@ def test_development_default_is_used_only_without_a_vault(monkeypatch):
     assert vault.get_application_setting("OPENAI_MODEL", default="gpt-5.4-mini") == "gpt-5.4-mini"
 
 
+def test_config_uses_explicit_environment_settings_outside_production(monkeypatch):
+    from backend import config
+
+    monkeypatch.setattr(config, "IS_PRODUCTION", False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://local-demo")
+
+    assert config._setting("DATABASE_URL") == "postgresql://local-demo"
+
+
+def test_config_never_uses_process_settings_in_production(monkeypatch):
+    from backend import config
+
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://untrusted-process-setting")
+    monkeypatch.setattr(vault, "kv_client", None)
+    monkeypatch.setattr(vault, "HAS_AZURE_KV", False)
+
+    assert config._setting("DATABASE_URL", "vault-default") == "vault-default"
+
+
 def test_project_secret_names_reject_ambiguous_keys_and_hash_long_keys():
     project_id = "12345678-1234-1234-1234-123456789abc"
 

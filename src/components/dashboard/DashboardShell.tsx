@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { TopBar } from "@/components/dashboard/TopBar";
+import { useAuth } from "@/lib/AuthContext";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user, loading } = useAuth();
   const previousPathname = useRef(pathname);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -43,6 +45,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       return next;
     });
   };
+
+  if (loading || !user) {
+    return (
+      <main id="main-content" className="grid min-h-dvh place-items-center bg-background">
+        <p role="status" className="text-sm text-foreground-muted">
+          {loading ? "Checking your session…" : "Redirecting to sign in…"}
+        </p>
+      </main>
+    );
+  }
 
   return (
     <div className="dashboard-shell">

@@ -1,0 +1,462 @@
+name: Plan or release ZeroOps Azure platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Safe staged operation
+        required: true
+        type: choice
+        options:
+          - plan-foundation
+          - publish-artifacts
+          - plan-runner
+          - apply-saved-plan
+      runner_image_reference:
+        description: Immutable ACR reference returned by publish-artifacts (plan-runner only)
+        required: false
+        type: string
+      saved_plan_blob:
+        description: Saved-plan blob returned by a plan operation (apply only)
+        required: false
+        type: string
+      saved_plan_sha256:
+        description: SHA-256 returned by a plan operation (apply only)
+        required: false
+        type: string
+      confirmation:
+        description: Use PUBLISH <commit SHA> or APPLY <plan SHA-256> for mutation operations
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: zeroops-platform-test-deployment
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VERSION: "1.15.8"
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+  TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+  TF_STATE_CONTAINER: platform-tfstate
+  TF_STATE_KEY: zeroops/platform/test.tfstate
+  TF_PLAN_CONTAINER: deployment-plans
+
+jobs:
+  validate-request:
+    name: Validate deployment request
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Enforce staged input contract
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RUNNER_IMAGE_REFERENCE: ${{ inputs.runner_image_reference }}
+          SAVED_PLAN_BLOB: ${{ inputs.saved_plan_blob }}
+          SAVED_PLAN_SHA256: ${{ inputs.saved_plan_sha256 }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+
+          case "${OPERATION}" in
+            plan-foundation)
+              [[ -z "${RUNNER_IMAGE_REFERENCE}" ]]
+              [[ -z "${SAVED_PLAN_BLOB}" ]]
+              [[ -z "${SAVED_PLAN_SHA256}" ]]
+              [[ -z "${CONFIRMATION}" ]]
+              ;;
+            plan-runner)
+              [[ "${RUNNER_IMAGE_REFERENCE}" =~ ^[a-z0-9]+\.azurecr\.io/terraform-runner@sha256:[0-9a-f]{64}$ ]]
+              [[ -z "${SAVED_PLAN_BLOB}" ]]
+              [[ -z "${SAVED_PLAN_SHA256}" ]]
+              [[ -z "${CONFIRMATION}" ]]
+              ;;
+            publish-artifacts)
+              [[ "${CONFIRMATION}" == "PUBLISH ${GITHUB_SHA}" ]]
+              [[ -z "${SAVED_PLAN_BLOB}" ]]
+              [[ -z "${SAVED_PLAN_SHA256}" ]]
+              ;;
+            apply-saved-plan)
+              [[ "${SAVED_PLAN_BLOB}" =~ ^plans/[0-9]+/[0-9]+/(foundation|runner)-[0-9a-f]{40}\.tfplan$ ]]
+              [[ "${SAVED_PLAN_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+              [[ "${CONFIRMATION}" == "APPLY ${SAVED_PLAN_SHA256}" ]]
+              ;;
+            *)
+              echo "Unsupported operation" >&2
+              exit 1
+              ;;
+          esac
+
+  plan:
+    name: Create immutable Terraform plan
+    if: inputs.operation == 'plan-foundation' || inputs.operation == 'plan-runner'
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+    steps:
+      - name: Check out exact main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Log in with read-only plan identity
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+
+      - name: Initialize remote state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TF_STATE_RESOURCE_GROUP:?Missing TF_STATE_RESOURCE_GROUP variable}"
+          : "${TF_STATE_STORAGE_ACCOUNT:?Missing TF_STATE_STORAGE_ACCOUNT variable}"
+          terraform -chdir=infra init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Create and escrow exact saved plan
+        id: plan
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          REQUESTED_RUNNER_IMAGE: ${{ inputs.runner_image_reference }}
+          APPLY_PRINCIPAL_ID: ${{ vars.AZURE_APPLY_PRINCIPAL_ID }}
+          EXECUTION_SCOPE_RESOURCE_ID: ${{ vars.EXECUTION_SCOPE_RESOURCE_ID }}
+          RUNNER_ADMIN_SSH_PUBLIC_KEY: ${{ vars.RUNNER_ADMIN_SSH_PUBLIC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+
+          plan_file="${RUNNER_TEMP}/platform.tfplan"
+          [[ "${APPLY_PRINCIPAL_ID}" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "${RUNNER_ADMIN_SSH_PUBLIC_KEY}" =~ ^ssh-(ed25519|rsa)[[:space:]] ]]
+          common_vars=(
+            '-var-file=environments/test.tfvars.example'
+            "-var=subscription_id=${ARM_SUBSCRIPTION_ID}"
+            "-var=tenant_id=${ARM_TENANT_ID}"
+            "-var=deployment_identity_principal_id=${APPLY_PRINCIPAL_ID}"
+            "-var=runner_admin_ssh_public_key=${RUNNER_ADMIN_SSH_PUBLIC_KEY}"
+          )
+
+          if [[ "${OPERATION}" == 'plan-foundation' ]]; then
+            stage='foundation'
+            stage_vars=(
+              '-var=deploy_runner=false'
+              '-var=runner_image_reference=null'
+              '-var=execution_scope_resource_id=null'
+            )
+          else
+            stage='runner'
+            registry_login_server="$(terraform -chdir=infra output -json runner | jq -r '.registry_login_server')"
+            [[ -n "${registry_login_server}" && "${registry_login_server}" != 'null' ]]
+            [[ "${REQUESTED_RUNNER_IMAGE}" == "${registry_login_server}/terraform-runner@sha256:"* ]]
+            [[ "${EXECUTION_SCOPE_RESOURCE_ID}" =~ ^/subscriptions/[^/]+/resourceGroups/[^/]+$ ]]
+            stage_vars=(
+              '-var=deploy_runner=true'
+              "-var=runner_image_reference=${REQUESTED_RUNNER_IMAGE}"
+              "-var=execution_scope_resource_id=${EXECUTION_SCOPE_RESOURCE_ID}"
+            )
+          fi
+
+          terraform -chdir=infra plan \
+            -input=false \
+            -lock-timeout=5m \
+            -out="${plan_file}" \
+            "${common_vars[@]}" \
+            "${stage_vars[@]}"
+
+          plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+          plan_blob="plans/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${stage}-${GITHUB_SHA}.tfplan"
+          az storage blob upload \
+            --auth-mode login \
+            --account-name "${TF_STATE_STORAGE_ACCOUNT}" \
+            --container-name "${TF_PLAN_CONTAINER}" \
+            --name "${plan_blob}" \
+            --file "${plan_file}" \
+            --overwrite false \
+            --metadata sha256="${plan_sha256}" git_commit="${GITHUB_SHA}" stage="${stage}" \
+            --output none
+
+          summary="$(terraform -chdir=infra show -json "${plan_file}" | jq -r '
+            [.resource_changes[]? | .change.actions | join("/")] as $actions
+            | "add=\([$actions[] | select(. == "create")] | length) "
+              + "change=\([$actions[] | select(. == "update")] | length) "
+              + "replace=\([$actions[] | select(test("delete/create|create/delete"))] | length) "
+              + "destroy=\([$actions[] | select(. == "delete")] | length)"
+          ')"
+
+          {
+            printf '## Immutable Terraform %s plan\n\n' "${stage}"
+            printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- Sanitized actions: `%s`\n' "${summary}"
+            printf -- '- Saved-plan blob: `%s`\n' "${plan_blob}"
+            printf -- '- Saved-plan SHA-256: `%s`\n' "${plan_sha256}"
+            printf -- '- Expires automatically after two days; apply is single-use.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    name: Apply exact saved Terraform plan
+    if: inputs.operation == 'apply-saved-plan'
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: azure-test-apply
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_APPLY_CLIENT_ID }}
+    steps:
+      - name: Check out exact main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Log in with protected apply identity
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_APPLY_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+
+      - name: Initialize remote state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TF_STATE_RESOURCE_GROUP:?Missing TF_STATE_RESOURCE_GROUP variable}"
+          : "${TF_STATE_STORAGE_ACCOUNT:?Missing TF_STATE_STORAGE_ACCOUNT variable}"
+          terraform -chdir=infra init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Download and verify approved saved plan
+        id: verified_plan
+        shell: bash
+        env:
+          SAVED_PLAN_BLOB: ${{ inputs.saved_plan_blob }}
+          SAVED_PLAN_SHA256: ${{ inputs.saved_plan_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          plan_file="${RUNNER_TEMP}/platform.tfplan"
+
+          metadata="$(az storage blob show \
+            --auth-mode login \
+            --account-name "${TF_STATE_STORAGE_ACCOUNT}" \
+            --container-name "${TF_PLAN_CONTAINER}" \
+            --name "${SAVED_PLAN_BLOB}" \
+            --query metadata \
+            --output json)"
+          [[ "$(jq -r '.git_commit // ""' <<< "${metadata}")" == "${GITHUB_SHA}" ]]
+          [[ "$(jq -r '.sha256 // ""' <<< "${metadata}")" == "${SAVED_PLAN_SHA256}" ]]
+
+          az storage blob download \
+            --auth-mode login \
+            --account-name "${TF_STATE_STORAGE_ACCOUNT}" \
+            --container-name "${TF_PLAN_CONTAINER}" \
+            --name "${SAVED_PLAN_BLOB}" \
+            --file "${plan_file}" \
+            --overwrite true \
+            --output none
+          echo "${SAVED_PLAN_SHA256}  ${plan_file}" | sha256sum --check --strict
+          echo "plan_file=${plan_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: Apply the verified plan without replanning
+        id: apply_plan
+        shell: bash
+        run: terraform -chdir=infra apply -input=false -auto-approve "${{ steps.verified_plan.outputs.plan_file }}"
+
+      - name: Consume saved plan
+        if: always() && steps.verified_plan.outcome == 'success'
+        shell: bash
+        env:
+          SAVED_PLAN_BLOB: ${{ inputs.saved_plan_blob }}
+        run: |
+          az storage blob delete \
+            --auth-mode login \
+            --account-name "${TF_STATE_STORAGE_ACCOUNT}" \
+            --container-name "${TF_PLAN_CONTAINER}" \
+            --name "${SAVED_PLAN_BLOB}" \
+            --delete-snapshots include \
+            --output none
+
+  publish:
+    name: Publish immutable worker and Function packages
+    if: inputs.operation == 'publish-artifacts'
+    needs: validate-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: azure-test-apply
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_APPLY_CLIENT_ID }}
+    steps:
+      - name: Check out exact main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Log in with protected apply identity
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ secrets.AZURE_APPLY_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+
+      - name: Initialize remote state and resolve release targets
+        id: targets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TF_STATE_RESOURCE_GROUP:?Missing TF_STATE_RESOURCE_GROUP variable}"
+          : "${TF_STATE_STORAGE_ACCOUNT:?Missing TF_STATE_STORAGE_ACCOUNT variable}"
+          terraform -chdir=infra init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="use_azuread_auth=true"
+
+          runner_json="$(terraform -chdir=infra output -json runner)"
+          functions_json="$(terraform -chdir=infra output -json function_apps)"
+          echo "acr_name=$(jq -r '.registry_name' <<< "${runner_json}")" >> "${GITHUB_OUTPUT}"
+          echo "acr_login_server=$(jq -r '.registry_login_server' <<< "${runner_json}")" >> "${GITHUB_OUTPUT}"
+          echo "analysis_function=$(jq -r '.analysis' <<< "${functions_json}")" >> "${GITHUB_OUTPUT}"
+          echo "terraform_function=$(jq -r '.terraform_generation' <<< "${functions_json}")" >> "${GITHUB_OUTPUT}"
+          echo "history_function=$(jq -r '.history_projection' <<< "${functions_json}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and publish runner image
+        id: runner
+        shell: bash
+        env:
+          ACR_NAME: ${{ steps.targets.outputs.acr_name }}
+          ACR_LOGIN_SERVER: ${{ steps.targets.outputs.acr_login_server }}
+        run: |
+          set -Eeuo pipefail
+          image_tag="terraform-runner:${GITHUB_SHA}"
+          for attempt in {1..20}; do
+            if az acr login --name "${ACR_NAME}"; then
+              break
+            fi
+            if [[ "${attempt}" -eq 20 ]]; then
+              echo 'AcrPush assignment did not become effective in time.' >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          docker build --file worker/Dockerfile --tag "${ACR_LOGIN_SERVER}/${image_tag}" .
+          docker push "${ACR_LOGIN_SERVER}/${image_tag}"
+          digest="$(az acr repository show \
+            --name "${ACR_NAME}" \
+            --image "${image_tag}" \
+            --query digest \
+            --output tsv)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_reference="${ACR_LOGIN_SERVER}/terraform-runner@${digest}"
+          echo "image_reference=${image_reference}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build deterministic Function packages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+          python scripts/package_functions.py --output dist/functions
+          for archive in dist/functions/packages/*.zip; do
+            unzip -t "${archive}"
+          done
+
+      - name: Retain versioned Function release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zeroops-function-release-${{ github.sha }}
+          path: |
+            dist/functions/packages/
+            dist/functions/manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deploy Function packages with One Deploy
+        shell: bash
+        env:
+          ANALYSIS_FUNCTION: ${{ steps.targets.outputs.analysis_function }}
+          TERRAFORM_FUNCTION: ${{ steps.targets.outputs.terraform_function }}
+          HISTORY_FUNCTION: ${{ steps.targets.outputs.history_function }}
+        run: |
+          set -Eeuo pipefail
+          declare -A packages=(
+            ["${ANALYSIS_FUNCTION}"]='repository_analysis.zip'
+            ["${TERRAFORM_FUNCTION}"]='terraform_generation.zip'
+            ["${HISTORY_FUNCTION}"]='history_projector.zip'
+          )
+          for app_name in "${!packages[@]}"; do
+            az functionapp deployment source config-zip \
+              --resource-group zeroops-rg \
+              --name "${app_name}" \
+              --src "dist/functions/packages/${packages[$app_name]}" \
+              --build-remote true \
+              --timeout 1800 \
+              --output none
+          done
+
+      - name: Publish immutable release evidence
+        shell: bash
+        env:
+          RUNNER_IMAGE_REFERENCE: ${{ steps.runner.outputs.image_reference }}
+        run: |
+          {
+            printf '## Published immutable platform artifacts\n\n'
+            printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- Runner image: `%s`\n' "${RUNNER_IMAGE_REFERENCE}"
+            printf -- '- Function manifest:\n\n```json\n'
+            cat dist/functions/manifest.json
+            printf '\n```\n\nUse the runner image above as the exact `plan-runner` input.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"

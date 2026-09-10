@@ -23,6 +23,7 @@ import { StatePanel } from "@/components/ui/StatePanel";
 import { ProjectSelector } from "@/components/dashboard/ProjectSelector";
 import { ProjectTabs } from "@/components/dashboard/ProjectTabs";
 import { useNotifications } from "@/lib/NotificationContext";
+import { useProjectSelection } from "@/lib/useProjectSelection";
 import { api, getErrorMessage, type AIAnalysis } from "@/lib/api";
 
 function formatTimestamp(value: string | null) {
@@ -71,22 +72,11 @@ export default function AIAnalysisPage() {
 function AnalysisWorkspace() {
   const searchParams = useSearchParams();
   const { projects, isLoading: projectsLoading, addToast } = useNotifications();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useProjectSelection(projects, searchParams.get("project"));
   const [analyses, setAnalyses] = useState<AIAnalysis[]>([]);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const requestedProject = searchParams.get("project");
-    if (requestedProject && projects.some((project) => project.id === requestedProject)) {
-      setSelectedProjectId(requestedProject);
-      return;
-    }
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, searchParams, selectedProjectId]);
 
   const loadAnalyses = useCallback(async (projectId: string) => {
     if (!projectId) return;
@@ -111,9 +101,14 @@ function AnalysisWorkspace() {
     setRunning(true);
     setError(null);
     try {
-      await api.analyzeRepository(selectedProjectId);
+      const result = await api.analyzeRepository(selectedProjectId);
       await loadAnalyses(selectedProjectId);
-      addToast("Repository analysis completed and was saved.", "success");
+      addToast(
+        result.workflow_status === "queued"
+          ? "Repository scan saved; the isolated evidence review is queued."
+          : "Repository analysis completed and was saved.",
+        "success",
+      );
     } catch (requestError) {
       const message = getErrorMessage(requestError, "Repository analysis could not be completed.");
       setError(message);

@@ -143,7 +143,7 @@ def test_app_settings_use_ephemeral_json_instead_of_secret_argv(tmp_path, monkey
     assert not captured["path"].exists()
 
 
-def test_app_service_fails_fast_when_acr_pull_assignment_is_rejected(monkeypatch):
+def test_app_service_fails_fast_when_terraform_acr_pull_assignment_is_missing(monkeypatch):
     commands = []
 
     monkeypatch.setattr(app_service, "_sign_in", lambda *_args, **_kwargs: None)
@@ -151,13 +151,11 @@ def test_app_service_fails_fast_when_acr_pull_assignment_is_rejected(monkeypatch
     def fake_capture(command, *, env, cwd=None):
         commands.append(command)
         if command[:3] == ["az", "webapp", "show"]:
-            return ""
-        if command[:4] == ["az", "webapp", "identity", "assign"]:
             return "web-app-principal-id"
         if command[:3] == ["az", "acr", "show"]:
             return "/subscriptions/subscription-id/resourceGroups/apps-rg/providers/Microsoft.ContainerRegistry/registries/zeroopsapps"
-        if command[:4] == ["az", "role", "assignment", "create"]:
-            raise app_service.AzureDeploymentError("provider response must stay hidden")
+        if command[:4] == ["az", "role", "assignment", "list"]:
+            return ""
         raise AssertionError(f"Unexpected Azure command: {command}")
 
     monkeypatch.setattr(app_service, "_capture", fake_capture)
@@ -173,15 +171,42 @@ def test_app_service_fails_fast_when_acr_pull_assignment_is_rejected(monkeypatch
             )
         )
 
-    assert "grant AcrPull" in str(raised.value)
-    assert "role-assignment permission" in str(raised.value)
-    assert "provider response" not in str(raised.value)
+    assert "Terraform apply" in str(raised.value)
+    assert "granted AcrPull" in str(raised.value)
     role_command = next(
         command
         for command in commands
-        if command[:4] == ["az", "role", "assignment", "create"]
+        if command[:4] == ["az", "role", "assignment", "list"]
     )
     assert app_service.ACR_PULL_ROLE_ID in role_command
+    assert not any(command[:3] == ["az", "webapp", "create"] for command in commands)
+    assert not any(command[:4] == ["az", "webapp", "identity", "assign"] for command in commands)
+    assert not any(command[:4] == ["az", "role", "assignment", "create"] for command in commands)
+
+
+def test_app_service_never_creates_a_site_outside_the_exact_terraform_apply(monkeypatch):
+    commands = []
+    monkeypatch.setattr(app_service, "_sign_in", lambda *_args, **_kwargs: None)
+
+    def fake_capture(command, *, env, cwd=None):
+        commands.append(command)
+        raise app_service.AzureDeploymentError("site not found")
+
+    monkeypatch.setattr(app_service, "_capture", fake_capture)
+
+    with pytest.raises(app_service.AzureDeploymentError, match="exact saved plan"):
+        list(
+            app_service.deploy_image(
+                connection=azure_connection(),
+                client_secret="secret",
+                app_name="example-app",
+                image_ref="zeroopsapps.azurecr.io/example-app:release",
+                metadata={"framework": "FastAPI", "port": "8000"},
+            )
+        )
+
+    assert commands[0][:3] == ["az", "webapp", "show"]
+    assert not any(command[:3] == ["az", "webapp", "create"] for command in commands)
 
 
 @pytest.mark.parametrize(

@@ -36,6 +36,26 @@ class DevSecOpsHarness:
     current_user: dict[str, models.User]
 
 
+@dataclass(frozen=True)
+class StubTerraformApplyProof:
+    operation_run_id: uuid.UUID
+
+    def deployment_metadata(self):
+        return {
+            "schema_version": "terraform-apply-proof.v1",
+            "operation_run_id": str(self.operation_run_id),
+            "approval_id": "20000000-0000-0000-0000-000000000001",
+            "apply_job_id": "30000000-0000-0000-0000-000000000001",
+            "approved_plan_digest": "1" * 64,
+            "plan_job_digest": "2" * 64,
+            "plan_sha256": "3" * 64,
+            "bundle_sha256": "4" * 64,
+            "target_fingerprint": "5" * 64,
+            "completion_event_id": "evt-test-completed-apply",
+            "completed_at": "2026-01-01T00:00:00+00:00",
+        }
+
+
 @pytest_asyncio.fixture
 async def devsecops_harness():
     engine = create_async_engine(
@@ -104,6 +124,82 @@ async def devsecops_harness():
     async with engine.begin() as connection:
         await connection.run_sync(models.Base.metadata.drop_all)
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+async def test_pipeline_configuration_returns_actionable_error_when_vault_is_unavailable(
+    devsecops_harness, monkeypatch, method,
+):
+    harness = devsecops_harness
+
+    def unavailable(*_):
+        raise RuntimeError("private-vault-host credential-details")
+
+    monkeypatch.setattr(devsecops.vault, "get_project_secret", unavailable)
+    response = await harness.client.request(
+        method, f"/api/projects/{harness.project.id}/pipeline-config",
+        **({"json": {"branch": "main"}} if method == "PUT" else {}),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Azure Key Vault is unavailable. GitHub webhook configuration could not be checked."
+    assert (await harness.session.execute(select(func.count(models.ProjectPipelineConfiguration.id)))).scalar() == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_configuration_persists_versioned_settings_without_webhook(
+    devsecops_harness, monkeypatch,
+):
+    harness = devsecops_harness
+    monkeypatch.setattr(devsecops.vault, "get_project_secret", lambda *_: None)
+    url = f"/api/projects/{harness.project.id}/pipeline-config"
+
+    first = await harness.client.put(url, json={"branch": "release/2026", "run_tests": False})
+    assert first.status_code == 200
+    assert first.json()["github_webhook_configured"] is False
+    assert first.json()["run_tests"] is False
+    assert (await harness.client.get(url)).json() == first.json()
+
+    blocked = await harness.client.put(url, json={"automatic_deployment": True})
+    assert blocked.status_code == 409
+    assert (await harness.session.execute(select(func.count(models.ProjectPipelineConfiguration.id)))).scalar() == 1
+
+    second = await harness.client.put(url, json={"branch": "main", "run_tests": True})
+    assert second.status_code == 200
+    assert second.json()["run_tests"] is True
+    assert (await harness.client.get(url)).json() == second.json()
+    records = (await harness.session.execute(select(models.ProjectPipelineConfiguration).order_by(models.ProjectPipelineConfiguration.version))).scalars().all()
+    assert [record.version for record in records] == [1, 2]
+    assert [record.tracked_branch for record in records] == ["release/2026", "main"]
+
+
+@pytest.mark.asyncio
+async def test_github_webhook_returns_actionable_error_when_vault_is_unavailable(
+    devsecops_harness, monkeypatch,
+):
+    harness = devsecops_harness
+
+    def unavailable(*_):
+        raise RuntimeError("private-vault-host credential-details")
+
+    monkeypatch.setattr(devsecops.vault, "get_project_secret", unavailable)
+    response = await harness.client.post(
+        f"/api/webhooks/github/{harness.project.id}", json={},
+        headers={"X-GitHub-Event": "push", "X-GitHub-Delivery": "vault-unavailable"},
+    )
+
+    assert response.status_code == 503
+    assert "Azure Key Vault is unavailable" in response.json()["detail"]
+    assert (await harness.session.execute(select(func.count(models.WebhookDelivery.id)))).scalar() == 0
+
+
+@pytest.mark.parametrize("branch", ["   ", "refs/heads/", "feature:broken", "feature@{1}"])
+def test_pipeline_configuration_rejects_invalid_git_branches(branch):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        devsecops.PipelineConfigurationUpdate(branch=branch)
 
 
 @pytest.mark.asyncio
@@ -269,6 +365,16 @@ async def test_github_webhook_verifies_hmac_is_idempotent_and_queues_approval_va
 ):
     harness = devsecops_harness
     secret = "github-webhook-test-secret"
+    proof = StubTerraformApplyProof(uuid.UUID("a0000000-0000-0000-0000-000000000001"))
+
+    async def completed_apply(*_args, **_kwargs):
+        return proof
+
+    monkeypatch.setattr(
+        devsecops.terraform_workflow,
+        "require_completed_apply_for_plan",
+        completed_apply,
+    )
     monkeypatch.setattr(devsecops.vault, "get_project_secret", lambda *_: secret)
     azure_connection = models.UserAzureConnection(
         user_id=harness.owner.id,
@@ -344,7 +450,8 @@ async def test_github_webhook_verifies_hmac_is_idempotent_and_queues_approval_va
         uuid.UUID(accepted.json()["deployment_id"]),
     )
     assert deployment.status == "queued"
-    assert deployment.infrastructure_metadata["requested_target"] == "auto"
+    assert deployment.infrastructure_metadata["requested_target"] == "azure-app-service"
+    assert deployment.terraform_operation_run_id == proof.operation_run_id
     assert deployment.infrastructure_metadata["pipeline_configuration"]["id"] == str(run.configuration_id)
     assert deployment.infrastructure_metadata["pipeline_approval_decision"] == {
         "status": decision_status,
@@ -524,6 +631,293 @@ async def _seed_approval_ready_run(
     return run, deployment, configuration, plan
 
 
+async def _seed_terraform_review(
+    harness: DevSecOpsHarness,
+    *,
+    with_plan_result: bool = True,
+    with_apply_approval: bool = False,
+) -> tuple[
+    models.InfrastructurePlan,
+    models.OperationRun | None,
+    models.TerraformPlanResult | None,
+]:
+    plan = models.InfrastructurePlan(
+        user_id=harness.owner.id,
+        project_id=harness.project.id,
+        provider="azure",
+        region="eastus",
+        status="approved",
+        revision=3,
+        plan_data={
+            "resource_group": "zeroops-test",
+            "resources": [
+                {
+                    "type": "Azure App Service",
+                    "name": "api",
+                    "properties": {
+                        "identity": "SystemAssigned",
+                        "registry_access": "AcrPull",
+                    },
+                }
+            ],
+        },
+    )
+    harness.session.add(plan)
+    await harness.session.flush()
+    if not with_plan_result:
+        await harness.session.commit()
+        return plan, None, None
+
+    run = models.OperationRun(
+        tenant_id=harness.owner_tenant.id,
+        project_id=harness.project.id,
+        requested_by_user_id=harness.owner.id,
+        operation_type="infrastructure_pipeline",
+        status="completed",
+        input_digest=devsecops.terraform_workflow.approved_plan_digest(plan),
+        idempotency_key=f"terraform-review:{plan.id}:{plan.revision}",
+    )
+    harness.session.add(run)
+    await harness.session.flush()
+
+    bundle_sha256 = "2" * 64
+    variables_sha256 = "3" * 64
+    scope_digest = "4" * 64
+    policy_digest = "5" * 64
+    plan_sha256 = "6" * 64
+    plan_job_digest = "7" * 64
+    cost_sha256 = "8" * 64
+    result = models.TerraformPlanResult(
+        operation_run_id=run.id,
+        tenant_id=harness.owner_tenant.id,
+        project_id=harness.project.id,
+        plan_job_id=uuid.uuid4(),
+        plan_job_digest=plan_job_digest,
+        revision=plan.revision,
+        bundle={
+            "uri": (
+                "https://artifacts.blob.core.windows.net/"
+                f"t-{'a' * 40}/objects/{uuid.uuid4()}/v1/{bundle_sha256}"
+            ),
+            "etag": '"bundle-etag"',
+            "sha256": bundle_sha256,
+            "size_bytes": 4096,
+        },
+        input_variables={
+            "file_name": "zeroops.auto.tfvars.json",
+            "sha256": variables_sha256,
+            "definitions": [
+                {"name": "application_name", "type": "string"},
+                {"name": "app_service_plan_id", "type": "string"},
+                {"name": "container_registry_id", "type": "string"},
+                {"name": "location", "type": "string"},
+                {"name": "resource_group_name", "type": "string"},
+            ],
+        },
+        guardrails={
+            "target_resource_group": "zeroops-test",
+            "allowed_resource_types": [
+                "azurerm_linux_web_app",
+                "azurerm_role_assignment",
+            ],
+            "maximum_resource_changes": 25,
+            "maximum_delete_count": 0,
+            "maximum_replace_count": 0,
+            "scope_digest": scope_digest,
+            "policy_digest": policy_digest,
+            "monthly_budget_microunits": 0,
+            "budget_currency": "USD",
+        },
+        saved_plan={
+            "blob_name": f"tenants/{harness.owner_tenant.id}/workflows/{run.id}/plans/approved.tfplan",
+            "etag": '"plan-etag"',
+            "sha256": plan_sha256,
+            "plan_job_digest": plan_job_digest,
+            "bundle_sha256": bundle_sha256,
+            "input_variables_sha256": variables_sha256,
+            "scope_digest": scope_digest,
+            "policy_digest": policy_digest,
+        },
+        plan_summary={
+            "actions": {
+                "create": 2,
+                "update": 0,
+                "delete": 0,
+                "replace": 0,
+                "read": 0,
+                "no_op": 0,
+            },
+            "resource_kinds": [
+                "azurerm_linux_web_app",
+                "azurerm_role_assignment",
+            ],
+            "changes": [
+                {
+                    "address": "azurerm_linux_web_app.application",
+                    "type": "azurerm_linux_web_app",
+                    "actions": ["create"],
+                },
+                {
+                    "address": "azurerm_role_assignment.acr_pull",
+                    "type": "azurerm_role_assignment",
+                    "actions": ["create"],
+                },
+            ],
+            "terraform_version": "1.15.8",
+            "format_version": "1.2",
+        },
+        cost_estimate={
+            "artifact_sha256": cost_sha256,
+            "currency": "USD",
+            "monthly_cost_microunits": 0,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        },
+        planned_at=datetime.now(timezone.utc),
+    )
+    harness.session.add(result)
+    if with_apply_approval:
+        approved_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        harness.session.add(
+            models.TerraformApplyApproval(
+                tenant_id=harness.owner_tenant.id,
+                project_id=harness.project.id,
+                operation_run_id=run.id,
+                approved_by_user_id=harness.owner.id,
+                apply_job_id=uuid.uuid4(),
+                status="consumed",
+                plan_job_digest=plan_job_digest,
+                plan_sha256=plan_sha256,
+                plan_etag='"plan-etag"',
+                bundle_sha256=bundle_sha256,
+                input_variables_sha256=variables_sha256,
+                scope_digest=scope_digest,
+                policy_digest=policy_digest,
+                cost_estimate_sha256=cost_sha256,
+                currency="USD",
+                monthly_cost_microunits=0,
+                approved_at=approved_at,
+                expires_at=approved_at + timedelta(hours=1),
+                consumed_at=approved_at,
+            )
+        )
+    await harness.session.commit()
+    return plan, run, result
+
+
+@pytest.mark.asyncio
+async def test_project_terraform_review_reports_not_approved_then_not_queued(
+    devsecops_harness,
+):
+    harness = devsecops_harness
+    url = f"/api/projects/{harness.project.id}/terraform-review"
+
+    not_approved = await harness.client.get(url)
+    assert not_approved.status_code == 200
+    assert not_approved.json() == {
+        "status": "not_approved",
+        "project_id": str(harness.project.id),
+    }
+
+    plan, _run, _result = await _seed_terraform_review(
+        harness,
+        with_plan_result=False,
+    )
+    not_queued = await harness.client.get(url)
+    assert not_queued.status_code == 200
+    assert not_queued.json() == {
+        "status": "not_queued",
+        "project_id": str(harness.project.id),
+        "plan_id": str(plan.id),
+        "revision": plan.revision,
+    }
+
+    harness.current_user["value"] = harness.outsider
+    cross_tenant = await harness.client.get(url)
+    assert cross_tenant.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_project_terraform_review_returns_exact_safe_plan_and_verified_cost(
+    devsecops_harness,
+):
+    harness = devsecops_harness
+    _plan, run, result = await _seed_terraform_review(harness)
+
+    response = await harness.client.get(
+        f"/api/projects/{harness.project.id}/terraform-review"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready_for_approval"
+    assert payload["operation_run_id"] == str(run.id)
+    assert payload["revision"] == result.revision
+    assert payload["plan_job_digest"] == result.plan_job_digest
+    assert payload["plan_sha256"] == result.saved_plan["sha256"]
+    assert payload["bundle_sha256"] == result.bundle["sha256"]
+    assert payload["input_variables_sha256"] == result.input_variables["sha256"]
+    assert payload["scope_digest"] == result.guardrails["scope_digest"]
+    assert payload["policy_digest"] == result.guardrails["policy_digest"]
+    assert payload["guardrails"] == {
+        "target_resource_group": "zeroops-test",
+        "allowed_resource_types": [
+            "azurerm_linux_web_app",
+            "azurerm_role_assignment",
+        ],
+        "maximum_resource_changes": 25,
+        "maximum_delete_count": 0,
+        "maximum_replace_count": 0,
+        "monthly_budget_microunits": 0,
+        "budget_currency": "USD",
+    }
+    assert payload["plan_summary"] == result.plan_summary
+    assert payload["cost_estimate"]["artifact_sha256"] == "8" * 64
+    assert payload["cost_estimate"]["currency"] == "USD"
+    assert payload["cost_estimate"]["monthly_cost_microunits"] == 0
+    assert payload["approval"] is None
+    assert "uri" not in json.dumps(payload)
+    assert "blob_name" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_project_terraform_review_reports_applied_with_bound_proof(
+    devsecops_harness,
+    monkeypatch,
+):
+    harness = devsecops_harness
+    _plan, run, _result = await _seed_terraform_review(
+        harness,
+        with_apply_approval=True,
+    )
+    proof = StubTerraformApplyProof(run.id)
+
+    async def active_connection(*_args, **_kwargs):
+        return object()
+
+    async def completed_apply(*_args, **_kwargs):
+        return proof
+
+    monkeypatch.setattr(devsecops, "_active_azure_connection", active_connection)
+    monkeypatch.setattr(
+        devsecops.terraform_workflow,
+        "find_completed_apply_for_plan",
+        completed_apply,
+    )
+
+    response = await harness.client.get(
+        f"/api/projects/{harness.project.id}/terraform-review"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "applied"
+    assert payload["operation_run_id"] == str(run.id)
+    assert payload["approval"]["approval_id"]
+    assert payload["approval"]["apply_job_id"]
+    assert payload["approval"]["consumed_at"] is not None
+    assert payload["apply_proof"] == proof.deployment_metadata()
+
+
 @pytest.mark.asyncio
 async def test_pipeline_approval_is_owner_scoped_signed_pinned_and_idempotent(
     devsecops_harness,
@@ -531,6 +925,20 @@ async def test_pipeline_approval_is_owner_scoped_signed_pinned_and_idempotent(
 ):
     harness = devsecops_harness
     monkeypatch.setattr(config, "JWT_SECRET", "pipeline-approval-test-secret")
+    proof = StubTerraformApplyProof(uuid.UUID("a0000000-0000-0000-0000-000000000002"))
+
+    async def active_connection(*_args, **_kwargs):
+        return object()
+
+    async def completed_apply(*_args, **_kwargs):
+        return proof
+
+    monkeypatch.setattr(devsecops, "_active_azure_connection", active_connection)
+    monkeypatch.setattr(
+        devsecops.terraform_workflow,
+        "require_completed_apply_for_plan",
+        completed_apply,
+    )
     run, validation_deployment, configuration, plan = await _seed_approval_ready_run(harness)
     url = f"/api/pipeline-runs/{run.id}/approve"
 
@@ -554,6 +962,7 @@ async def test_pipeline_approval_is_owner_scoped_signed_pinned_and_idempotent(
     assert approved_deployment is not None
     assert approved_run is not None
     assert approved_deployment.status == "queued"
+    assert approved_deployment.terraform_operation_run_id == proof.operation_run_id
     assert approved_deployment.commit_sha == run.source_revision
     assert approved_deployment.branch == run.branch
     assert approved_run.status == "queued"

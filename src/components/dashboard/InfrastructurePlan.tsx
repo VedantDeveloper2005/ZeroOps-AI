@@ -15,6 +15,7 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
+import { ArchitectureAdvisorCard } from "@/components/dashboard/ArchitectureAdvisorCard";
 import type {
   InfrastructurePlan as InfrastructurePlanModel,
   InfrastructurePlanComponent,
@@ -26,6 +27,8 @@ type Props = {
   onUpdate: (update: InfrastructurePlanUpdate) => Promise<boolean>;
   onApprove: (note?: string) => Promise<boolean>;
   onRegenerate: () => Promise<boolean>;
+  onConsultAdvisor?: () => Promise<void>;
+  advisorBusy?: boolean;
   busy?: boolean;
 };
 
@@ -52,6 +55,8 @@ export function InfrastructurePlan({
   onUpdate,
   onApprove,
   onRegenerate,
+  onConsultAdvisor,
+  advisorBusy = false,
   busy = false,
 }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
@@ -158,6 +163,13 @@ export function InfrastructurePlan({
           </label>
         </div>
       </section>
+
+      <ArchitectureAdvisorCard
+        recommendation={plan.plan.advisor_recommendation}
+        onConsult={onConsultAdvisor}
+        busy={advisorBusy}
+        disabled={busy}
+      />
 
       <details className="ops-card rounded-xl p-4">
         <summary className="flex min-h-11 cursor-pointer items-center justify-between text-sm font-semibold text-foreground">

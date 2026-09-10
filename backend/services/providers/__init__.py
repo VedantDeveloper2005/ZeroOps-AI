@@ -1,6 +1,7 @@
 """Structured model provider implementations."""
 
 from backend.services.providers.azure_foundry import AzureFoundryProvider
+from backend.services.providers.azure_openai import AzureOpenAIProvider
 from backend.services.providers.base import (
     ProviderConfiguration,
     ProviderConfigurationError,
@@ -24,6 +25,7 @@ from backend.services.providers.nvidia import NvidiaProvider
 
 __all__ = [
     "AzureFoundryProvider",
+    "AzureOpenAIProvider",
     "CURRENT_GITHUB_MODELS_ENDPOINT",
     "GROQ_API_ENDPOINT",
     "GROQ_GPT_OSS_MODEL",

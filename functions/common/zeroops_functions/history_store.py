@@ -387,6 +387,18 @@ class PostgresHistoryProjector:
                     sequence,
                     occurred_at,
                 )
+                if event.control_record is not None:
+                    if event.event_type != "terraform.plan.completed":
+                        raise ValueError(
+                            "Terraform plan control data is valid only for completed plans"
+                        )
+                    await self._project_terraform_plan_control(
+                        connection,
+                        event=event,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        project_id=project_id,
+                    )
                 for artifact in event.artifacts:
                     await self._project_artifact(
                         connection,
@@ -420,6 +432,84 @@ class PostgresHistoryProjector:
             return True
         finally:
             await connection.close()
+
+    @staticmethod
+    async def _project_terraform_plan_control(
+        connection: asyncpg.Connection,
+        *,
+        event: WorkflowEventV1,
+        tenant_id: uuid.UUID,
+        run_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> None:
+        record = event.control_record
+        if record is None:
+            return
+        plan_job_id = _uuid(record.plan_job_id, "plan_job_id")
+        bundle = record.bundle
+        input_variables = record.input_variables
+        guardrails = record.guardrails
+        saved_plan = record.saved_plan
+        plan_summary = record.plan_summary
+        planned_at = _utc_timestamp(record.planned_at)
+        existing = await connection.fetchrow(
+            """
+            SELECT operation_run_id, tenant_id, project_id, plan_job_id,
+                   plan_job_digest, revision, bundle, input_variables,
+                   guardrails, saved_plan, plan_summary, planned_at
+            FROM terraform_plan_results
+            WHERE operation_run_id = $1
+            FOR UPDATE
+            """,
+            run_id,
+        )
+        if existing is not None:
+            immutable = (
+                (existing["operation_run_id"], run_id),
+                (existing["tenant_id"], tenant_id),
+                (existing["project_id"], project_id),
+                (existing["plan_job_id"], plan_job_id),
+                (existing["plan_job_digest"], record.plan_job_digest),
+                (existing["revision"], record.revision),
+                (_json_mapping(existing["bundle"]), bundle),
+                (_json_mapping(existing["input_variables"]), input_variables),
+                (_json_mapping(existing["guardrails"]), guardrails),
+                (_json_mapping(existing["saved_plan"]), saved_plan),
+                (_json_mapping(existing["plan_summary"]), plan_summary),
+                (_utc_timestamp(existing["planned_at"]), planned_at),
+            )
+            if any(stored != incoming for stored, incoming in immutable):
+                raise ValueError(
+                    "Terraform plan result replay differs from immutable control data"
+                )
+            return
+
+        await connection.execute(
+            """
+            INSERT INTO terraform_plan_results (
+                operation_run_id, tenant_id, project_id, plan_job_id,
+                plan_job_digest, revision, bundle, input_variables,
+                guardrails, saved_plan, plan_summary, planned_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
+                $9::jsonb, $10::jsonb, $11::jsonb,
+                $12::timestamptz AT TIME ZONE 'UTC'
+            )
+            """,
+            run_id,
+            tenant_id,
+            project_id,
+            plan_job_id,
+            record.plan_job_digest,
+            record.revision,
+            json.dumps(bundle, sort_keys=True, separators=(",", ":")),
+            json.dumps(input_variables, sort_keys=True, separators=(",", ":")),
+            json.dumps(guardrails, sort_keys=True, separators=(",", ":")),
+            json.dumps(saved_plan, sort_keys=True, separators=(",", ":")),
+            json.dumps(plan_summary, sort_keys=True, separators=(",", ":")),
+            planned_at,
+        )
 
     @staticmethod
     def _assert_duplicate_matches(

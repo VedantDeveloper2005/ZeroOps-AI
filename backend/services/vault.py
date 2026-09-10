@@ -154,8 +154,10 @@ def set_project_secret(project_id: str, key: str, value: str) -> bool:
 def get_project_secret(project_id: str, key: str) -> str | None:
     try:
         return _require_client().get_secret(_secret_name(project_id, key)).value
-    except Exception:
-        return None
+    except Exception as error:
+        if _is_not_found(error):
+            return None
+        raise RuntimeError("Azure Key Vault could not read the project secret.") from error
 
 
 def get_project_secrets(project_id: str) -> dict[str, str]:
@@ -177,5 +179,10 @@ def get_project_secrets(project_id: str) -> dict[str, str]:
 
 
 def delete_project_secret(project_id: str, key: str) -> bool:
-    _require_client().begin_delete_secret(_secret_name(project_id, key)).result()
-    return True
+    try:
+        _require_client().begin_delete_secret(_secret_name(project_id, key)).result()
+        return True
+    except Exception as error:
+        if _is_not_found(error):
+            return False
+        raise

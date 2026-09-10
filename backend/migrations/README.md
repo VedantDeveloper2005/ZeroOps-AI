@@ -1,7 +1,8 @@
 # Backend schema migrations
 
-`backend.database.run_migrations` applies each version inside one PostgreSQL
-transaction and records it in `schema_migrations`. New migrations must be
+`backend.database.run_migrations` holds one PostgreSQL session-level advisory
+lock across the versioned and compatibility blocks, applies each version in a
+transaction, and records it in `schema_migrations`. New migrations must be
 append-only, idempotent, and must never copy credentials or raw execution
 payloads into history tables.
 
@@ -33,18 +34,27 @@ Current migrations:
   owner verifies and saves them again.
 - `009_analysis_application_type` persists the deterministic application shape
   shown in current and historical repository-analysis views.
+- `010_terraform_control_plane` adds saved-plan controls, single-use apply
+  approvals, and the transactional workflow outbox.
+- `011_auth_ai_hardening` adds durable email-verification attempts, UTC-day AI
+  chat reservations, and a non-secret Key Vault reference for legacy managed
+  database credentials.
+- `012_deployment_terraform_binding` adds the nullable, indexed operation-run
+  foreign key that prevents queued releases from bypassing an exact completed
+  Terraform apply.
 
 ## Legacy sensitive-column retirement
 
 The existing schema predates the tenant-history layer and still has two
-columns that must be retired in a separately tested compatibility release:
+compatibility columns:
 
 - `database_instances.password`
 - `database_instances.connection_string`
 
 Do not backfill any of them into `operation_runs`, `artifacts`, or
-`activity_events`. The database credentials must be rotated into Azure Key
-Vault and replaced with a non-secret Key Vault reference. Approval execution
+`activity_events`. Production startup moves any remaining values into Azure
+Key Vault, stores only `secret_reference`, and clears both compatibility
+columns. Approval execution
 uses an encrypted, single-use compatibility envelope until a future schema
 release replaces the column with an immutable artifact digest and short-lived
 executor-only reference. History writers persist only digests, redacted

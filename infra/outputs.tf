@@ -45,9 +45,11 @@ output "model_key_vault_uris" {
 
 output "runner" {
   value = {
-    vmss_id       = module.runner.vmss_id
-    registry_name = module.runner.registry_name
-    min_instances = 0
-    max_instances = var.vmss_max_instances
+    vmss_id               = module.runner.vmss_id
+    deployed              = var.deploy_runner
+    registry_name         = module.runner.registry_name
+    registry_login_server = module.runner.registry_login_server
+    min_instances         = 0
+    max_instances         = var.vmss_max_instances
   }
 }

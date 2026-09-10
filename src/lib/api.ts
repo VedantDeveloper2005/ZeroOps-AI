@@ -915,6 +915,7 @@ export interface InfrastructurePlan {
       readiness_message: string;
     };
     deployment: { approval_required: boolean; engine: string; summary: string };
+    advisor_recommendation?: ArchitectureRecommendation;
   };
   cost_estimate?: {
     status: string;
@@ -937,6 +938,134 @@ export interface InfrastructurePlanUpdate {
   component_id?: string;
   service?: string;
   tier?: string;
+}
+
+export interface ComponentRecommendation {
+  id: string;
+  role: string;
+  service: string;
+  proposed_sku: string | null;
+  instance_count: string | number | null;
+  reason: string;
+  evidence: string[];
+  security_requirements: string[];
+  availability_recovery: string | null;
+  cost_status: string | null;
+  validation_required: string[];
+  deployable: boolean;
+  status_note: string | null;
+}
+
+export interface CitationEvidence {
+  id: string;
+  source_type: "knowledge" | "web" | "repository" | "assumption";
+  title: string | null;
+  citation: string;
+  url: string | null;
+}
+
+export interface ArchitectureRecommendation {
+  schema_version: string;
+  recommendation: string;
+  confidence: "high" | "medium" | "low";
+  assumptions: string[];
+  missing_information: string[];
+  proposed_components: ComponentRecommendation[];
+  cost_status: string;
+  cost_considerations: string[];
+  evidence_sources: CitationEvidence[];
+  unsupported_services: string[];
+  validation_required: string[];
+  provenance: {
+    agent_name?: string;
+    agent_version?: string;
+    model?: string;
+    latency_ms?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    correlation_id?: string;
+    file_search_used?: boolean;
+    web_search_used?: boolean;
+  };
+}
+
+export type TerraformReviewStatus =
+  | "not_approved"
+  | "not_queued"
+  | "planning"
+  | "awaiting_verified_cost"
+  | "ready_for_approval"
+  | "applying"
+  | "applied"
+  | "failed";
+
+export interface TerraformPlanActionCounts {
+  create: number;
+  update: number;
+  delete: number;
+  replace: number;
+  read: number;
+  no_op: number;
+}
+
+export interface TerraformPlanChange {
+  address: string;
+  type: string;
+  actions: string[];
+}
+
+export interface TerraformPlanSummary {
+  actions: TerraformPlanActionCounts;
+  changes: TerraformPlanChange[];
+}
+
+export interface TerraformExecutionGuardrails {
+  target_resource_group: string;
+  maximum_resource_changes: number;
+  maximum_delete_count: number;
+  maximum_replace_count: number;
+  monthly_budget_microunits: number | null;
+  budget_currency: string | null;
+  allowed_resource_types: string[];
+}
+
+export interface TerraformVerifiedCost {
+  artifact_sha256: string;
+  currency: string;
+  monthly_cost_microunits: number;
+  captured_at: string;
+}
+
+export interface TerraformReview {
+  project_id: string;
+  revision?: number;
+  status: TerraformReviewStatus;
+  message?: string | null;
+  error_code?: string | null;
+  operation_run_id?: string | null;
+  plan_job_digest?: string | null;
+  plan_sha256?: string | null;
+  bundle_sha256?: string | null;
+  input_variables_sha256?: string | null;
+  scope_digest?: string | null;
+  policy_digest?: string | null;
+  guardrails?: TerraformExecutionGuardrails | null;
+  plan_summary?: TerraformPlanSummary | null;
+  verified_cost?: TerraformVerifiedCost | null;
+  apply_proof?: { operation_run_id?: string } | null;
+}
+
+export interface TerraformApplyApprovalRequest {
+  confirm_apply: boolean;
+  plan_job_digest: string;
+  plan_sha256: string;
+  bundle_sha256: string;
+  input_variables_sha256: string;
+  scope_digest: string;
+  policy_digest: string;
+  cost_estimate_sha256: string;
+  currency: string;
+  monthly_cost_microunits: number;
 }
 
 export interface KnowledgeGraphNode {
@@ -1035,6 +1164,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ note }),
     }),
+
+  consultArchitectureAdvisor: (projectId: string, userQuery?: string) =>
+    request<ArchitectureRecommendation>(
+      `/api/projects/${projectId}/architecture-advisor/recommend`,
+      {
+        method: "POST",
+        body: JSON.stringify({ user_query: userQuery }),
+      },
+    ),
+
+  getArchitectureAdvisorRecommendation: (projectId: string) =>
+    request<ArchitectureRecommendation>(
+      `/api/projects/${projectId}/architecture-advisor/recommend`,
+    ),
 
   getKnowledgeGraph: (projectId: string) =>
     request<KnowledgeGraph>(`/api/projects/${projectId}/knowledge-graph`),
@@ -1136,7 +1279,7 @@ export const api = {
     request<Record<string, unknown>>(`/api/deployment-jobs/${jobId}/status`),
 
   architectChat: (message: string, projectId: string) =>
-    request<{ reply: string; plan_updated: boolean; plan: InfrastructurePlan | null }>("/api/ai/architect-chat", {
+    request<{ reply: string; plan_updated: boolean; plan: InfrastructurePlan | null; citations?: CitationEvidence[] }>("/api/ai/architect-chat", {
       method: "POST",
       body: JSON.stringify({ message, project_id: projectId })
     }),
@@ -1402,5 +1545,18 @@ export const api = {
   getGlobalActivity: () =>
     request<ProjectActivity[]>("/api/activity"),
 
+  getTerraformReview: (projectId: string) =>
+    request<TerraformReview>(`/api/projects/${projectId}/terraform/review`),
+
+  issueTerraformCostEvidence: (operationRunId: string) =>
+    request<{ success: boolean }>(`/api/terraform/operations/${operationRunId}/cost-evidence`, {
+      method: "POST",
+    }),
+
+  approveTerraformApply: (operationRunId: string, approval: TerraformApplyApprovalRequest) =>
+    request<{ success: boolean }>(`/api/terraform/operations/${operationRunId}/apply`, {
+      method: "POST",
+      body: JSON.stringify(approval),
+    }),
 };
 
