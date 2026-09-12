@@ -200,6 +200,14 @@ jobs:
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive infra
 
+      - name: Initialize without remote state
+        working-directory: infra
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Initialize bootstrap without remote state
+        working-directory: infra/bootstrap
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
       - name: Verify cross-platform provider checksums
         run: |
           terraform -chdir=infra providers lock \
@@ -212,19 +220,13 @@ jobs:
             infra/.terraform.lock.hcl \
             infra/bootstrap/.terraform.lock.hcl
 
-      - name: Initialize without remote state
-        working-directory: infra
-        run: terraform init -backend=false -input=false -lockfile=readonly
-
       - name: Validate Terraform graph
         working-directory: infra
         run: terraform validate -no-color
 
       - name: Validate deployment identity bootstrap
         working-directory: infra/bootstrap
-        run: |
-          terraform init -backend=false -input=false -lockfile=readonly
-          terraform validate -no-color
+        run: terraform validate -no-color
 
       - name: Set up TFLint
         uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6.2.2
