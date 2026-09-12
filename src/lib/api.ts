@@ -63,7 +63,7 @@ function requestHeaders(options: RequestInit | undefined, includeJsonContentType
   return headers;
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, timeoutMs = 30_000): Promise<T> {
   const method = (options?.method || "GET").toUpperCase();
   if (UNSAFE_METHODS.has(method)) await ensureCsrfToken();
   const res = await fetchWithTimeout(
@@ -73,7 +73,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       credentials: "include",
       headers: requestHeaders(options, true),
     },
-    30_000,
+    timeoutMs,
   );
   rememberCsrfToken(res);
 
@@ -1172,6 +1172,7 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ user_query: userQuery }),
       },
+      150_000,
     ),
 
   getArchitectureAdvisorRecommendation: (projectId: string) =>

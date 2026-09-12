@@ -23,7 +23,6 @@ _settings_lock = threading.Lock()
 # Preserve the names already documented for existing production vaults while
 # using the standard convention for every other application setting.
 _LEGACY_SETTING_NAMES: Final[dict[str, tuple[str, ...]]] = {
-    "OPENAI_API_KEY": ("zeroops-ai-api-key", "zeroops-openai-api-key"),
     "GITHUB_TOKEN": ("zeroops-github-server-token", "zeroops-github-token"),
 }
 

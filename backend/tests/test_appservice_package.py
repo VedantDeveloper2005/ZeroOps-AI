@@ -41,7 +41,7 @@ def test_package_is_deterministic_and_has_canonical_layout(tmp_path: Path) -> No
             "backend/__init__.py",
             "backend/main.py",
             "backend/services/model_gateway.py",
-            "backend/services/providers/groq.py",
+            "backend/services/providers/azure_openai.py",
             "backend/services/terraform_ai.py",
             "ai-specs/repository-analysis/instructions.md",
             "ai-specs/terraform-generation/instructions.md",
@@ -76,7 +76,7 @@ def test_extracted_package_imports_and_loads_runtime_prompts(tmp_path: Path) -> 
         import backend.main
         import backend.services.model_gateway as model_gateway
         import backend.services.providers
-        import backend.services.providers.groq
+        import backend.services.providers.azure_openai
         import backend.services.terraform_ai as terraform_ai
 
         artifact_root = Path.cwd().resolve()

@@ -5,6 +5,7 @@ import "./globals.css";
 import { NotificationProvider } from "@/lib/NotificationContext";
 import { AuthProvider } from "@/lib/AuthContext";
 import { ToastContainer } from "@/components/ui/ToastContainer";
+import { ChunkErrorHandler } from "@/components/ui/ChunkErrorHandler";
 
 export const metadata: Metadata = {
   applicationName: "ZeroOps AI",
@@ -55,6 +56,7 @@ export default function RootLayout({
             </a>
             {children}
             <ToastContainer />
+            <ChunkErrorHandler />
           </AuthProvider>
         </NotificationProvider>
       </body>

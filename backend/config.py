@@ -121,118 +121,48 @@ CORS_ORIGINS = list(dict.fromkeys(CORS_ORIGINS))
 ALLOWED_HOSTS = _parse_csv("ALLOWED_HOSTS", ["*"] if not IS_PRODUCTION else [])
 ALLOW_CREDENTIALS = True
 
-# AI providers
-OPENAI_API_KEY = _setting("OPENAI_API_KEY")
-OPENAI_MODEL = _setting("OPENAI_MODEL", "gpt-5.4-mini")
-AI_MODEL_TIMEOUT_SECONDS = _integer("AI_MODEL_TIMEOUT_SECONDS", 30)
-GITHUB_MODELS_API_KEY = _setting("GITHUB_MODELS_API_KEY")
-GITHUB_MODELS_ENDPOINT = _setting("GITHUB_MODELS_ENDPOINT", "https://models.github.ai/inference")
-GITHUB_MODELS_MODEL = _setting("GITHUB_MODELS_MODEL", "openai/gpt-4o")
-# Isolated AI workload routes. These settings deliberately do not inherit from
-# NVIDIA_API_KEY, GITHUB_MODELS_API_KEY, or OPENAI_API_KEY. Repository analysis
-# may degrade to the deterministic scanner when its route is unavailable, while
-# Terraform generation fails closed. In production each route is loaded by its
-# own managed workload identity from its dedicated Key Vault.
-AI_GITHUB_API_VERSION = _setting("AI_GITHUB_API_VERSION", "2026-03-10")
+# Microsoft Foundry is the only AI provider. Workloads retain isolated credentials.
+AI_MODEL_TIMEOUT_SECONDS = _integer("AI_MODEL_TIMEOUT_SECONDS", 90)
 
-# Repository analysis workload. Defaults to NVIDIA for the testing prototype;
-# override via Key Vault for production routes.
-AI_REPOSITORY_PROVIDER = _setting("AI_REPOSITORY_PROVIDER", "nvidia").strip().lower()
+AI_REPOSITORY_PROVIDER = _setting("AI_REPOSITORY_PROVIDER", "azure-openai").strip().lower()
 AI_REPOSITORY_API_KEY = _setting("AI_REPOSITORY_API_KEY")
-AI_REPOSITORY_ENDPOINT = _setting(
-    "AI_REPOSITORY_ENDPOINT",
-    "https://integrate.api.nvidia.com/v1",
-).rstrip("/")
-AI_REPOSITORY_MODEL = _setting("AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
+AI_REPOSITORY_ENDPOINT = _setting("AI_REPOSITORY_ENDPOINT").rstrip("/")
+AI_REPOSITORY_MODEL = _setting("AI_REPOSITORY_MODEL")
 AI_REPOSITORY_AGENT_NAME = _setting("AI_REPOSITORY_AGENT_NAME")
 AI_REPOSITORY_PROMPT_VERSION = _setting("AI_REPOSITORY_PROMPT_VERSION", "repository-analysis.v1")
 AI_REPOSITORY_MAX_INPUT_CHARS = _integer("AI_REPOSITORY_MAX_INPUT_CHARS", 40_000)
-AI_REPOSITORY_MAX_OUTPUT_TOKENS = _integer("AI_REPOSITORY_MAX_OUTPUT_TOKENS", 1_600)
+AI_REPOSITORY_MAX_OUTPUT_TOKENS = _integer("AI_REPOSITORY_MAX_OUTPUT_TOKENS", 1600)
 
-# Secondary NVIDIA credential for the repository workload. Same endpoint and
-# model as the primary; independent key allows the gateway to retry with a
-# second NVIDIA account before escalating to the Groq fallback.
-# Empty means the secondary tier is skipped.
-AI_REPOSITORY_SECONDARY_API_KEY = _setting("AI_REPOSITORY_SECONDARY_API_KEY")
-
-# Explicit repository-analysis fallback. It never inherits a generic provider
-# key or either primary workload credential. Conservative complete-prompt
-# budgets reduce rate-limit risk for bounded repository reviews; provider limits can change.
-AI_REPOSITORY_FALLBACK_PROVIDER = _setting(
-    "AI_REPOSITORY_FALLBACK_PROVIDER", "groq"
-).strip().lower()
-AI_REPOSITORY_FALLBACK_API_KEY = _setting("AI_REPOSITORY_FALLBACK_API_KEY")
-AI_REPOSITORY_FALLBACK_ENDPOINT = _setting(
-    "AI_REPOSITORY_FALLBACK_ENDPOINT",
-    "https://api.groq.com/openai/v1",
-).rstrip("/")
-AI_REPOSITORY_FALLBACK_MODEL = _setting(
-    "AI_REPOSITORY_FALLBACK_MODEL", "openai/gpt-oss-120b"
-)
-AI_REPOSITORY_FALLBACK_PROMPT_VERSION = _setting(
-    "AI_REPOSITORY_FALLBACK_PROMPT_VERSION", "repository-analysis.v1"
-)
-AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS = _integer(
-    "AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS", 14_000
-)
-AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS = _integer(
-    "AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS", 800
-)
-
-# Terraform generation workload. Defaults to NVIDIA for the testing prototype;
-# override via Key Vault for production routes.
-AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "nvidia").strip().lower()
+AI_TERRAFORM_PROVIDER = _setting("AI_TERRAFORM_PROVIDER", "azure-openai").strip().lower()
 AI_TERRAFORM_API_KEY = _setting("AI_TERRAFORM_API_KEY")
-AI_TERRAFORM_ENDPOINT = _setting(
-    "AI_TERRAFORM_ENDPOINT",
-    "https://integrate.api.nvidia.com/v1",
-).rstrip("/")
-AI_TERRAFORM_MODEL = _setting("AI_TERRAFORM_MODEL", "z-ai/glm-5.2")
+AI_TERRAFORM_ENDPOINT = _setting("AI_TERRAFORM_ENDPOINT").rstrip("/")
+AI_TERRAFORM_MODEL = _setting("AI_TERRAFORM_MODEL")
 AI_TERRAFORM_AGENT_NAME = _setting("AI_TERRAFORM_AGENT_NAME")
 AI_TERRAFORM_PROMPT_VERSION = _setting("AI_TERRAFORM_PROMPT_VERSION", "terraform-generation.v1")
 AI_TERRAFORM_MAX_INPUT_CHARS = _integer("AI_TERRAFORM_MAX_INPUT_CHARS", 40_000)
-AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 4_000)
+AI_TERRAFORM_MAX_OUTPUT_TOKENS = _integer("AI_TERRAFORM_MAX_OUTPUT_TOKENS", 4000)
 
-# Secondary NVIDIA credential for the Terraform workload. Same endpoint and
-# model as the primary; independent key allows the gateway to retry with a
-# second NVIDIA account before escalating to the Groq fallback.
-# Empty means the secondary tier is skipped.
-AI_TERRAFORM_SECONDARY_API_KEY = _setting("AI_TERRAFORM_SECONDARY_API_KEY")
-
-# Explicit Terraform fallback. This route is independently credentialed from
-# both the repository fallback and both NVIDIA primary routes.
-AI_TERRAFORM_FALLBACK_PROVIDER = _setting(
-    "AI_TERRAFORM_FALLBACK_PROVIDER", "groq"
-).strip().lower()
-AI_TERRAFORM_FALLBACK_API_KEY = _setting("AI_TERRAFORM_FALLBACK_API_KEY")
-AI_TERRAFORM_FALLBACK_ENDPOINT = _setting(
-    "AI_TERRAFORM_FALLBACK_ENDPOINT",
-    "https://api.groq.com/openai/v1",
-).rstrip("/")
-AI_TERRAFORM_FALLBACK_MODEL = _setting(
-    "AI_TERRAFORM_FALLBACK_MODEL", "openai/gpt-oss-120b"
-)
-AI_TERRAFORM_FALLBACK_PROMPT_VERSION = _setting(
-    "AI_TERRAFORM_FALLBACK_PROMPT_VERSION", "terraform-generation.v1"
-)
-AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS = _integer(
-    "AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS", 14_000
-)
-AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS = _integer(
-    "AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS", 1_000
-)
-
-# Microsoft Foundry Architecture Advisor. Authenticated with Microsoft Entra ID
-# via DefaultAzureCredential (az login in local dev, App Service Managed Identity
-# in production). Server-side instructions, File Search (zeroops-knowledge vector
-# store), and Web Search run on the Foundry Agent deployment.
+# Microsoft Foundry unified demo agent for college demo presentation.
+# Authenticated with Microsoft Entra ID via DefaultAzureCredential
+# (az login in local dev, App Service Managed Identity in production).
 FOUNDRY_PROJECT_ENDPOINT = _setting(
     "FOUNDRY_PROJECT_ENDPOINT",
     "https://zeroops-aitest-resource.services.ai.azure.com/api/projects/zeroops-aitest",
 ).rstrip("/")
-FOUNDRY_AGENT_NAME = _setting("FOUNDRY_AGENT_NAME", "zeroops-architecture-advisor")
-FOUNDRY_AGENT_VERSION = _setting("FOUNDRY_AGENT_VERSION", "2")
+FOUNDRY_AGENT_NAME = _setting("FOUNDRY_AGENT_NAME", "demo")
+FOUNDRY_AGENT_VERSION = _setting("FOUNDRY_AGENT_VERSION", "1")
 FOUNDRY_REQUEST_TIMEOUT_SECONDS = _integer("FOUNDRY_REQUEST_TIMEOUT_SECONDS", 120)
+ZEROOPS_DEMO_AI = (
+    os.environ.get("ZEROOPS_DEMO_AI", "").strip().lower() in {"true", "1", "yes", "on"}
+    or _boolean("ZEROOPS_DEMO_AI", True)
+)
+FOUNDRY_TARGET_TENANT_ID = _setting("FOUNDRY_TARGET_TENANT_ID").strip()
+FOUNDRY_MULTITENANT_APP_CLIENT_ID = _setting("FOUNDRY_MULTITENANT_APP_CLIENT_ID").strip()
+FOUNDRY_MANAGED_IDENTITY_CLIENT_ID = _setting("FOUNDRY_MANAGED_IDENTITY_CLIENT_ID").strip()
+if any((FOUNDRY_TARGET_TENANT_ID, FOUNDRY_MULTITENANT_APP_CLIENT_ID)) and not all(
+    (FOUNDRY_TARGET_TENANT_ID, FOUNDRY_MULTITENANT_APP_CLIENT_ID, FOUNDRY_MANAGED_IDENTITY_CLIENT_ID)
+):
+    raise RuntimeError("Cross-tenant Foundry requires a target tenant, application and source managed identity.")
 
 
 # OAuth and session security

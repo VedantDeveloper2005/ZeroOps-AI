@@ -2,9 +2,7 @@
 
 import { useState } from "react";
 import {
-  AlertCircle,
   Bot,
-  CheckCircle2,
   Cpu,
   DollarSign,
   ExternalLink,
@@ -17,7 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import type { ArchitectureRecommendation, CitationEvidence } from "@/lib/api";
+import type { ArchitectureRecommendation } from "@/lib/api";
 
 type Props = {
   recommendation?: ArchitectureRecommendation;
@@ -86,8 +84,9 @@ export function ArchitectureAdvisorCard({
               )}
             </div>
             <p className="mt-1 text-xs text-foreground-muted">
-              Powered by {recommendation?.provenance?.model || "GPT-5.6 Terra"} with server-side
-              File Search and Web Search.
+              {recommendation?.provenance?.model
+                ? `Model: ${recommendation.provenance.model}. Retrieval evidence is shown below.`
+                : "Consult the configured agent to capture a real model response and its sources."}
             </p>
           </div>
         </div>
@@ -132,7 +131,7 @@ export function ArchitectureAdvisorCard({
             {/* Provenance Badges */}
             <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-border text-[11px] text-foreground-muted">
               <span className="flex items-center gap-1 font-mono">
-                <Cpu size={12} aria-hidden="true" /> {recommendation.provenance.model || "GPT-5.6 Terra"}
+                <Cpu size={12} aria-hidden="true" /> {recommendation.provenance.model || "Not reported"}
               </span>
               <span>•</span>
               <span className="flex items-center gap-1">
@@ -247,7 +246,7 @@ export function ArchitectureAdvisorCard({
                 </ul>
               ) : (
                 <p className="mt-2 text-xs text-foreground-muted">
-                  Standard App Service Linux tier pricing applies.
+                  No verified cost details were returned by the adviser.
                 </p>
               )}
             </div>

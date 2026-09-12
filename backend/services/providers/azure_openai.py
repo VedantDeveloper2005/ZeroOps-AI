@@ -3,7 +3,7 @@
 This route is intentionally distinct from :mod:`azure_foundry`, which invokes
 Foundry prompt agents with managed identity.  ``azure-openai`` calls a model
 deployment's OpenAI-compatible ``/openai/v1`` endpoint with the workload-local
-API key.  It is opt-in: NVIDIA remains the default provider for both workloads.
+API key.  This is the default provider for both workloads.
 """
 
 from __future__ import annotations

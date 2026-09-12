@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Protocol
@@ -23,6 +24,26 @@ except ImportError:  # pragma: no cover - backend-directory execution
 QUEUE_NAMES = frozenset({"repo-analysis", "terraform-generation", "terraform-apply"})
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _TOKEN_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default"
+logger = logging.getLogger("zeroops.workflow_outbox")
+
+
+async def run_dispatcher(session_factory) -> None:
+    """Drain durable commands throughout API lifetime, retrying transient failures.
+
+    dispatch_pending locks rows with SKIP LOCKED, so multiple API instances can
+    run this loop without claiming the same outbox record simultaneously.
+    """
+    publisher = publisher_from_config()
+    while True:
+        try:
+            async with session_factory() as db:
+                await dispatch_pending(db, publisher=publisher)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # Never include transport messages, payloads, or credentials in logs.
+            logger.warning("Workflow dispatch failed (%s); retry scheduled.", type(error).__name__)
+        await asyncio.sleep(config.WORKFLOW_OUTBOX_INTERVAL_SECONDS)
 
 
 class WorkflowPublisher(Protocol):

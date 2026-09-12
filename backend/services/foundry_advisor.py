@@ -97,10 +97,8 @@ class FoundryAdvisorClient:
                     credential=credential,
                 )
 
-            # Bind to the agent so server-side instructions, File Search, and Web Search are used
-            self._openai_client = self._project_client.get_openai_client(
-                agent_name=self.agent_name
-            )
+            # Use get_openai_client() and invoke agent via agent_reference in extra_body
+            self._openai_client = self._project_client.get_openai_client()
         except Exception as err:
             err_str = str(err).lower()
             if "authentication" in err_str or "credential" in err_str:
@@ -216,173 +214,7 @@ def _parse_components_from_text(text: str) -> list[ComponentRecommendation]:
         except Exception:
             pass
 
-    components: list[ComponentRecommendation] = []
-
-    # Check for Azure App Service
-    if re.search(r"\bapp\s*service\b", text, re.IGNORECASE):
-        sku_match = re.search(r"\b(B1|B2|B3|S1|S2|S3|P0v3|P1v3|P2v3|P3v3|Basic|Standard|Premium)\b", text)
-        sku = sku_match.group(1) if sku_match else "B1"
-        components.append(
-            ComponentRecommendation(
-                id="application",
-                role="Application Runtime",
-                service="Azure App Service",
-                proposed_sku=sku,
-                instance_count="1 (autoscale 1-3)",
-                reason="Primary hosting platform for the web application workload.",
-                evidence=["Repository framework and runtime detection"],
-                security_requirements=["System-assigned Managed Identity", "HTTPS only"],
-                availability_recovery="Zone-redundancy or backup configuration in production.",
-                cost_status="Low-cost burstable baseline.",
-                validation_required=["Confirm runtime version and deployment slot requirements."],
-                deployable=True,
-                status_note=DEPLOYABLE_SUPPORTED_NOTE,
-            )
-        )
-
-    # Check for PostgreSQL Flexible Server
-    if re.search(r"\bpostgre(?:sql)?\b", text, re.IGNORECASE):
-        sku_match = re.search(r"\b(B1ms|B2s|D2s_v5|Burstable|General\s*Purpose)\b", text, re.IGNORECASE)
-        sku = sku_match.group(1) if sku_match else "Burstable B1ms"
-        components.append(
-            ComponentRecommendation(
-                id="database",
-                role="Database",
-                service="Azure Database for PostgreSQL Flexible Server",
-                proposed_sku=sku,
-                instance_count="1",
-                reason="Relational database for application persistent state.",
-                evidence=["Repository database dependency detection"],
-                security_requirements=["VNet private endpoint integration", "Entra ID authentication"],
-                availability_recovery="Automated 7-day backups; geo-redundancy optional.",
-                cost_status="Burstable compute tier.",
-                validation_required=["Validate required IOPS, storage retention, and connection pooler."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Check for Redis Cache
-    if re.search(r"\bredis\b", text, re.IGNORECASE):
-        components.append(
-            ComponentRecommendation(
-                id="cache",
-                role="Cache",
-                service="Azure Cache for Redis",
-                proposed_sku="Basic C0 / C1",
-                instance_count="1",
-                reason="In-memory cache for session state and query acceleration.",
-                evidence=["Repository caching reference"],
-                security_requirements=["TLS 1.2+", "Private endpoint"],
-                availability_recovery="Non-persistent in basic tier; standard tier for replication.",
-                cost_status="Cache driver note.",
-                validation_required=["Verify session TTL and eviction policies."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Check for Azure Blob Storage
-    if re.search(r"\b(blob\s*storage|storage\s*account|s3|bucket)\b", text, re.IGNORECASE):
-        components.append(
-            ComponentRecommendation(
-                id="storage",
-                role="Object Storage",
-                service="Azure Blob Storage",
-                proposed_sku="Standard LRS",
-                instance_count="N/A",
-                reason="Unstructured object and media file storage.",
-                evidence=["Repository object storage integration"],
-                security_requirements=["Private container access", "Managed identity"],
-                availability_recovery="Locally redundant storage (LRS).",
-                cost_status="Consumption-based storage capacity.",
-                validation_required=["Validate lifecycle management rules and soft delete."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Check for Azure Key Vault
-    if re.search(r"\bkey\s*vault\b", text, re.IGNORECASE):
-        components.append(
-            ComponentRecommendation(
-                id="secrets",
-                role="Secrets Management",
-                service="Azure Key Vault",
-                proposed_sku="Standard",
-                instance_count="N/A",
-                reason="Secure centralized storage of secrets and configuration keys.",
-                evidence=["Repository environment configuration"],
-                security_requirements=["Azure RBAC authorization", "Purge protection"],
-                availability_recovery="Multi-region automatic failover.",
-                cost_status="Low per-transaction pricing.",
-                validation_required=["Verify secret access policy and managed identity assignment."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Check for Application Insights
-    if re.search(r"\bapplication\s*insights\b", text, re.IGNORECASE) or re.search(r"\btelemetry\b", text, re.IGNORECASE):
-        components.append(
-            ComponentRecommendation(
-                id="monitoring",
-                role="Observability",
-                service="Azure Application Insights",
-                proposed_sku="Workspace-based",
-                instance_count="N/A",
-                reason="Telemetry, distributed tracing, and real-time failure diagnostics.",
-                evidence=["ZeroOps baseline operations guidance"],
-                security_requirements=["Log Analytics workspace integration"],
-                availability_recovery="Regional data ingestion.",
-                cost_status="Ingestion volume billing (first 5GB free).",
-                validation_required=["Set daily data cap to avoid runaway ingestion costs."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Check for Virtual Network
-    if re.search(r"\bvnet\b|\bvirtual\s*network\b", text, re.IGNORECASE):
-        components.append(
-            ComponentRecommendation(
-                id="networking",
-                role="Networking",
-                service="Azure Virtual Network",
-                proposed_sku="Standard VNet",
-                instance_count="1",
-                reason="Network isolation and private connectivity between App Service and database.",
-                evidence=["ZeroOps security and isolation architecture"],
-                security_requirements=["Subnet delegation for App Service", "Network Security Groups (NSGs)"],
-                availability_recovery="Zonal resilience.",
-                cost_status="No charge for VNet; private endpoint fees apply.",
-                validation_required=["Confirm subnet CIDR address space without overlap."],
-                deployable=False,
-                status_note=ADVISORY_UNSUPPORTED_NOTE,
-            )
-        )
-
-    # Fallback component if none were extracted
-    if not components:
-        components.append(
-            ComponentRecommendation(
-                id="application",
-                role="Application Runtime",
-                service="Azure App Service",
-                proposed_sku="B1",
-                instance_count="1",
-                reason="Default recommended deployment target for containerized and web workloads in ZeroOps.",
-                evidence=["Repository analysis evidence"],
-                security_requirements=["Managed Identity", "HTTPS only"],
-                availability_recovery="Regional SLA.",
-                cost_status="Standard entry-tier estimate.",
-                validation_required=["Verify application startup command and health check endpoint."],
-                deployable=True,
-                status_note=DEPLOYABLE_SUPPORTED_NOTE,
-            )
-        )
-
-    return components
+    return []
 
 
 def _classify_citations(raw_annotations: list[dict[str, Any]]) -> list[CitationEvidence]:
@@ -494,6 +326,8 @@ def invoke_architecture_advisor(
         raise FoundryAdvisorError(f"Foundry Architecture Advisor inference failed: {err}") from err
 
     latency_ms = max(0, round((time.perf_counter() - started) * 1_000))
+    if getattr(response, "status", None) in {"incomplete", "failed", "cancelled"}:
+        raise FoundryAdvisorError("Microsoft Foundry did not complete the architecture response. Please retry.")
     output_text = str(getattr(response, "output_text", "") or "").strip()
     if not output_text:
         raise FoundryAdvisorError("Microsoft Foundry returned an empty architecture response.")
@@ -515,23 +349,6 @@ def invoke_architecture_advisor(
 
     raw_annotations = extract_annotations(response)
     citations = _classify_citations(raw_annotations)
-
-    # If parsed_json includes evidence_sources, merge them
-    if "evidence_sources" in parsed_json and isinstance(parsed_json["evidence_sources"], list):
-        for ev in parsed_json["evidence_sources"]:
-            if isinstance(ev, dict) and "citation" in ev:
-                st = str(ev.get("source_type") or "assumption").lower()
-                if st not in {"knowledge", "web", "repository", "assumption"}:
-                    st = "knowledge" if "zeroops" in str(ev.get("title", "")).lower() else "web"
-                citations.append(
-                    CitationEvidence(
-                        id=str(ev.get("id") or f"cit-json-{len(citations) + 1}"),
-                        source_type=st,  # type: ignore[arg-type]
-                        title=ev.get("title"),
-                        citation=str(ev.get("citation")),
-                        url=ev.get("url"),
-                    )
-                )
 
     # Add repository facts citation
     citations.insert(
@@ -572,29 +389,11 @@ def invoke_architecture_advisor(
         confidence = "medium"
 
     # Extract assumptions and missing information
-    assumptions = parsed_json.get("assumptions") or [
-        "Workload operates within estimated peak request concurrency without sustained unbounded spikes.",
-        "Traffic is predominantly standard HTTPS web/API traffic.",
-        "Production deployment will use Azure subscription with necessary service quotas enabled.",
-    ]
-    missing_info = parsed_json.get("missing_information") or [
-        "Measured production CPU and memory utilization under actual peak traffic.",
-        "Exact database data volume, IOPS growth expectations, and retention requirements.",
-        "Subscription-specific negotiated Azure pricing and enterprise discounts.",
-    ]
-
-    cost_status_str = str(parsed_json.get("cost_status") or "requires_connected_azure_subscription")
-    cost_considerations = parsed_json.get("cost_considerations") or [
-        "Subscription-specific Azure pricing requires a connected Azure account with Cost Management permissions.",
-        "Burstable compute tiers (B-series) offer significant cost savings during variable utilization.",
-        "Outbound bandwidth (egress), backup retention, and Log Analytics ingestion are separate variable cost drivers.",
-    ]
-
-    validation_required = parsed_json.get("validation_required") or [
-        "Verify runtime support and environment variables before approval.",
-        "Perform preflight simulation to validate security controls and resource naming.",
-        "Ensure user approval is granted before queuing Terraform generation.",
-    ]
+    assumptions = parsed_json.get("assumptions") or []
+    missing_info = parsed_json.get("missing_information") or []
+    cost_status_str = str(parsed_json.get("cost_status") or "not_verified")
+    cost_considerations = parsed_json.get("cost_considerations") or []
+    validation_required = parsed_json.get("validation_required") or []
 
     usage = getattr(response, "usage", None)
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
@@ -614,7 +413,7 @@ def invoke_architecture_advisor(
     provenance = {
         "agent_name": advisor_client.agent_name,
         "agent_version": advisor_client.agent_version,
-        "model": str(getattr(response, "model", None) or "GPT-5.6 Terra"),
+        "model": str(getattr(response, "model", None) or "Not reported"),
         "latency_ms": latency_ms,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -686,6 +485,14 @@ Do not claim that resources have already been deployed or altered in the cloud.
         "input": prompt,
         "max_output_tokens": 2_000,
     }
+    if advisor_client.agent_name:
+        payload["extra_body"] = {
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": advisor_client.agent_name,
+                "version": advisor_client.agent_version or "1",
+            }
+        }
     if active_conversation_id:
         payload["conversation"] = active_conversation_id
 

@@ -1,4 +1,4 @@
-"""Strict structured inference clients and bounded workload-local failover."""
+"""Strict Microsoft Foundry inference with workload-local credentials."""
 
 from __future__ import annotations
 
@@ -18,10 +18,6 @@ from .security import canonical_json_bytes, sha256_bytes
 
 T = TypeVar("T", bound=BaseModel)
 
-_GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference"
-_NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1"
-_GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
-_GROQ_MODEL = "openai/gpt-oss-120b"
 
 
 def _azure_openai_endpoint(endpoint: str) -> str:
@@ -263,32 +259,7 @@ class StructuredModelClient:
         self.timeout_seconds = timeout_seconds
         self.api_version = api_version.strip()
         self.transport = transport
-        if self.provider == "github-models":
-            if self.endpoint != _GITHUB_MODELS_ENDPOINT:
-                raise ValueError(
-                    "GitHub Models endpoint must use the approved inference origin"
-                )
-            if not self.model.startswith(
-                ("openai/", "microsoft/", "meta/", "mistral-ai/")
-            ):
-                raise ValueError(
-                    "Model must be a publisher-qualified GitHub Models ID"
-                )
-        elif self.provider == "nvidia":
-            if self.endpoint != _NVIDIA_ENDPOINT:
-                raise ValueError(
-                    "NVIDIA endpoint must use the approved inference origin"
-                )
-            if "/" not in self.model:
-                raise ValueError(
-                    "NVIDIA model must be a publisher-qualified catalog ID"
-                )
-        elif self.provider == "groq":
-            if self.endpoint != _GROQ_ENDPOINT:
-                raise ValueError("Groq endpoint must use the approved inference origin")
-            if self.model != _GROQ_MODEL:
-                raise ValueError("Groq fallback must use the approved GPT-OSS model")
-        elif self.provider in {"azure-openai", "foundry-openai", "microsoft-foundry-openai"}:
+        if self.provider in {"azure-openai", "foundry-openai", "microsoft-foundry-openai"}:
             self.provider = "azure-openai"
             self.endpoint = _azure_openai_endpoint(self.endpoint)
             if not self.model:
@@ -312,11 +283,11 @@ class StructuredModelClient:
         output_schema = output_model.model_json_schema()
         provider_output_schema = (
             strict_provider_output_schema(output_schema)
-            if self.provider in {"groq", "azure-openai"}
+            if self.provider in {"azure-openai"}
             else output_schema
         )
         schema_json = canonical_json_bytes(provider_output_schema).decode("utf-8")
-        strict_schema_enabled = self.provider in {"groq", "azure-openai"}
+        strict_schema_enabled = self.provider in {"azure-openai"}
         bounded_system_instructions = (
             f"{system_instructions.strip()}\n\n"
             "Return exactly one JSON object matching the enforced JSON Schema. "
@@ -326,7 +297,7 @@ class StructuredModelClient:
             bounded_system_instructions = f"{bounded_system_instructions}\n{schema_json}"
         request_character_count = len(bounded_system_instructions) + len(input_json)
         if strict_schema_enabled:
-            # The schema is sent once through Groq's strict response contract.
+            # The schema is sent once through Foundry's strict response contract.
             request_character_count += len(schema_json)
         if request_character_count > self.maximum_input_chars:
             raise ModelInputBudgetError(
@@ -356,12 +327,6 @@ class StructuredModelClient:
         try:
             result = self._validate(raw, output_model, semantic_validator)
         except (json.JSONDecodeError, ValidationError, ValueError) as initial_error:
-            if self.provider == "groq":
-                # The free-plan backup gets one strict-schema attempt. Avoid a
-                # hidden second request that could unexpectedly double token use.
-                raise ModelContractError(
-                    "Model output failed strict validation"
-                ) from initial_error
             repair_attempted = True
             repair_messages = [
                 *messages,
@@ -415,70 +380,7 @@ class StructuredModelClient:
         *,
         output_schema: dict[str, Any],
     ) -> tuple[str, dict[str, int]]:
-        if self.provider == "azure-openai":
-            return self._request_azure_openai(messages, output_schema=output_schema)
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0,
-            "stream": False,
-        }
-        if self.provider == "groq":
-            payload["max_completion_tokens"] = self.maximum_output_tokens
-        else:
-            payload["max_tokens"] = self.maximum_output_tokens
-        if self.provider == "github-models":
-            headers["Accept"] = "application/vnd.github+json"
-            if self.api_version:
-                headers["X-GitHub-Api-Version"] = self.api_version
-            payload["response_format"] = {"type": "json_object"}
-        elif self.provider == "groq" and _supports_strict_json_schema(output_schema):
-            headers["Accept"] = "application/json"
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "zeroops_structured_response",
-                    "strict": True,
-                    "schema": output_schema,
-                },
-            }
-        else:
-            # NVIDIA Build's OpenAI-compatible catalog does not guarantee
-            # response_format support for every model. The schema is already
-            # embedded in the bounded system prompt and validation stays local.
-            headers["Accept"] = "application/json"
-        try:
-            with httpx.Client(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                response = client.post(
-                    f"{self.endpoint}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                value = response.json()
-        except (httpx.HTTPError, ValueError) as error:
-            raise ModelUnavailableError("Configured model provider request failed") from error
-        try:
-            choice = value["choices"][0]
-            content = choice["message"]["content"]
-        except (KeyError, IndexError, TypeError) as error:
-            raise ModelContractError("Model provider returned an invalid response envelope") from error
-        finish_reason = choice.get("finish_reason")
-        if finish_reason not in {None, "stop"}:
-            raise ModelContractError("Model provider returned an incomplete response")
-        usage = value.get("usage") or {}
-        return str(content), {
-            "prompt_tokens": max(0, int(usage.get("prompt_tokens") or 0)),
-            "completion_tokens": max(0, int(usage.get("completion_tokens") or 0)),
-        }
+        return self._request_azure_openai(messages, output_schema=output_schema)
 
     def _request_azure_openai(
         self,
@@ -517,7 +419,16 @@ class StructuredModelClient:
         except (httpx.HTTPError, ValueError) as error:
             raise ModelUnavailableError("Microsoft Foundry OpenAI request failed") from error
         try:
+            if value.get("status") in {"incomplete", "failed", "cancelled"}:
+                raise ModelContractError("Microsoft Foundry returned an incomplete response")
             content = str(value.get("output_text") or "").strip()
+            if not content:
+                content = "\n".join(
+                    part.get("text", "")
+                    for item in value.get("output", []) if isinstance(item, dict)
+                    for part in item.get("content", []) if isinstance(part, dict)
+                    if part.get("type") == "output_text"
+                ).strip()
             usage = value.get("usage") or {}
         except AttributeError as error:
             raise ModelContractError("Microsoft Foundry OpenAI returned an invalid response envelope") from error
@@ -548,94 +459,25 @@ class StructuredModelClient:
         return result
 
 
-def generate_with_fallback(
-    *,
-    primary: StructuredModelClient | None,
-    fallback: StructuredModelClient | None,
-    system_instructions: str,
-    input_value: dict[str, Any],
-    output_model: type[T],
-    schema_version: str,
+def generate_with_provenance(
+    *, primary: StructuredModelClient | None, system_instructions: str,
+    input_value: dict[str, Any], output_model: type[T], schema_version: str,
     correlation_id: str | None = None,
     semantic_validator: Callable[[T], None] | None = None,
 ) -> tuple[T, ModelProvenance, ModelRoutingProvenance]:
-    """Try one explicit backup route without crossing the workload boundary."""
-
-    primary_failure_code: str | None = None
-    if primary is not None:
-        try:
-            result, provenance = primary.generate(
-                system_instructions=system_instructions,
-                input_value=input_value,
-                output_model=output_model,
-                schema_version=schema_version,
-                correlation_id=correlation_id,
-                semantic_validator=semantic_validator,
-            )
-            return result, provenance, ModelRoutingProvenance(
-                selected_route="primary",
-                fallback_attempted=False,
-                primary_provider=getattr(primary, "provider", None),
-                primary_model=getattr(primary, "model", None),
-                fallback_provider=getattr(fallback, "provider", None),
-                fallback_model=getattr(fallback, "model", None),
-                primary_failure_code=None,
-                fallback_failure_code=None,
-            )
-        except (ModelInputBudgetError, ModelPolicyViolationError) as error:
-            raise ModelRoutesExhaustedError(
-                ModelRoutingProvenance(
-                    selected_route="none",
-                    fallback_attempted=False,
-                    primary_provider=getattr(primary, "provider", None),
-                    primary_model=getattr(primary, "model", None),
-                    fallback_provider=getattr(fallback, "provider", None),
-                    fallback_model=getattr(fallback, "model", None),
-                    primary_failure_code=_safe_failure_code(error),
-                    fallback_failure_code="not_attempted",
-                )
-            ) from error
-        except (ModelUnavailableError, ModelContractError) as error:
-            primary_failure_code = _safe_failure_code(error)
-    else:
-        primary_failure_code = "not_configured"
-
-    if fallback is not None:
-        try:
-            result, provenance = fallback.generate(
-                system_instructions=system_instructions,
-                input_value=input_value,
-                output_model=output_model,
-                schema_version=schema_version,
-                correlation_id=correlation_id,
-                semantic_validator=semantic_validator,
-            )
-            return result, provenance, ModelRoutingProvenance(
-                selected_route="fallback",
-                fallback_attempted=True,
-                primary_provider=getattr(primary, "provider", None),
-                primary_model=getattr(primary, "model", None),
-                fallback_provider=getattr(fallback, "provider", None),
-                fallback_model=getattr(fallback, "model", None),
-                primary_failure_code=primary_failure_code,
-                fallback_failure_code=None,
-            )
-        except (ModelInputBudgetError, ModelPolicyViolationError) as error:
-            fallback_failure_code = _safe_failure_code(error)
-        except (ModelUnavailableError, ModelContractError) as error:
-            fallback_failure_code = _safe_failure_code(error)
-    else:
-        fallback_failure_code = "not_configured"
-
-    raise ModelRoutesExhaustedError(
-        ModelRoutingProvenance(
-            selected_route="none",
-            fallback_attempted=fallback is not None,
-            primary_provider=getattr(primary, "provider", None),
-            primary_model=getattr(primary, "model", None),
-            fallback_provider=getattr(fallback, "provider", None),
-            fallback_model=getattr(fallback, "model", None),
-            primary_failure_code=primary_failure_code,
-            fallback_failure_code=fallback_failure_code,
-        )
-    )
+    """Invoke the sole Foundry route and preserve honest failure provenance."""
+    routing = dict(primary_provider=getattr(primary, "provider", None),
+                   primary_model=getattr(primary, "model", None), fallback_attempted=False,
+                   fallback_provider=None, fallback_model=None, fallback_failure_code=None)
+    if primary is None:
+        raise ModelRoutesExhaustedError(ModelRoutingProvenance(
+            **routing, selected_route="none", primary_failure_code="not_configured"))
+    try:
+        result, provenance = primary.generate(
+            system_instructions=system_instructions, input_value=input_value,
+            output_model=output_model, schema_version=schema_version,
+            correlation_id=correlation_id, semantic_validator=semantic_validator)
+    except (ModelInputBudgetError, ModelPolicyViolationError, ModelUnavailableError, ModelContractError) as error:
+        raise ModelRoutesExhaustedError(ModelRoutingProvenance(
+            **routing, selected_route="none", primary_failure_code=_safe_failure_code(error))) from error
+    return result, provenance, ModelRoutingProvenance(**routing, selected_route="primary")

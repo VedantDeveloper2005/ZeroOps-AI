@@ -34,6 +34,7 @@ class ProviderConfiguration:
     max_input_chars: int = 60_000
     max_output_tokens: int = 1_600
     prompt_version: str = "v1"
+    agent_version: str = "1"
 
     def __post_init__(self) -> None:
         if not 1 <= self.timeout_seconds <= 120:

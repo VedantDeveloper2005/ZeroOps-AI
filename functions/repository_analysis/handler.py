@@ -28,7 +28,7 @@ from zeroops_functions.model_client import (
     ModelRoutesExhaustedError,
     ModelUnavailableError,
     StructuredModelClient,
-    generate_with_fallback,
+    generate_with_provenance,
 )
 from zeroops_functions.publisher import ServiceBusPublisher
 from zeroops_functions.security import canonical_json_bytes, redact, sha256_bytes
@@ -41,7 +41,6 @@ class RepositoryHandlerDependencies:
     model_client: StructuredModelClient | None
     workflow_events_queue: str
     instructions: str
-    fallback_model_client: StructuredModelClient | None = None
 
 
 def _evidence_ids(request: RepositoryAnalysisRequest) -> set[str]:
@@ -83,14 +82,13 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
         )
     )
     instructions = prompt_path.read_text(encoding="utf-8")
-    provider = os.getenv("AI_REPOSITORY_PROVIDER", "nvidia")
+    provider = os.getenv("AI_REPOSITORY_PROVIDER", "azure-openai")
     if provider.strip().lower().replace("_", "-") not in {
-        "nvidia",
         "azure-openai",
         "foundry-openai",
         "microsoft-foundry-openai",
     }:
-        raise ValueError("Repository primary provider must be NVIDIA or Microsoft Foundry OpenAI")
+        raise ValueError("Repository primary provider must be Microsoft Foundry OpenAI")
     api_key = os.getenv("AI_REPOSITORY_API_KEY", "")
     model_client: StructuredModelClient | None
     try:
@@ -98,9 +96,9 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
             provider=provider,
             endpoint=os.getenv(
                 "AI_REPOSITORY_ENDPOINT",
-                "https://integrate.api.nvidia.com/v1",
+                "",
             ),
-            model=os.getenv("AI_REPOSITORY_MODEL", "z-ai/glm-5.2"),
+            model=os.getenv("AI_REPOSITORY_MODEL", ""),
             api_key=api_key,
             workload="repository-analysis",
             prompt_version=os.getenv(
@@ -113,42 +111,9 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
             maximum_output_tokens=int(
                 os.getenv("AI_REPOSITORY_MAX_OUTPUT_TOKENS", "1600")
             ),
-            api_version=os.getenv("AI_GITHUB_API_VERSION", "2026-03-10"),
         )
     except ModelUnavailableError:
         model_client = None
-    fallback_provider = os.getenv("AI_REPOSITORY_FALLBACK_PROVIDER", "groq")
-    if fallback_provider.strip().lower().replace("_", "-") != "groq":
-        raise ValueError("Repository fallback provider must be Groq")
-    try:
-        fallback_model_client: StructuredModelClient | None = StructuredModelClient(
-            provider=fallback_provider,
-            endpoint=os.getenv(
-                "AI_REPOSITORY_FALLBACK_ENDPOINT",
-                "https://api.groq.com/openai/v1",
-            ),
-            model=os.getenv(
-                "AI_REPOSITORY_FALLBACK_MODEL",
-                "openai/gpt-oss-120b",
-            ),
-            api_key=os.getenv("AI_REPOSITORY_FALLBACK_API_KEY", ""),
-            workload="repository-analysis",
-            prompt_version=os.getenv(
-                "AI_REPOSITORY_FALLBACK_PROMPT_VERSION",
-                "repository-analysis.v1",
-            ),
-            maximum_input_chars=int(
-                os.getenv("AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS", "14000")
-            ),
-            maximum_output_tokens=int(
-                os.getenv("AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS", "800")
-            ),
-            timeout_seconds=float(
-                os.getenv("AI_REPOSITORY_FALLBACK_TIMEOUT_SECONDS", "30")
-            ),
-        )
-    except ModelUnavailableError:
-        fallback_model_client = None
     return RepositoryHandlerDependencies(
         store=BlobArtifactStore(account_url, credential),
         publisher=ServiceBusPublisher(namespace, credential),
@@ -158,7 +123,6 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
             "workflow-events",
         ),
         instructions=instructions,
-        fallback_model_client=fallback_model_client,
     )
 
 
@@ -205,9 +169,8 @@ def handle_repository_analysis(
         status = "model_assisted"
         provenance: dict[str, Any]
         try:
-            model_output, model_provenance, routing = generate_with_fallback(
+            model_output, model_provenance, routing = generate_with_provenance(
                 primary=deps.model_client,
-                fallback=deps.fallback_model_client,
                 system_instructions=deps.instructions,
                 input_value=request.model_dump(mode="json"),
                 output_model=RepositoryAssessment,

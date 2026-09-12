@@ -177,8 +177,10 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@b686016b4de8820a23519503685d8d03fbfa03a6 # v3
         with:
-          app-name: 'zeroops-backend'
+          app-name: 'zeroops-backend-v2'
           slot-name: 'Production'
+          clean: true
+          restart: true
           package: dist/zeroops-backend-appservice.zip
 
       - name: Verify deployed backend health
@@ -186,7 +188,7 @@ jobs:
         run: |
           for attempt in {1..30}; do
             if curl --fail --silent --show-error --max-time 5 --output /dev/null \
-              https://zeroops-backend.azurewebsites.net/health; then
+              https://zeroops-backend-v2.azurewebsites.net/health; then
               exit 0
             fi
             echo "Health check attempt ${attempt}/30 failed; retrying in 5 seconds"

@@ -45,12 +45,12 @@ def test_application_setting_uses_canonical_key_vault_name_and_caches(monkeypatc
 
 
 def test_application_setting_supports_documented_legacy_key_names(monkeypatch):
-    client = _VaultClient({"zeroops-ai-api-key": "vault-key"})
+    client = _VaultClient({"zeroops-github-server-token": "vault-key"})
     monkeypatch.setattr(vault, "kv_client", client)
     monkeypatch.setattr(vault, "HAS_AZURE_KV", True)
 
-    assert vault.get_application_setting("OPENAI_API_KEY") == "vault-key"
-    assert client.calls == ["zeroops-ai-api-key"]
+    assert vault.get_application_setting("GITHUB_TOKEN") == "vault-key"
+    assert client.calls == ["zeroops-github-server-token"]
 
 
 def test_required_setting_fails_closed_when_key_is_absent(monkeypatch):

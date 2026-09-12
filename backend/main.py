@@ -44,14 +44,14 @@ except ImportError:
 
 try:
     from backend import config, database
-    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
+    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config, database
-    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis
+    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -66,9 +66,18 @@ async def lifespan(_: FastAPI):
         await recover_interrupted_deployments()
         await reconcile_stale_ai_investigations()
     daemon_task = asyncio.create_task(maintenance_daemon())
+    outbox_task = None
+    if initialized and config.SERVICEBUS_FULLY_QUALIFIED_NAMESPACE:
+        from backend.services.workflow_outbox import run_dispatcher
+
+        outbox_task = asyncio.create_task(run_dispatcher(AsyncSessionLocal))
     try:
         yield
     finally:
+        if outbox_task is not None:
+            outbox_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await outbox_task
         daemon_task.cancel()
         with suppress(asyncio.CancelledError):
             await daemon_task
@@ -2906,6 +2915,12 @@ async def start_deploy(
         f"{namespace_prefix}-{project.name}-{str(project.id)[:8]}"
     )
     image_ref = deployment_targets.image_ref_for_target(selected_target, image_name, version)
+    is_app_service_reused = deployment_targets.is_app_service_reused_deployment(
+        target=selected_target.provider,
+        connection=azure_connection,
+        infrastructure_change=False,
+        has_iac=False,
+    )
     tenant = await tenancy.resolve_tenant(db, user=current_user)
     pipeline_config_result = await db.execute(
         select(models.ProjectPipelineConfiguration)
@@ -2942,6 +2957,8 @@ async def start_deploy(
         deployed_by=f"{current_user.first_name or 'User'} {(current_user.last_name or '')[0:1]}.".strip(),
         image=image_ref,
         infrastructure_metadata={
+            "app_service_reused": is_app_service_reused,
+            "terraform_apply_required": not is_app_service_reused,
             # Preserve the caller's target intent so the isolated worker can
             # re-evaluate an automatic choice against the immutable checkout,
             # rather than trusting a potentially stale pre-clone analysis.
@@ -3956,6 +3973,25 @@ async def approve_infrastructure_plan(
     # Approval records the current preflight for review but never treats it as
     # an execution command. The deployment endpoint evaluates it again.
     await _run_digital_twin(db, project=project, user_id=current_user.id, plan=plan)
+
+    # Queue isolated Terraform generation if a verified Azure connection is active
+    try:
+        azure_conn = await get_active_azure_connection(db, current_user.id)
+        if azure_conn and deployment_targets.has_verified_app_service_target(azure_conn):
+            tenant = await tenancy.resolve_tenant(db, user=current_user)
+            store = artifacts.get_artifact_store()
+            await terraform_workflow.enqueue_approved_plan(
+                db,
+                store=store,
+                tenant=tenant,
+                user=current_user,
+                project=project,
+                plan=plan,
+                azure_connection=azure_conn,
+            )
+    except Exception as queue_err:
+        logger.info("Terraform generation not auto-queued on approval: %s", queue_err)
+
     await db.commit()
     await db.refresh(plan)
     return _serialize_infrastructure_plan(plan)

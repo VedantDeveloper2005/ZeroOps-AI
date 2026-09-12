@@ -17,7 +17,7 @@ def valid_review() -> dict:
     }
 
 
-def fake_provenance(provider="nvidia", model="z-ai/glm-5.2"):
+def fake_provenance(provider="azure-openai", model="test-deployment"):
     return SimpleNamespace(
         provider=provider,
         model=model,
@@ -96,7 +96,7 @@ def test_failure_review_redacts_log_credentials_and_validates_shape():
     assert review["severity"] == "error"
 
 
-def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch):
+def test_foundry_repository_review_uses_only_the_repository_route_key(monkeypatch):
     captured = {}
 
     class FakeGateway:
@@ -116,19 +116,14 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
             )
 
     monkeypatch.setattr(ai, "IS_PRODUCTION", False)
-    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "azure-openai")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://unit-test.openai.azure.com/openai/v1")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "test-deployment")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
-    monkeypatch.setattr(
-        ai, "AI_REPOSITORY_FALLBACK_API_KEY", "repository-fallback-route-key"
-    )
+
 
     configured_gateway = ai._repository_model_gateway()
     primary_configuration = configured_gateway.configuration_for(
-        ai.AIWorkload.REPOSITORY_ANALYSIS
-    )
-    fallback_configuration = configured_gateway.fallback_configuration_for(
         ai.AIWorkload.REPOSITORY_ANALYSIS
     )
     monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
@@ -146,22 +141,19 @@ def test_nvidia_repository_review_uses_only_the_repository_route_key(monkeypatch
     result = outcome.analysis
 
     assert primary_configuration.api_key == "repository-route-key"
-    assert fallback_configuration.api_key == "repository-fallback-route-key"
-    assert primary_configuration.api_key != fallback_configuration.api_key
     assert not hasattr(ai, "NVIDIA_API_KEY")
     assert captured["output_contract"] is ai.RepositoryReviewContract
     assert result["explanation"] == "The source facts describe a bounded app."
     assert isinstance(outcome, ai.RepositoryAnalysisOutcome)
     assert outcome.ai_used is True
-    assert outcome.provider == "nvidia"
-    assert outcome.model == "z-ai/glm-5.2"
+    assert outcome.provider == "azure-openai"
+    assert outcome.model == "test-deployment"
 
 
-def test_nvidia_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
+def test_foundry_repository_review_does_not_fall_back_to_shared_key(monkeypatch):
     monkeypatch.setattr(ai, "IS_PRODUCTION", False)
-    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "azure-openai")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_API_KEY", "")
 
     assert not hasattr(ai, "NVIDIA_API_KEY")
 
@@ -210,9 +202,9 @@ def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
                 degraded_reason=None,
             )
 
-    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://integrate.api.nvidia.com/v1")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "z-ai/glm-5.2")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "azure-openai")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_ENDPOINT", "https://unit-test.openai.azure.com/openai/v1")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_MODEL", "test-deployment")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "repository-route-key")
     monkeypatch.setattr(ai, "_repository_model_gateway", lambda: FakeGateway())
 
@@ -226,7 +218,7 @@ def test_failure_review_uses_the_repository_analysis_route(monkeypatch):
     assert result["severity"] == "error"
 
 
-def test_failure_review_accepts_groq_fallback_result(monkeypatch):
+def test_failure_review_accepts_foundry_result(monkeypatch):
     class FakeFallbackGateway:
         def generate_structured(self, **_):
             return SimpleNamespace(
@@ -240,7 +232,7 @@ def test_failure_review_accepts_groq_fallback_result(monkeypatch):
                     }
                 ),
                 provenance=fake_provenance(
-                    provider="groq", model="openai/gpt-oss-120b"
+                    provider="azure-openai", model="test-deployment"
                 ),
                 degraded_reason=None,
             )
@@ -257,10 +249,8 @@ def test_failure_review_accepts_groq_fallback_result(monkeypatch):
 def test_failure_review_uses_local_analysis_after_both_routes_are_missing(
     monkeypatch,
 ):
-    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "nvidia")
+    monkeypatch.setattr(ai, "AI_REPOSITORY_PROVIDER", "azure-openai")
     monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_PROVIDER", "groq")
-    monkeypatch.setattr(ai, "AI_REPOSITORY_FALLBACK_API_KEY", "")
 
     result = ai.analyze_failure_nemotron(
         ["DATABASE_URL missing"],
@@ -284,7 +274,7 @@ def test_failure_review_provenance_identifies_real_model_result(monkeypatch):
                         "step_by_step_resolution": ["Run the production build locally."],
                     }
                 ),
-                provenance=fake_provenance(provider="groq", model="openai/gpt-oss-120b"),
+                provenance=fake_provenance(provider="azure-openai", model="test-deployment"),
                 degraded_reason=None,
             )
 
@@ -298,8 +288,8 @@ def test_failure_review_provenance_identifies_real_model_result(monkeypatch):
 
     assert isinstance(outcome, ai.FailureAnalysisOutcome)
     assert outcome.ai_used is True
-    assert outcome.provider == "groq"
-    assert outcome.model == "openai/gpt-oss-120b"
+    assert outcome.provider == "azure-openai"
+    assert outcome.model == "test-deployment"
     assert outcome.input_tokens == 10
     assert outcome.output_tokens == 5
 

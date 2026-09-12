@@ -54,6 +54,7 @@ backend/workspace/
 /tmp/
 /backend_logs_403/
 scratch/
+/backend_logs_extracted/
 *.tfvars
 *.tfvars.json
 !*.tfvars.example

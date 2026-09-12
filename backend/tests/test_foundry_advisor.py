@@ -369,3 +369,64 @@ def test_azure_foundry_provider_429_backoff():
         # Retries up to 2 times (3 total calls)
         assert mock_openai.responses.create.call_count == 3
         assert mock_sleep.call_count == 2
+
+
+def test_real_responses_content_annotations_are_extracted():
+    response = SimpleNamespace(output=[SimpleNamespace(content=[SimpleNamespace(
+        type="output_text", annotations=[
+            SimpleNamespace(type="file_citation", file_id="file-knowledge", filename="guide.md"),
+            {"type": "url_citation", "url": "https://learn.microsoft.com/azure/", "title": "Azure"},
+        ],
+    )])])
+    annotations = extract_annotations(response)
+    assert [a["type"] for a in annotations] == ["file_citation", "url_citation"]
+    assert annotations[0]["title"] == "guide.md"
+
+
+def test_unstructured_answer_does_not_manufacture_components_or_provenance():
+    response = SimpleNamespace(output_text="Do not choose App Service B1 without measurements.", output=[])
+    api = MagicMock()
+    api.responses.create.return_value = response
+    result = invoke_architecture_advisor({}, client=FoundryAdvisorClient(openai_client=api))
+    assert result.proposed_components == []
+    assert result.assumptions == []
+    assert result.cost_considerations == []
+    assert result.provenance["model"] == "Not reported"
+    assert result.provenance["file_search_used"] is False
+    assert result.provenance["web_search_used"] is False
+
+
+def test_model_claimed_citations_do_not_prove_tool_use():
+    content = json.loads(_sample_agent_json())
+    content["evidence_sources"] = [{"source_type": "knowledge", "citation": "Claimed retrieval"}]
+    api = MagicMock()
+    api.responses.create.return_value = SimpleNamespace(output_text=json.dumps(content), output=[])
+    result = invoke_architecture_advisor({}, client=FoundryAdvisorClient(openai_client=api))
+    assert result.provenance["file_search_used"] is False
+    assert [c.source_type for c in result.evidence_sources] == ["repository"]
+
+
+def test_cross_tenant_credential_exchanges_source_identity_for_target(monkeypatch):
+    from backend import config
+    from backend.services.foundry_identity import foundry_credential
+
+    monkeypatch.setattr(config, "FOUNDRY_TARGET_TENANT_ID", "target-tenant")
+    monkeypatch.setattr(config, "FOUNDRY_MULTITENANT_APP_CLIENT_ID", "bridge-app")
+    monkeypatch.setattr(config, "FOUNDRY_MANAGED_IDENTITY_CLIENT_ID", "source-identity")
+    with patch("azure.identity.ManagedIdentityCredential") as identity, patch("azure.identity.ClientAssertionCredential") as exchange:
+        identity.return_value.get_token.return_value.token = "test-assertion"
+        assert foundry_credential() is exchange.return_value
+        identity.assert_called_once_with(client_id="source-identity")
+        assert exchange.call_args.kwargs["tenant_id"] == "target-tenant"
+        assert exchange.call_args.kwargs["client_id"] == "bridge-app"
+        assert exchange.call_args.kwargs["func"]() == "test-assertion"
+        identity.return_value.get_token.assert_called_once_with("api://AzureADTokenExchange/.default")
+
+
+@pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled"])
+def test_incomplete_adviser_result_is_never_saved_as_success(status):
+    response = SimpleNamespace(status=status, output_text='{"recommendation": "cut off')
+    client = FoundryAdvisorClient(openai_client=SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: response)))
+    with pytest.raises(FoundryAdvisorError, match="did not complete"):
+        invoke_architecture_advisor({"framework": "Express.js"}, client=client)

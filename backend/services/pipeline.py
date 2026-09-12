@@ -1534,8 +1534,9 @@ async def run_deployment_pipeline(
             # needed when real infrastructure provisioning is involved.
             _is_app_service_reused = deployment_targets.is_app_service_reused_deployment(
                 target=(
-                    deployment_metadata.get("requested_target")
-                    or deployment_metadata.get("target_provider")
+                    deployment_metadata.get("target_provider")
+                    or deployment_metadata.get("requested_target")
+                    or "azure-app-service"
                 ),
                 connection=azure_connection,
                 infrastructure_change=bool(deployment_metadata.get("terraform_apply_required")),

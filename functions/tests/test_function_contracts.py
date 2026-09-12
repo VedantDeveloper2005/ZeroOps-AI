@@ -40,7 +40,7 @@ from zeroops_functions.model_client import (
     ModelRoutesExhaustedError,
     ModelUnavailableError,
     StructuredModelClient,
-    generate_with_fallback,
+    generate_with_provenance,
     strict_provider_output_schema,
 )
 from zeroops_functions.security import (
@@ -85,16 +85,6 @@ def artifact(
 
 
 class ContractTests(unittest.TestCase):
-    def test_workers_accept_only_workload_specific_groq_credentials(self):
-        repository_source = REPOSITORY_HANDLER.read_text(encoding="utf-8")
-        terraform_source = TERRAFORM_HANDLER.read_text(encoding="utf-8")
-        combined = repository_source + terraform_source
-
-        self.assertIn("AI_REPOSITORY_FALLBACK_API_KEY", repository_source)
-        self.assertIn("AI_TERRAFORM_FALLBACK_API_KEY", terraform_source)
-        self.assertIn("AI_REPOSITORY_FALLBACK_PROMPT_VERSION", repository_source)
-        self.assertIn("AI_TERRAFORM_FALLBACK_PROMPT_VERSION", terraform_source)
-        self.assertNotIn('os.getenv("GROQ_API_KEY"', combined)
 
     def test_artifact_rejects_non_blob_origin(self):
         with self.assertRaises(ValueError):
@@ -151,20 +141,8 @@ class ModelClientTests(unittest.TestCase):
             return httpx.Response(
                 200,
                 json={
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "schema_version": "test-output.v1",
-                                        "summary": "Evidence-bound result",
-                                    }
-                                )
-                            },
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 8, "completion_tokens": 3},
+                    "output": [{"type":"message", "content":[{"type":"output_text", "text":json.dumps({"schema_version":"test-output.v1", "summary":"Evidence-bound result"})}]}],
+                    "usage": {"input_tokens": 8, "output_tokens": 3},
                 },
             )
 
@@ -180,9 +158,9 @@ class ModelClientTests(unittest.TestCase):
             note: str | None = None
 
         client = StructuredModelClient(
-            provider="github-models",
-            endpoint="https://models.github.ai/inference",
-            model="openai/gpt-4o",
+            provider="azure-openai",
+            endpoint="https://unit-test.openai.azure.com/openai/v1",
+            model="test-deployment",
             api_key="test-only-token",
             workload="repository-analysis",
             prompt_version="repository-analysis.v1",
@@ -223,9 +201,9 @@ class ModelClientTests(unittest.TestCase):
         )
         self.assertEqual(first.correlation_id, "correlation-1")
         request_body = json.loads(requests[0].content)
-        system_message = request_body["messages"][0]["content"]
+        system_message = request_body["input"][0]["content"]
         self.assertIn("Return exactly one JSON object", system_message)
-        self.assertIn('"summary"', system_message)
+        self.assertIn("summary", request_body["text"]["format"]["schema"]["properties"])
 
     def test_client_repairs_once_and_records_aggregate_usage(self):
         requests: list[httpx.Request] = []
@@ -244,8 +222,8 @@ class ModelClientTests(unittest.TestCase):
             return httpx.Response(
                 200,
                 json={
-                    "choices": [{"message": {"content": content}}],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+                    "output_text": content,
+                    "usage": {"input_tokens": 10, "output_tokens": 4},
                 },
             )
 
@@ -255,9 +233,9 @@ class ModelClientTests(unittest.TestCase):
             summary: str
 
         client = StructuredModelClient(
-            provider="github-models",
-            endpoint="https://models.github.ai/inference",
-            model="openai/gpt-4o",
+            provider="azure-openai",
+            endpoint="https://unit-test.openai.azure.com/openai/v1",
+            model="test-deployment",
             api_key="test-only-token",
             workload="repository-analysis",
             prompt_version="repository-analysis.v1",
@@ -280,9 +258,9 @@ class ModelClientTests(unittest.TestCase):
     def test_client_rejects_legacy_or_cross_route_endpoint(self):
         with self.assertRaises(ValueError):
             StructuredModelClient(
-                provider="github-models",
+                provider="azure-openai",
                 endpoint="https://models.inference.ai.azure.com",
-                model="openai/gpt-4o",
+                model="test-deployment",
                 api_key="test-only-token",
                 workload="repository-analysis",
                 prompt_version="v1",
@@ -290,72 +268,6 @@ class ModelClientTests(unittest.TestCase):
                 maximum_output_tokens=100,
             )
 
-    def test_nvidia_client_uses_approved_route_without_github_only_fields(self):
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(
-                200,
-                json={
-                    "model": "z-ai/glm-5.2",
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "schema_version": "test-output.v1",
-                                        "summary": "Evidence-bound result",
-                                    }
-                                )
-                            },
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 8, "completion_tokens": 3},
-                },
-            )
-
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        client = StructuredModelClient(
-            provider="nvidia",
-            endpoint="https://integrate.api.nvidia.com/v1/",
-            model="z-ai/glm-5.2",
-            api_key="repository-route-token",
-            workload="repository-analysis",
-            prompt_version="repository-analysis.v1",
-            maximum_input_chars=10_000,
-            maximum_output_tokens=100,
-            transport=httpx.MockTransport(handler),
-        )
-        result, provenance = client.generate(
-            system_instructions="Return strict JSON.",
-            input_value={"evidence": []},
-            output_model=Output,
-            schema_version="test-output.v1",
-        )
-
-        self.assertEqual(result.summary, "Evidence-bound result")
-        self.assertEqual(provenance.provider, "nvidia")
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(
-            str(requests[0].url),
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-        )
-        self.assertEqual(
-            requests[0].headers["authorization"],
-            "Bearer repository-route-token",
-        )
-        self.assertEqual(requests[0].headers["accept"], "application/json")
-        self.assertNotIn("x-github-api-version", requests[0].headers)
-        request_body = json.loads(requests[0].content)
-        self.assertEqual(request_body["model"], "z-ai/glm-5.2")
-        self.assertFalse(request_body["stream"])
-        self.assertNotIn("response_format", request_body)
 
     def test_foundry_openai_client_uses_v1_responses_api_and_api_key_header(self):
         requests: list[httpx.Request] = []
@@ -433,138 +345,8 @@ class ModelClientTests(unittest.TestCase):
                 **common,
             )
 
-    def test_nvidia_client_rejects_cross_route_origin_and_unqualified_model(self):
-        common = {
-            "provider": "nvidia",
-            "api_key": "route-token",
-            "workload": "repository-analysis",
-            "prompt_version": "v1",
-            "maximum_input_chars": 1_000,
-            "maximum_output_tokens": 100,
-        }
-        with self.assertRaises(ValueError):
-            StructuredModelClient(
-                endpoint="https://models.github.ai/inference",
-                model="z-ai/glm-5.2",
-                **common,
-            )
-        with self.assertRaises(ValueError):
-            StructuredModelClient(
-                endpoint="https://integrate.api.nvidia.com/v1",
-                model="glm-5.2",
-                **common,
-            )
 
-    def test_groq_client_uses_exact_route_model_and_strict_schema_once(self):
-        requests: list[httpx.Request] = []
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(
-                200,
-                json={
-                    "model": "openai/gpt-oss-120b",
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "schema_version": "test-output.v1",
-                                        "summary": "Validated fallback result",
-                                    }
-                                )
-                            },
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 20, "completion_tokens": 8},
-                },
-            )
-
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        client = StructuredModelClient(
-            provider="groq",
-            endpoint="https://api.groq.com/openai/v1/",
-            model="openai/gpt-oss-120b",
-            api_key="test-only-fallback-token",
-            workload="repository-analysis",
-            prompt_version="repository-analysis.v1",
-            maximum_input_chars=14_000,
-            maximum_output_tokens=800,
-            transport=httpx.MockTransport(handler),
-        )
-        result, provenance = client.generate(
-            system_instructions="Return strict JSON.",
-            input_value={"evidence": []},
-            output_model=Output,
-            schema_version="test-output.v1",
-        )
-
-        self.assertEqual(result.summary, "Validated fallback result")
-        self.assertEqual(provenance.provider, "groq")
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(
-            str(requests[0].url),
-            "https://api.groq.com/openai/v1/chat/completions",
-        )
-        body = json.loads(requests[0].content)
-        self.assertEqual(body["model"], "openai/gpt-oss-120b")
-        self.assertEqual(body["max_completion_tokens"], 800)
-        self.assertNotIn("max_tokens", body)
-        self.assertTrue(body["response_format"]["json_schema"]["strict"])
-        self.assertFalse(body["stream"])
-        self.assertNotIn("x-github-api-version", requests[0].headers)
-
-    def test_groq_rejects_other_origins_models_and_oversized_requests(self):
-        common = {
-            "provider": "groq",
-            "api_key": "test-only-fallback-token",
-            "workload": "repository-analysis",
-            "prompt_version": "v1",
-            "maximum_input_chars": 14_000,
-            "maximum_output_tokens": 800,
-        }
-        with self.assertRaises(ValueError):
-            StructuredModelClient(
-                endpoint="https://api.groq.com/v1",
-                model="openai/gpt-oss-120b",
-                **common,
-            )
-        with self.assertRaises(ValueError):
-            StructuredModelClient(
-                endpoint="https://api.groq.com/openai/v1",
-                model="another/model",
-                **common,
-            )
-
-        requests: list[httpx.Request] = []
-
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        client = StructuredModelClient(
-            endpoint="https://api.groq.com/openai/v1",
-            model="openai/gpt-oss-120b",
-            maximum_input_chars=100,
-            transport=httpx.MockTransport(
-                lambda request: requests.append(request) or httpx.Response(500)
-            ),
-            **{key: value for key, value in common.items() if key != "maximum_input_chars"},
-        )
-        with self.assertRaises(ModelInputBudgetError):
-            client.generate(
-                system_instructions="Return strict JSON.",
-                input_value={"evidence": ["x" * 200]},
-                output_model=Output,
-                schema_version="test-output.v1",
-            )
-        self.assertEqual(requests, [])
 
     def test_actual_product_schemas_reduce_to_the_strict_groq_subset(self):
         unsupported = {
@@ -604,180 +386,8 @@ class ModelClientTests(unittest.TestCase):
             assert_strict(transformed)
             self.assertNotIn("$defs", json.dumps(transformed))
 
-    def test_groq_does_not_spend_a_second_request_on_invalid_output(self):
-        requests: list[httpx.Request] = []
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {"content": '{"schema_version":"test-output.v1"}'},
-                        }
-                    ]
-                },
-            )
 
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        client = StructuredModelClient(
-            provider="groq",
-            endpoint="https://api.groq.com/openai/v1",
-            model="openai/gpt-oss-120b",
-            api_key="test-only-fallback-token",
-            workload="repository-analysis",
-            prompt_version="v1",
-            maximum_input_chars=14_000,
-            maximum_output_tokens=800,
-            transport=httpx.MockTransport(handler),
-        )
-        with self.assertRaises(ModelContractError):
-            client.generate(
-                system_instructions="Return strict JSON.",
-                input_value={"evidence": []},
-                output_model=Output,
-                schema_version="test-output.v1",
-            )
-        self.assertEqual(len(requests), 1)
-
-    def test_policy_violation_never_calls_fallback_route(self):
-        primary_requests: list[httpx.Request] = []
-        fallback_requests: list[httpx.Request] = []
-
-        def response(requests: list[httpx.Request], request: httpx.Request):
-            requests.append(request)
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "schema_version": "test-output.v1",
-                                        "summary": "Unsupported model claim",
-                                    }
-                                )
-                            },
-                        }
-                    ]
-                },
-            )
-
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        common = {
-            "api_key": "test-only-route-token",
-            "workload": "repository-analysis",
-            "prompt_version": "v1",
-            "maximum_input_chars": 14_000,
-            "maximum_output_tokens": 800,
-        }
-        primary = StructuredModelClient(
-            provider="nvidia",
-            endpoint="https://integrate.api.nvidia.com/v1",
-            model="z-ai/glm-5.2",
-            transport=httpx.MockTransport(
-                lambda request: response(primary_requests, request)
-            ),
-            **common,
-        )
-        fallback = StructuredModelClient(
-            provider="groq",
-            endpoint="https://api.groq.com/openai/v1",
-            model="openai/gpt-oss-120b",
-            transport=httpx.MockTransport(
-                lambda request: response(fallback_requests, request)
-            ),
-            **common,
-        )
-
-        with self.assertRaises(ModelRoutesExhaustedError) as raised:
-            generate_with_fallback(
-                primary=primary,
-                fallback=fallback,
-                system_instructions="Use scanner evidence only.",
-                input_value={"allowed": ["fact-1"]},
-                output_model=Output,
-                schema_version="test-output.v1",
-                semantic_validator=lambda _value: (_ for _ in ()).throw(
-                    ValueError("unsupported evidence")
-                ),
-            )
-        self.assertEqual(len(primary_requests), 1)
-        self.assertEqual(fallback_requests, [])
-        self.assertFalse(raised.exception.routing.fallback_attempted)
-        self.assertEqual(
-            raised.exception.routing.primary_failure_code,
-            "policy_violation",
-        )
-        self.assertEqual(
-            raised.exception.routing.fallback_failure_code,
-            "not_attempted",
-        )
-
-    def test_primary_input_overflow_never_calls_fallback_route(self):
-        primary_requests: list[httpx.Request] = []
-        fallback_requests: list[httpx.Request] = []
-
-        class Output(BaseModel):
-            model_config = ConfigDict(extra="forbid")
-            schema_version: str
-            summary: str
-
-        common = {
-            "api_key": "test-only-route-token",
-            "workload": "repository-analysis",
-            "prompt_version": "v1",
-            "maximum_output_tokens": 800,
-        }
-        primary = StructuredModelClient(
-            provider="nvidia",
-            endpoint="https://integrate.api.nvidia.com/v1",
-            model="z-ai/glm-5.2",
-            maximum_input_chars=100,
-            transport=httpx.MockTransport(
-                lambda request: primary_requests.append(request) or httpx.Response(500)
-            ),
-            **common,
-        )
-        fallback = StructuredModelClient(
-            provider="groq",
-            endpoint="https://api.groq.com/openai/v1",
-            model="openai/gpt-oss-120b",
-            maximum_input_chars=14_000,
-            transport=httpx.MockTransport(
-                lambda request: fallback_requests.append(request) or httpx.Response(500)
-            ),
-            **common,
-        )
-        with self.assertRaises(ModelRoutesExhaustedError) as raised:
-            generate_with_fallback(
-                primary=primary,
-                fallback=fallback,
-                system_instructions="Return strict JSON.",
-                input_value={"evidence": ["x" * 200]},
-                output_model=Output,
-                schema_version="test-output.v1",
-            )
-
-        self.assertEqual(primary_requests, [])
-        self.assertEqual(fallback_requests, [])
-        self.assertFalse(raised.exception.routing.fallback_attempted)
-        self.assertEqual(
-            raised.exception.routing.primary_failure_code,
-            "input_budget_exceeded",
-        )
 
 
 @dataclass
@@ -966,60 +576,13 @@ class RepositoryFallbackTests(unittest.TestCase):
             publisher.events[-1][1].safe_metadata,
         )
 
-    def test_nvidia_failure_uses_workload_local_groq_fallback_transparently(self):
-        publisher = FakePublisher()
-        dependencies = repository_handler.RepositoryHandlerDependencies(
-            store=FakeStore(),
-            publisher=publisher,
-            model_client=FailingRepositoryModel(),
-            fallback_model_client=GroqRepositoryModel(),
-            workflow_events_queue="workflow-events",
-            instructions="strict evidence-bound output",
-        )
-        result = repository_handler.handle_repository_analysis(
-            self.job().model_dump_json().encode(),
-            dependencies,
-        )
 
-        self.assertEqual(result["analysis_status"], "model_assisted")
-        self.assertEqual(result["provenance"]["provider"], "groq")
-        self.assertEqual(result["provenance"]["selected_route"], "fallback")
-        self.assertTrue(result["provenance"]["fallback_attempted"])
-        self.assertEqual(
-            result["provenance"]["primary_failure_code"],
-            "unavailable",
-        )
-        self.assertEqual(publisher.events[-1][1].status, "completed")
-
-    def test_both_repository_routes_fail_then_degrade_deterministically(self):
-        dependencies = repository_handler.RepositoryHandlerDependencies(
-            store=FakeStore(),
-            publisher=FakePublisher(),
-            model_client=FailingRepositoryModel(),
-            fallback_model_client=FailingGroqModel(),
-            workflow_events_queue="workflow-events",
-            instructions="strict evidence-bound output",
-        )
-        result = repository_handler.handle_repository_analysis(
-            self.job().model_dump_json().encode(),
-            dependencies,
-        )
-
-        self.assertEqual(result["analysis_status"], "deterministic_only")
-        self.assertEqual(result["provenance"]["selected_route"], "none")
-        self.assertTrue(result["provenance"]["fallback_attempted"])
-        self.assertEqual(result["provenance"]["fallback_provider"], "groq")
-        self.assertEqual(
-            result["provenance"]["fallback_failure_code"],
-            "unavailable",
-        )
 
     def test_repository_input_overflow_degrades_without_calling_groq(self):
         dependencies = repository_handler.RepositoryHandlerDependencies(
             store=FakeStore(),
             publisher=FakePublisher(),
             model_client=InputBudgetModel(),
-            fallback_model_client=GroqRepositoryModel(),
             workflow_events_queue="workflow-events",
             instructions="strict evidence-bound output",
         )

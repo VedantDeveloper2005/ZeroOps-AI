@@ -1,3 +1,39 @@
+# September 11 integration repair — code release
+
+Status: Validated (frontend/backend code packages only). The historical infrastructure
+plan below remains incomplete and is not an authorization to apply old Terraform plans.
+
+User authorization: repair and deploy the current ZeroOps website, connect Mohit's
+existing Foundry and VMSS. Deploy the existing App Services zeroopsai-v2 and
+zeroops-backend-v2 in subscription 6f0a17f3-f270-4bf7-a2dd-5571fb503ff2,
+resource group zeroops-rg, Central India. Reuse their existing plan and runtime.
+Recipe: Azure CLI ZIP code deployment; no infrastructure provisioning in this release.
+
+## Validation proof — 2026-09-11
+
+- Read Azure Validate and Azure Deploy skills and the AZCLI recipes.
+- Confirmed both live App Service resources and Python 3.11 / Node 22 startup commands.
+- `python -m pytest backend/tests/ worker/tests/ infra/tests/ functions/tests/ -q`:
+  629 passed. Additional Foundry regression suite: 12 passed, including four new tests.
+- `npm run test:dashboard`: 17 passed. `npm run build`: successful, TypeScript clean.
+- `npm run lint`: no errors; unused imports in the touched adviser card removed afterward.
+- Backend package validated by scripts/package_appservice_backend.py; frontend package
+  excludes .env files and contains Linux native dependencies and the verified v2 backend URL.
+- Azure CLI authenticated for both resource subscriptions. Existing backend managed identity
+  verified against the new federation subject; target service principal roles assigned only
+  on the four existing queues, artifact storage account, and Foundry project.
+- Foundry agent v2 invocation with Mohit Azure CLI identity returned `completed`, model
+  `gpt-5.6-terra`, text `connected`. Backend identity verification follows code deployment.
+- Bicep compilation, infrastructure what-if, and container image build: not applicable to
+  this code-only repair of existing App Services.
+
+Known end-to-end blocker: the application release path writes PostgreSQL deployment_jobs;
+the provisioned VMSS consumes immutable Terraform Service Bus envelopes. No production
+RepositoryCheckExecutor implementation or deployed application release worker exists.
+Do not enable the development executor, fabricate results, or claim workflow readiness.
+
+---
+
 # Azure Deployment Plan — ZeroOps AI
 
 > **Status:** In Progress; production workflow and deployment-path remediation is underway. Deployment is not authorized until this plan records a validated, immutable Terraform plan and its explicit approval.

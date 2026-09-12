@@ -20,7 +20,6 @@ from backend.services.model_gateway import (
 from backend.services.providers import (
     AzureFoundryProvider,
     AzureOpenAIProvider,
-    GitHubModelsProvider,
     ProviderConfiguration,
     ProviderConfigurationError,
     ProviderError,
@@ -36,9 +35,9 @@ def _configuration(
     max_output_tokens: int = 200,
 ) -> ProviderConfiguration:
     return ProviderConfiguration(
-        provider="github-models",
-        endpoint="https://models.github.ai/inference",
-        model="openai/gpt-4o",
+        provider="azure-openai",
+        endpoint="https://unit-test.openai.azure.com/openai/v1",
+        model="test-deployment",
         api_key=api_key,
         api_version="2026-03-10",
         max_input_chars=20_000,
@@ -126,8 +125,6 @@ class FakeProvider:
 def test_workload_routes_use_distinct_credentials_without_legacy_fallback(monkeypatch):
     monkeypatch.setattr(config, "AI_REPOSITORY_API_KEY", "repository-key")
     monkeypatch.setattr(config, "AI_TERRAFORM_API_KEY", "terraform-key")
-    monkeypatch.setattr(config, "GITHUB_MODELS_API_KEY", "legacy-shared-key")
-    monkeypatch.setattr(config, "OPENAI_API_KEY", "legacy-openai-key")
 
     assert not hasattr(config, "NVIDIA_API_KEY")
 
@@ -200,14 +197,14 @@ def test_gateway_repairs_invalid_json_once_and_aggregates_provenance():
         [
             ProviderResponse(
                 content='{"schema_version":"repository-assessment.v1","summary":7}',
-                model="openai/gpt-4o",
+                model="test-deployment",
                 input_tokens=10,
                 output_tokens=4,
                 latency_ms=20,
             ),
             ProviderResponse(
                 content=valid_json,
-                model="openai/gpt-4o",
+                model="test-deployment",
                 input_tokens=12,
                 output_tokens=30,
                 latency_ms=25,
@@ -312,7 +309,7 @@ def test_foundry_gateway_uses_portal_safe_schema_and_runtime_validation():
 def test_gateway_never_attempts_a_second_repair():
     invalid = ProviderResponse(
         content='{"not":"the contract"}',
-        model="openai/gpt-4o",
+        model="test-deployment",
         input_tokens=1,
         output_tokens=1,
         latency_ms=1,
@@ -342,7 +339,7 @@ def test_repository_wrapper_enforces_evidence_references_and_degrades_safely():
         [
             ProviderResponse(
                 content=json.dumps(_valid_assessment()),
-                model="openai/gpt-4o",
+                model="test-deployment",
             )
         ]
     )
@@ -364,7 +361,7 @@ def test_repository_wrapper_enforces_evidence_references_and_degrades_safely():
         [
             ProviderResponse(
                 content=json.dumps(invalid_assessment),
-                model="openai/gpt-4o",
+                model="test-deployment",
             )
         ]
     )
@@ -385,102 +382,8 @@ def test_repository_wrapper_enforces_evidence_references_and_degrades_safely():
     assert degraded.degraded_reason == "invalid_evidence_reference"
 
 
-def test_github_models_provider_requires_current_endpoint_and_catalog_model():
-    configuration = _configuration(AIWorkload.REPOSITORY_ANALYSIS)
-    provider = GitHubModelsProvider(configuration, client=SimpleNamespace())
-    assert provider.configuration.endpoint == "https://models.github.ai/inference"
-    assert provider.configuration.model == "openai/gpt-4o"
-
-    with pytest.raises(ProviderConfigurationError, match="models.github.ai"):
-        GitHubModelsProvider(
-            ProviderConfiguration(
-                provider="github-models",
-                endpoint="https://models.inference.ai.azure.com",
-                model="openai/gpt-4o",
-                api_key="key",
-            ),
-            client=SimpleNamespace(),
-        )
-
-    with pytest.raises(ProviderConfigurationError, match="catalog-qualified"):
-        GitHubModelsProvider(
-            ProviderConfiguration(
-                provider="github-models",
-                endpoint="https://models.github.ai/inference",
-                model="gpt-4o",
-                api_key="key",
-            ),
-            client=SimpleNamespace(),
-        )
 
 
-def test_github_models_provider_sends_schema_and_enforces_output_cap():
-    captured = {}
-
-    class Completions:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                model="openai/gpt-4o",
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content='{"ok":true}')
-                    )
-                ],
-                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3),
-            )
-
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=Completions())
-    )
-    provider = GitHubModelsProvider(
-        _configuration(
-            AIWorkload.REPOSITORY_ANALYSIS,
-            max_output_tokens=40,
-        ),
-        client=client,
-    )
-    response = provider.generate(
-        ProviderRequest(
-            system_prompt="Return bounded output.",
-            user_prompt="{}",
-            schema_name="Example",
-            output_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {"ok": {"type": "boolean"}},
-                "required": ["ok"],
-            },
-            max_output_tokens=400,
-            temperature=0,
-        )
-    )
-
-    assert "Return only a JSON object matching this JSON Schema exactly" in captured["messages"][0]["content"]
-    assert '"additionalProperties":false' in captured["messages"][0]["content"]
-    assert captured["max_tokens"] == 40
-    assert captured["response_format"] == {"type": "json_object"}
-    assert response.input_tokens == 5
-    assert response.output_tokens == 3
-
-    tiny_budget = ProviderConfiguration(
-        provider="github-models",
-        endpoint="https://models.github.ai/inference",
-        model="openai/gpt-4o",
-        api_key="key",
-        max_input_chars=20,
-        max_output_tokens=40,
-    )
-    with pytest.raises(ProviderError, match="input budget"):
-        GitHubModelsProvider(tiny_budget, client=client).generate(
-            ProviderRequest(
-                system_prompt="system",
-                user_prompt="user",
-                schema_name="Example",
-                output_schema={"type": "object", "properties": {"value": {"type": "string"}}},
-                max_output_tokens=10,
-            )
-        )
 
 
 def test_foundry_route_rejects_api_keys_and_accepts_managed_identity_shape():
@@ -521,3 +424,9 @@ def test_build_provider_supports_foundry_openai_api_key_route():
 
     assert isinstance(provider, AzureOpenAIProvider)
     assert provider.configuration.provider == "azure-openai"
+
+
+@pytest.mark.parametrize("provider", ["nvidia", "groq", "github-models", "openai"])
+def test_removed_providers_cannot_be_selected(provider):
+    with pytest.raises(ProviderConfigurationError, match="not supported"):
+        build_provider(ProviderConfiguration(provider=provider, endpoint="https://example.com", model="test", api_key="test"))

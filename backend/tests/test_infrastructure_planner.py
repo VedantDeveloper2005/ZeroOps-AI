@@ -141,8 +141,7 @@ def test_chat_explicit_command_can_switch_a_detected_database_to_cosmos():
 
 def test_architect_question_explains_the_saved_plan_without_mutating_it(monkeypatch):
     plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
-    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
-    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.AI_REPOSITORY_API_KEY", "")
 
     try:
         from backend.services import ai
@@ -152,15 +151,14 @@ def test_architect_question_explains_the_saved_plan_without_mutating_it(monkeypa
     updated, reply = ai.architect_chat("Why App Service?", plan)
 
     assert updated == plan
-    assert "connected and verified" in reply
-    assert "not proof of live Azure readiness" in reply
+    assert "Microsoft Foundry is not configured" in reply
+    assert "No AI response was generated" in reply
     assert "Plan updated" not in reply
 
 
 def test_architect_combined_detection_validation_question_uses_saved_evidence_without_mutation(monkeypatch):
     plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
-    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
-    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.AI_REPOSITORY_API_KEY", "")
 
     try:
         from backend.services import ai
@@ -183,8 +181,7 @@ def test_architect_combined_detection_validation_question_uses_saved_evidence_wi
 
 
 def test_architect_combined_detection_validation_question_does_not_invent_missing_evidence(monkeypatch):
-    monkeypatch.setattr("backend.services.ai.GITHUB_MODELS_API_KEY", "")
-    monkeypatch.setattr("backend.services.ai.OPENAI_API_KEY", "")
+    monkeypatch.setattr("backend.services.ai.AI_REPOSITORY_API_KEY", "")
 
     try:
         from backend.services import ai

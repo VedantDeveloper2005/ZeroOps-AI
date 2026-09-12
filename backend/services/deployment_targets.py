@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import re
-from typing import Any
+from typing import Any, Mapping
 
 
 AKS_RELEASE_BLOCKER = "Hardened AKS Service/Ingress verification"
@@ -35,10 +35,21 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _get_field(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, Mapping):
+        if name in obj:
+            return obj[name]
+        azure_key = f"azure_{name}"
+        if azure_key in obj:
+            return obj[azure_key]
+        return default
+    return getattr(obj, name, default)
+
+
 def configuration_fingerprint(connection: Any) -> str:
     """Bind successful target validation to the exact non-secret settings."""
     payload = {
-        key: _clean(getattr(connection, key, None)).casefold()
+        key: _clean(_get_field(connection, key)).casefold()
         for key in (
             "tenant_id",
             "subscription_id",
@@ -58,13 +69,13 @@ def has_verified_app_service_target(connection: Any | None) -> bool:
     if not connection:
         return False
     if (
-        _clean(getattr(connection, "connection_status", None)).casefold() != "connected"
-        or getattr(connection, "is_active", False) is not True
-        or getattr(connection, "deployment_target_verified_at", None) is None
+        _clean(_get_field(connection, "connection_status")).casefold() != "connected"
+        or _get_field(connection, "is_active", False) is not True
+        or _get_field(connection, "deployment_target_verified_at") is None
     ):
         return False
     stored_fingerprint = _clean(
-        getattr(connection, "deployment_target_fingerprint", None)
+        _get_field(connection, "deployment_target_fingerprint")
     ).casefold()
     expected_fingerprint = configuration_fingerprint(connection)
     return bool(stored_fingerprint) and hmac.compare_digest(
@@ -288,6 +299,9 @@ def is_app_service_reused_deployment(
     apply evidence/proof is required or manufactured.
     """
     target_name = _clean(target).casefold()
+    if target_name in {"auto", ""}:
+        if has_verified_app_service_target(connection):
+            target_name = "azure-app-service"
     if target_name not in {"azure-app-service", "app-service", "appservice"}:
         return False
     if infrastructure_change or has_iac:

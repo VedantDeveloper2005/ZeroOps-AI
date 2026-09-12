@@ -28,45 +28,24 @@ ai_logger = logging.getLogger("zeroops.ai.observability")
 
 def extract_annotations(response: Any) -> list[dict[str, Any]]:
     """Extract tool annotations and citations from a Foundry response object."""
+    def field(obj, name, default=None):
+        return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+
     annotations = []
-
-    # 1. Direct annotations attribute on the response
-    raw_annotations = getattr(response, "annotations", None)
-    if isinstance(raw_annotations, list):
-        for ann in raw_annotations:
-            ann_type = getattr(ann, "type", None) or (ann.get("type") if isinstance(ann, dict) else None)
-            url = getattr(ann, "url", None) or (ann.get("url") if isinstance(ann, dict) else None)
-            title = getattr(ann, "title", None) or (ann.get("title") if isinstance(ann, dict) else None)
-            text = getattr(ann, "text", None) or getattr(ann, "quote", None) or (ann.get("text") if isinstance(ann, dict) else None)
-            file_id = getattr(ann, "file_id", None) or (ann.get("file_id") if isinstance(ann, dict) else None)
+    def collect(node):
+        for ann in field(node, "annotations", []) or []:
             annotations.append({
-                "type": str(ann_type or "citation"),
-                "url": url,
-                "title": title,
-                "text": text,
-                "file_id": file_id,
+                "type": str(field(ann, "type") or "citation"),
+                "url": field(ann, "url"),
+                "title": field(ann, "title") or field(ann, "filename"),
+                "text": field(ann, "text") or field(ann, "quote"),
+                "file_id": field(ann, "file_id"),
             })
-
-    # 2. Annotations nested inside output content parts
-    output_items = getattr(response, "output", None)
-    if isinstance(output_items, list):
-        for item in output_items:
-            item_annotations = getattr(item, "annotations", None) or (item.get("annotations") if isinstance(item, dict) else None)
-            if isinstance(item_annotations, list):
-                for ann in item_annotations:
-                    ann_type = getattr(ann, "type", None) or (ann.get("type") if isinstance(ann, dict) else None)
-                    url = getattr(ann, "url", None) or (ann.get("url") if isinstance(ann, dict) else None)
-                    title = getattr(ann, "title", None) or (ann.get("title") if isinstance(ann, dict) else None)
-                    text = getattr(ann, "text", None) or getattr(ann, "quote", None) or (ann.get("text") if isinstance(ann, dict) else None)
-                    file_id = getattr(ann, "file_id", None) or (ann.get("file_id") if isinstance(ann, dict) else None)
-                    annotations.append({
-                        "type": str(ann_type or "citation"),
-                        "url": url,
-                        "title": title,
-                        "text": text,
-                        "file_id": file_id,
-                    })
-
+        for key in ("output", "content"):
+            for child in field(node, key, []) or []:
+                if not isinstance(child, str):
+                    collect(child)
+    collect(response)
     return annotations
 
 
@@ -101,30 +80,22 @@ class AzureFoundryProvider:
             return self._openai_client
         try:
             from azure.ai.projects import AIProjectClient
-            from azure.identity import DefaultAzureCredential
+            from backend.services.foundry_identity import foundry_credential
         except ImportError as error:
             raise ProviderConfigurationError(
                 "The Microsoft Foundry SDK (azure-ai-projects) is not installed."
             ) from error
 
         try:
-            credential = DefaultAzureCredential(
-                exclude_interactive_browser_credential=True,
-            )
+            credential = foundry_credential()
             if self._project_client is None:
                 self._project_client = AIProjectClient(
                     endpoint=self.configuration.endpoint,
                     credential=credential,
                 )
 
-            # Bind client directly to the agent so server-side instructions,
-            # File Search, and Web Search are actively executed by the agent runtime.
-            if self.configuration.agent_name:
-                self._openai_client = self._project_client.get_openai_client(
-                    agent_name=self.configuration.agent_name
-                )
-            else:
-                self._openai_client = self._project_client.get_openai_client()
+            # Use get_openai_client() and invoke via agent_reference in extra_body
+            self._openai_client = self._project_client.get_openai_client()
         except Exception as error:
             error_str = str(error)
             if "Authentication" in error_str or "Credential" in error_str:
@@ -220,33 +191,49 @@ class AzureFoundryProvider:
         ):
             raise ProviderError("AI request exceeds the configured input budget.")
 
-        text_format = {
-            "type": "json_schema",
-            "name": request.schema_name,
-            "strict": True,
-            "schema": request.output_schema,
-        }
-        payload: dict[str, Any] = {
-            "input": [
-                {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": request.user_prompt},
-            ],
-            "text": {"format": text_format},
-            "max_output_tokens": min(
-                request.max_output_tokens,
-                self.configuration.max_output_tokens,
-            ),
-            "store": False,
-        }
         if self.configuration.agent_name:
-            payload["extra_body"] = {
-                "agent_reference": {
-                    "type": "agent_reference",
-                    "name": self.configuration.agent_name,
-                }
+            combined_prompt = (
+                f"{request.system_prompt}\n\n"
+                f"{request.user_prompt}\n\n"
+                f"Respond with ONLY a valid JSON object matching this schema:\n{schema_text}"
+            )
+            payload: dict[str, Any] = {
+                "input": [
+                    {"role": "user", "content": combined_prompt},
+                ],
+                "max_output_tokens": min(
+                    request.max_output_tokens,
+                    self.configuration.max_output_tokens,
+                ),
+                "store": False,
+                "extra_body": {
+                    "agent_reference": {
+                        "type": "agent_reference",
+                        "name": self.configuration.agent_name,
+                        "version": getattr(self.configuration, "agent_version", "1") or "1",
+                    }
+                },
             }
         else:
-            payload["model"] = self.configuration.model
+            text_format = {
+                "type": "json_schema",
+                "name": request.schema_name,
+                "strict": True,
+                "schema": request.output_schema,
+            }
+            payload: dict[str, Any] = {
+                "input": [
+                    {"role": "system", "content": request.system_prompt},
+                    {"role": "user", "content": request.user_prompt},
+                ],
+                "text": {"format": text_format},
+                "max_output_tokens": min(
+                    request.max_output_tokens,
+                    self.configuration.max_output_tokens,
+                ),
+                "store": False,
+                "model": self.configuration.model,
+            }
 
         started = time.perf_counter()
         response = self._invoke_with_retry(payload)

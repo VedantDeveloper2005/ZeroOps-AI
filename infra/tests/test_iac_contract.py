@@ -189,16 +189,14 @@ class InfrastructureContractTests(unittest.TestCase):
             "WORKFLOW_EVENTS_QUEUE_NAME",
             "ARTIFACT_STORAGE_ACCOUNT_URL",
             "AI_REPOSITORY_API_KEY",
-            "AI_REPOSITORY_FALLBACK_API_KEY",
             "AI_TERRAFORM_API_KEY",
-            "AI_TERRAFORM_FALLBACK_API_KEY",
             "POSTGRES_ENTRA_USER",
         ):
             self.assertIn(setting, root)
         self.assertIn('module "history_function"', root)
         self.assertIn('version = "3.13"', function_module)
 
-    def test_model_routes_use_separate_vaults_and_explicit_groq_fallbacks(self) -> None:
+    def test_model_routes_use_separate_vaults_and_foundry_only(self) -> None:
         root = (INFRA_ROOT / "main.tf").read_text(encoding="utf-8")
         rbac = (INFRA_ROOT / "rbac.tf").read_text(encoding="utf-8")
         function_module = (
@@ -213,12 +211,8 @@ class InfrastructureContractTests(unittest.TestCase):
         for value in (
             "AI_REPOSITORY_API_KEY",
             "ai-repository-api-key",
-            "AI_REPOSITORY_FALLBACK_API_KEY",
-            "ai-repository-fallback-api-key",
             "AI_TERRAFORM_API_KEY",
             "ai-terraform-api-key",
-            "AI_TERRAFORM_FALLBACK_API_KEY",
-            "ai-terraform-fallback-api-key",
         ):
             self.assertIn(value, root)
         self.assertRegex(
@@ -236,29 +230,15 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertIn("AI_TERRAFORM_ENDPOINT                   = var.terraform_ai_endpoint", root)
         self.assertIn("AI_REPOSITORY_MODEL                      = var.repository_ai_model", root)
         self.assertIn("AI_TERRAFORM_MODEL                      = var.terraform_ai_model", root)
-        self.assertIn('default     = "nvidia"', variables)
-        self.assertIn('"azure-openai"', variables)
-        self.assertIn('default     = "https://integrate.api.nvidia.com/v1"', variables)
-        self.assertIn('default     = "z-ai/glm-5.2"', variables)
-        self.assertEqual(
-            len(re.findall(r'AI_REPOSITORY_FALLBACK_PROVIDER\s*=\s*"groq"', root)),
-            1,
-        )
-        self.assertEqual(
-            len(re.findall(r'AI_TERRAFORM_FALLBACK_PROVIDER\s*=\s*"groq"', root)),
-            1,
-        )
-        self.assertEqual(root.count('https://api.groq.com/openai/v1'), 2)
-        self.assertEqual(root.count('openai/gpt-oss-120b'), 2)
-        self.assertIn('AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS   = "14000"', root)
-        self.assertIn('AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS = "800"', root)
-        self.assertIn('AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS   = "14000"', root)
-        self.assertIn('AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS = "1000"', root)
+        self.assertIn('default     = "azure-openai"', variables)
+        self.assertNotIn("_FALLBACK_", root)
+        self.assertNotIn("nvidia", variables)
+        self.assertNotIn("api.groq.com", root)
         self.assertNotIn('model_api_key_setting_name = "NVIDIA_API_KEY"', root)
         self.assertNotIn("GROQ_API_KEY", root)
         self.assertNotIn("GROQ_API_KEY", function_module)
         self.assertIn(
-            "secrets/${var.fallback_model_api_key_secret_name}",
+            "secrets/${var.model_api_key_secret_name}",
             function_module,
         )
         self.assertIn(
@@ -271,10 +251,6 @@ class InfrastructureContractTests(unittest.TestCase):
             maxsplit=1,
         )
         terraform_block = remainder.split('module "history_function"', maxsplit=1)[0]
-        self.assertIn("AI_REPOSITORY_FALLBACK_API_KEY", analysis_block)
-        self.assertNotIn("AI_TERRAFORM_FALLBACK_API_KEY", analysis_block)
-        self.assertIn("AI_TERRAFORM_FALLBACK_API_KEY", terraform_block)
-        self.assertNotIn("AI_REPOSITORY_FALLBACK_API_KEY", terraform_block)
         self.assertIn(
             "scope              = module.model_key_vaults.terraform_vault_id",
             rbac,

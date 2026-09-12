@@ -336,10 +336,22 @@ class TerraformRunner:
             current.get("infrastructure_metadata"),
             label="Deployment infrastructure metadata",
         )
-        if (
+        is_reused = (
             metadata.get("app_service_reused") is True
             or metadata.get("terraform_apply_required") is False
-        ):
+        )
+        if not is_reused:
+            is_reused = deployment_targets.is_app_service_reused_deployment(
+                target=(
+                    metadata.get("target_provider")
+                    or metadata.get("requested_target")
+                    or "azure-app-service"
+                ),
+                connection=current,
+                infrastructure_change=bool(metadata.get("terraform_apply_required")),
+                has_iac=bool(metadata.get("terraform_apply")),
+            )
+        if is_reused:
             if current.get("terraform_operation_run_id") is not None:
                 raise RuntimeError("Deployment has unexpected Terraform operation binding.")
             return {

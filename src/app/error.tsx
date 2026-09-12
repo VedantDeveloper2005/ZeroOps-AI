@@ -13,6 +13,18 @@ export default function ErrorPage({
 }) {
   useEffect(() => {
     console.error("ZeroOps route error", error);
+    const isChunkError =
+      error.name === "ChunkLoadError" ||
+      error.message?.includes("Failed to load chunk") ||
+      error.message?.includes("Loading chunk");
+    if (isChunkError && typeof window !== "undefined") {
+      const lastReload = sessionStorage.getItem("zeroops_chunk_reload");
+      const now = Date.now();
+      if (!lastReload || now - Number(lastReload) > 10_000) {
+        sessionStorage.setItem("zeroops_chunk_reload", String(now));
+        window.location.reload();
+      }
+    }
   }, [error]);
 
   return (

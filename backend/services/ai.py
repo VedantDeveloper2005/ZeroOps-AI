@@ -12,31 +12,19 @@ from pydantic import BaseModel, ConfigDict, Field
 ai_logger = logging.getLogger("zeroops.ai.observability")
 ai_logger.setLevel(logging.INFO)
 try:
+    from backend import config
     from backend.config import (
         AI_REPOSITORY_API_KEY,
         AI_REPOSITORY_AGENT_NAME,
         AI_REPOSITORY_ENDPOINT,
-        AI_REPOSITORY_FALLBACK_API_KEY,
-        AI_REPOSITORY_FALLBACK_ENDPOINT,
-        AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS,
-        AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS,
-        AI_REPOSITORY_FALLBACK_MODEL,
-        AI_REPOSITORY_FALLBACK_PROMPT_VERSION,
-        AI_REPOSITORY_FALLBACK_PROVIDER,
         AI_REPOSITORY_MAX_INPUT_CHARS,
         AI_REPOSITORY_MAX_OUTPUT_TOKENS,
         AI_REPOSITORY_MODEL,
         AI_REPOSITORY_PROMPT_VERSION,
         AI_REPOSITORY_PROVIDER,
-        AI_GITHUB_API_VERSION,
         AI_CHAT_MAX_CONTEXT_CHARS,
         AI_CHAT_MAX_OUTPUT_TOKENS,
         IS_PRODUCTION,
-        GITHUB_MODELS_API_KEY,
-        GITHUB_MODELS_ENDPOINT,
-        GITHUB_MODELS_MODEL,
-        OPENAI_API_KEY,
-        OPENAI_MODEL,
         AI_MODEL_TIMEOUT_SECONDS,
     )
     from backend.contracts.ai import AIWorkload
@@ -46,31 +34,19 @@ try:
         ProviderConfiguration,
     )
 except ImportError:
+    import config
     from config import (
         AI_REPOSITORY_API_KEY,
         AI_REPOSITORY_AGENT_NAME,
         AI_REPOSITORY_ENDPOINT,
-        AI_REPOSITORY_FALLBACK_API_KEY,
-        AI_REPOSITORY_FALLBACK_ENDPOINT,
-        AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS,
-        AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS,
-        AI_REPOSITORY_FALLBACK_MODEL,
-        AI_REPOSITORY_FALLBACK_PROMPT_VERSION,
-        AI_REPOSITORY_FALLBACK_PROVIDER,
         AI_REPOSITORY_MAX_INPUT_CHARS,
         AI_REPOSITORY_MAX_OUTPUT_TOKENS,
         AI_REPOSITORY_MODEL,
         AI_REPOSITORY_PROMPT_VERSION,
         AI_REPOSITORY_PROVIDER,
-        AI_GITHUB_API_VERSION,
         AI_CHAT_MAX_CONTEXT_CHARS,
         AI_CHAT_MAX_OUTPUT_TOKENS,
         IS_PRODUCTION,
-        GITHUB_MODELS_API_KEY,
-        GITHUB_MODELS_ENDPOINT,
-        GITHUB_MODELS_MODEL,
-        OPENAI_API_KEY,
-        OPENAI_MODEL,
         AI_MODEL_TIMEOUT_SECONDS,
     )
     from contracts.ai import AIWorkload
@@ -186,33 +162,20 @@ class FailureAnalysisOutcome:
 
 
 def _repository_model_gateway() -> ModelGateway:
-    """Build isolated NVIDIA primary and Groq fallback repository routes."""
+    """Build the isolated Microsoft Foundry repository route."""
     primary = ProviderConfiguration(
         provider=AI_REPOSITORY_PROVIDER,
         endpoint=AI_REPOSITORY_ENDPOINT,
         model=AI_REPOSITORY_MODEL,
         api_key=AI_REPOSITORY_API_KEY,
         agent_name=AI_REPOSITORY_AGENT_NAME,
-        api_version=AI_GITHUB_API_VERSION,
         timeout_seconds=AI_MODEL_TIMEOUT_SECONDS,
         max_input_chars=AI_REPOSITORY_MAX_INPUT_CHARS,
         max_output_tokens=AI_REPOSITORY_MAX_OUTPUT_TOKENS,
         prompt_version=AI_REPOSITORY_PROMPT_VERSION,
     )
-    fallback = ProviderConfiguration(
-        provider=AI_REPOSITORY_FALLBACK_PROVIDER,
-        endpoint=AI_REPOSITORY_FALLBACK_ENDPOINT,
-        model=AI_REPOSITORY_FALLBACK_MODEL,
-        api_key=AI_REPOSITORY_FALLBACK_API_KEY,
-        timeout_seconds=AI_MODEL_TIMEOUT_SECONDS,
-        max_input_chars=AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS,
-        max_output_tokens=AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS,
-        prompt_version=AI_REPOSITORY_FALLBACK_PROMPT_VERSION,
-    )
-    return ModelGateway(
-        configurations={AIWorkload.REPOSITORY_ANALYSIS: primary},
-        fallback_configurations={AIWorkload.REPOSITORY_ANALYSIS: fallback},
-    )
+    return ModelGateway(configurations={AIWorkload.REPOSITORY_ANALYSIS: primary})
+
 
 MODEL_CONTEXT_FILENAMES = {
     "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
@@ -1256,8 +1219,8 @@ def analyze_failure_nemotron(
 
     Failure analysis belongs to the repository-analysis trust boundary and uses
     only its workload-specific routes. The historical function name remains as
-    a compatibility alias, while NVIDIA GLM is primary and Groq GPT-OSS is the
-    explicit backup. Both unavailable routes degrade to the local analyzer.
+    a compatibility alias; Microsoft Foundry is the sole AI provider. An
+    unavailable route returns the explicitly labeled local analysis.
     Existing callers receive the historical analysis dictionary by default;
     durable audit callers can request provenance to distinguish a model result
     from deterministic fallback.
@@ -1519,210 +1482,52 @@ spec:
         averageUtilization: 70"""
 
 
-def generate_chat_response(message: str, project_metadata: dict = None) -> str:
-    """Answer from recorded project evidence, with a conservative local fallback."""
-    api_key = GITHUB_MODELS_API_KEY or OPENAI_API_KEY
-    base_url = GITHUB_MODELS_ENDPOINT if GITHUB_MODELS_API_KEY else None
-    model_name = GITHUB_MODELS_MODEL if GITHUB_MODELS_API_KEY else OPENAI_MODEL
-    provider = "github-models" if GITHUB_MODELS_API_KEY else "openai"
-
-    if api_key:
-        bounded_context = _bounded_chat_context(project_metadata)
-        output_limit = (
-            {"max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
-            if provider == "github-models"
-            else {"max_completion_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
-        )
-        prompt = f"""
-        You are the ZeroOps project assistant. Provide a concise, practical answer using only the supplied project context.
-        Clearly distinguish recorded facts from checks that still need to happen. Do not invent deployment status, costs,
-        telemetry, vulnerabilities, credentials, provider configuration, or actions that were not recorded. Do not expose
-        model or infrastructure implementation details unless the user explicitly asks about a supported product setting.
-        
-        Project Context:
-        {bounded_context}
-        
-        User Message: "{message}"
-        """
+def _foundry_chat(message: str, context: dict) -> str:
+    """Use the configured Foundry deployment, surfacing failures explicitly."""
+    if (
+        getattr(config, "ZEROOPS_DEMO_AI", False)
+        and AI_REPOSITORY_API_KEY is not False
+        and AI_REPOSITORY_API_KEY != ""
+    ):
         try:
-            start_time = time.time()
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=1)
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                **output_limit,
-            )
-            latency = time.time() - start_time
-            content = str(response.choices[0].message.content or "").strip()
-            tokens_used = getattr(response.usage, 'total_tokens', 0) if hasattr(response, 'usage') and response.usage else 0
-            if content:
-                log_ai_request(provider, model_name, latency, True, tokens_used)
-                return content
-            raise RuntimeError("The assistant returned an empty response.")
-        except Exception as e:
-            log_ai_request(provider, model_name, 0.0, False, error=str(e))
-            # Fall back to local responder on API error
-            pass
+            from backend.services.zeroops_foundry import get_foundry_client
+            foundry = get_foundry_client()
+            reply, _ = foundry.architecture_chat(message, context)
+            if reply and reply.strip():
+                return reply.strip()
+        except Exception as err:
+            ai_logger.warning("ZeroOps Foundry client chat failed, falling back: %s", err)
 
-    # Context-aware local responder
-    msg = message.lower()
-    metadata = project_metadata or {}
-    name = metadata.get("name") or "this project"
-    framework = metadata.get("framework") or "unknown framework"
-    language = metadata.get("language") or "unknown language"
-    db_list = metadata.get("databases") or []
-    db_desc = ", ".join([f"{db['type']} ({db['status']})" for db in db_list]) if db_list else "None detected"
-    latest_deployment = metadata.get("latest_deployment") or {}
-    url = latest_deployment.get("live_url") if isinstance(latest_deployment, dict) else None
-    deployment_status = latest_deployment.get("status") if isinstance(latest_deployment, dict) else "unknown"
-    architecture = metadata.get("architecture_plan") or {}
-    architecture_components = architecture.get("components") if isinstance(architecture, dict) else []
-    if not isinstance(architecture_components, list):
-        architecture_components = []
-
-    def architecture_component(component_id: str):
-        return next(
-            (component for component in architecture_components if component.get("id") == component_id),
-            None,
+    from backend.services.providers.azure_openai import _validated_endpoint
+    if not AI_REPOSITORY_API_KEY or not AI_REPOSITORY_MODEL:
+        return "Microsoft Foundry is not configured. No AI response was generated."
+    try:
+        endpoint = _validated_endpoint(AI_REPOSITORY_ENDPOINT)
+        client = OpenAI(api_key=AI_REPOSITORY_API_KEY, base_url=endpoint,
+                        default_headers={"api-key": AI_REPOSITORY_API_KEY},
+                        timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=0)
+        response = client.responses.create(
+            model=AI_REPOSITORY_MODEL,
+            input=[{"role": "system", "content":
+                    "You are the ZeroOps assistant. Answer using only recorded context. "
+                    "Never invent deployment, telemetry, pricing, or security results. "
+                    "You cannot change, approve, or deploy anything. Context: " + _bounded_chat_context(context)},
+                   {"role": "user", "content": message}],
+            max_output_tokens=AI_CHAT_MAX_OUTPUT_TOKENS, store=False,
         )
+        if getattr(response, "status", None) in {"failed", "incomplete", "cancelled"}:
+            raise RuntimeError("Incomplete response")
+        content = str(response.output_text or "").strip()
+        if not content:
+            raise RuntimeError("Empty response")
+        return content
+    except Exception as error:
+        log_ai_request("azure-openai", AI_REPOSITORY_MODEL, 0.0, False, error=type(error).__name__)
+        return "Microsoft Foundry is temporarily unavailable. No AI response was generated. Please retry."
 
-    application_component = architecture_component("application")
-    database_component = architecture_component("database")
 
-    if "why" in msg and "app service" in msg and application_component:
-        return (
-            f"**{application_component.get('service')}** is the current application recommendation because "
-            f"{application_component.get('reason')}\n\n"
-            "It is the deployment target this workspace can validate today. You can change the hosting choice in the architecture plan; unsupported targets remain visible as a draft rather than being silently deployed."
-        )
-
-    if "why" in msg and ("postgres" in msg or "database" in msg) and database_component:
-        return (
-            f"The plan includes **{database_component.get('service')}** because "
-            f"{database_component.get('reason')}\n\n"
-            "The connection, network controls, and retention requirements still need your review before it can be provisioned."
-        )
-
-    # 1. Why did deployment fail?
-    if "fail" in msg or "error" in msg or "why did" in msg or "broken" in msg:
-        fa = metadata.get("failure_analysis")
-        if fa:
-            return (
-                f"The deployment of **{name}** failed due to: **{fa['summary']}**.\n\n"
-                f"- **Root Cause:** {fa['cause']}\n"
-                f"- **Recommended Fix:** {fa['recommended_fix']}\n\n"
-                "Review the deployment logs, make the change, and launch a new version when ready."
-            )
-        elif deployment_status == "failed":
-            logs = metadata.get("latest_deployment_logs") or []
-            log_snippet = "\n".join(logs[:5]) if logs else "No logs captured."
-            return (
-                f"The latest deployment status for **{name}** is **failed**.\n\n"
-                f"**Recent Log Trace:**\n```\n{log_snippet}\n```\n"
-                f"Please review the deployment logs on the dashboard to debug this issue further."
-            )
-        else:
-            return f"The latest deployment status for **{name}** is **{deployment_status}**. There are no active failure logs recorded."
-
-    # 2. What does this application do?
-    elif "do" in msg or "what is" in msg or "purpose" in msg or "about" in msg:
-        details = [
-            f"**{name}** is recorded as a **{framework}** application using **{language}**.",
-            f"- **Connected databases:** {db_desc}",
-            f"- **Recorded status:** {metadata.get('status', 'unknown').capitalize()}",
-        ]
-        if url:
-            details.append(f"- **Live URL:** [{url}]({url})")
-        else:
-            details.append("- **Live URL:** No verified release is recorded yet.")
-        return "\n".join(details)
-
-    # 3. How can I reduce costs?
-    elif "cost" in msg or "reduce" in msg or "cheap" in msg or "price" in msg or "monthly" in msg:
-        cost_meta = metadata.get("cost")
-        
-        if isinstance(cost_meta, dict) and isinstance(cost_meta.get("total_cost"), (int, float)):
-            opt = metadata.get("cost_optimization")
-            opt_text = f"\n\n**AI Cost Recommendation:** {opt['recommendation']} (Estimated savings: {opt['savings']}) because of {opt['reason']}" if opt else ""
-            return (
-                f"Here is your dynamic infrastructure cost blueprint for **{name}**:\n"
-                f"- **Compute Resource:** ${cost_meta['compute_cost']}/mo\n"
-                f"- **Database Hosting:** ${cost_meta['database_cost']}/mo\n"
-                f"- **Platform Margin Fee:** ${cost_meta['platform_fee']}/mo\n"
-                f"- **Estimated Monthly Total:** **${cost_meta['total_cost']}/mo**\n"
-                f"- **Projected Growth Cost (at scale):** ${cost_meta['projected_growth_cost']}/mo\n"
-                f"- **Recommended Plan:** **{cost_meta['recommended_plan']}**\n"
-                f"*{cost_meta['why_this_plan']}*{opt_text}"
-            )
-        else:
-            return (
-                "Azure cost data is not available for this project yet, so I cannot provide a trustworthy estimate or savings figure. "
-                "Connect Azure Cost Management data first, then review recorded usage before changing capacity."
-            )
-
-    # 4. How can I improve performance?
-    elif "performance" in msg or "improve" in msg or "slow" in msg or "speed" in msg or "latency" in msg:
-        telemetry = metadata.get("telemetry")
-        if telemetry:
-            telemetry_str = (
-                f"\n- **CPU Utilization:** {telemetry['avg_cpu_utilization']}\n"
-                f"- **Memory Usage:** {telemetry['avg_memory_utilization']}\n"
-                f"- **Average Error Rate:** {telemetry['recent_error_rate']}\n"
-                f"- **Response Latency:** {telemetry['recent_response_time_ms']}\n"
-            )
-            return (
-                f"Recorded performance signals for **{name}**:{telemetry_str}\n"
-                "Use these measurements to identify the bottleneck before changing capacity or application code."
-            )
-        return "No production telemetry has been recorded for this project yet. Launch it first, then use measured CPU, memory, errors, and response time to guide performance changes."
-
-    # 5. What environment variables are missing?
-    elif "env" in msg or "variable" in msg or "missing" in msg or "secret" in msg:
-        missing = metadata.get("missing_variables") or {}
-        req_missing = missing.get("required") or []
-        rec_missing = missing.get("recommended") or []
-        
-        if not req_missing and not rec_missing:
-            return f"No missing environment-variable requirements are recorded for **{name}**. This does not verify external service credentials; confirm them before launch."
-            
-        res = f"Here are the environment variable checks for **{name}**:\n"
-        if req_missing:
-            res += f"- **Missing required:** {', '.join(req_missing)} (the deployment may fail without these)\n"
-        if rec_missing:
-            res += f"- **Missing recommended:** {', '.join(rec_missing)} (related features may be unavailable)\n"
-
-        res += "\nConfigure the required values in project settings. Secret values are stored in Azure Key Vault and are not returned by the product."
-        return res
-    # 6. Can I deploy safely?
-    elif "safe" in msg or "deploy safely" in msg or "security" in msg or "readiness" in msg:
-        warning_count = metadata.get("analysis_warning_count", 0)
-        warning_text = (
-            f"The repository analyzer recorded **{warning_count} warning(s)** that require review."
-            if warning_count > 0
-            else "The repository analyzer recorded no warnings. This is not a vulnerability scan."
-        )
-        report = [
-            f"**Launch-readiness check for {name}:**",
-            f"- **Repository analysis:** {warning_text}",
-            f"- **Latest recorded status:** {deployment_status.capitalize()}",
-        ]
-        report.append(
-            "Before launch, verify required variables, run independent dependency and image scans, "
-            "run the production build, and review Azure's completed release status."
-        )
-        return "\n".join(report)
-
-    else:
-        live_url = f" Live URL: {url}." if url else ""
-        return (
-            f"I can help with recorded details for **{name}** ({framework}).{live_url}\n\n"
-            f"Ask me questions like:\n"
-            f"- *'Why did deployment fail?'*\n"
-            f"- *'What does this application do?'*\n"
-            f"- *'How can I reduce costs?'*\n"
-            f"- *'What environment variables are missing?'*\n"
-            f"- *'Can I deploy safely?'*"
-        )
+def generate_chat_response(message: str, project_metadata: dict = None) -> str:
+    return _foundry_chat(message, project_metadata or {})
 
 
 def explain_infrastructure_decision(component_id: str, plan: dict) -> str:
@@ -1757,101 +1562,4 @@ def architect_chat(message: str, plan: dict) -> tuple[dict, str]:
     if evidence_reply:
         return plan, evidence_reply
 
-    # 2. Generate a friendly chat reply using OpenAI/fallback
-    api_key = GITHUB_MODELS_API_KEY or OPENAI_API_KEY
-    base_url = GITHUB_MODELS_ENDPOINT if GITHUB_MODELS_API_KEY else None
-    model_name = GITHUB_MODELS_MODEL if GITHUB_MODELS_API_KEY else OPENAI_MODEL
-    provider = "github-models" if GITHUB_MODELS_API_KEY else "openai"
-
-    system_prompt = """You are the ZeroOps plan assistant.
-Answer concisely using only the saved plan below. Distinguish recorded evidence from checks that
-still need to happen. Do not claim that a plan was changed, approved, priced, validated, deployed,
-or monitored. Plan mutations are handled separately by deterministic commands. Never invent Azure
-availability, costs, telemetry, security results, or runtime outcomes.
-
-Current Architecture Design:
-""" + _bounded_chat_context(plan)
-
-    if api_key:
-        try:
-            start_time = time.time()
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=AI_MODEL_TIMEOUT_SECONDS, max_retries=1)
-            output_limit = (
-                {"max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
-                if provider == "github-models"
-                else {"max_completion_tokens": AI_CHAT_MAX_OUTPUT_TOKENS}
-            )
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                **output_limit,
-            )
-            latency = time.time() - start_time
-            reply = str(response.choices[0].message.content or "").strip()
-            tokens_used = getattr(response.usage, 'total_tokens', 0) if hasattr(response, 'usage') and response.usage else 0
-            if reply:
-                log_ai_request(provider, model_name, latency, True, tokens_used)
-                return plan, reply
-        except Exception as e:
-            log_ai_request(provider, model_name, 0.0, False, error=str(e))
-
-    # Evidence-bound local responder when no provider is configured or the
-    # configured provider is temporarily unavailable.
-    msg_lower = message.lower()
-    components = plan.get("components") if isinstance(plan.get("components"), list) else []
-    application = next(
-        (component for component in components if component.get("id") == "application"),
-        None,
-    )
-    database = next(
-        (component for component in components if component.get("id") == "database"),
-        None,
-    )
-    if "why" in msg_lower and "app service" in msg_lower:
-        if application:
-            reply = (
-                f"{application.get('service', 'App Service')} is in the saved plan because "
-                f"{application.get('reason', 'it is the deployment target implemented by this workspace')} "
-                "This is a proposal based on recorded repository evidence, not proof of live Azure readiness."
-            )
-        else:
-            reply = "No application hosting decision is recorded in this plan yet."
-    elif "why" in msg_lower and ("postgres" in msg_lower or "database" in msg_lower):
-        if database:
-            reply = (
-                f"{database.get('service', 'The database service')} is in the saved plan because "
-                f"{database.get('reason', 'the repository analysis recorded a database dependency')}"
-            )
-        else:
-            reply = "The saved repository analysis did not produce a database component for this plan."
-    elif ("can" in msg_lower or "could" in msg_lower or "should" in msg_lower) and any(
-        service in msg_lower
-        for service in ("app service", "container apps", "kubernetes", "aks", "functions", "cosmos")
-    ):
-        reply = (
-            "That option can be reviewed without changing the current revision. "
-            "If you want to edit the plan, use an explicit command such as “Use Azure Container Apps” "
-            "or “Use Cosmos DB instead”. The new revision will still require approval."
-        )
-    elif "cost" in msg_lower or "price" in msg_lower:
-        reply = (
-            "No subscription-specific Azure price is recorded for this plan, so I cannot give a "
-            "trustworthy estimate. Connect Azure cost data before comparing tiers. Use “Reduce cost” "
-            "only if you want to create a draft revision with lower-tier proposals."
-        )
-    elif "scale" in msg_lower or "performance" in msg_lower or "scalability" in msg_lower:
-        reply = (
-            "No runtime telemetry is recorded in this plan, so a performance change would be a proposal, "
-            "not a measured recommendation. Use “Scale up” only if you want to create a new draft revision."
-        )
-    else:
-        reply = (
-            "Ask about a recorded decision, for example “Why App Service?” or “What still needs validation?”. "
-            "To edit the plan, use an explicit command such as “Use Azure Container Apps”, “Change region "
-            "to West Europe”, or “Add Redis”."
-        )
-
-    return plan, reply
+    return plan, _foundry_chat(message, plan)

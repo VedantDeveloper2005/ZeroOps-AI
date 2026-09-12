@@ -77,7 +77,7 @@ jobs:
 
       - name: Validate backend rewrite target
         env:
-          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend.azurewebsites.net' }}
+          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend-v2.azurewebsites.net' }}
         run: |
           test -n "$ZEROOPS_BACKEND_URL"
           case "$ZEROOPS_BACKEND_URL" in
@@ -88,7 +88,7 @@ jobs:
       - name: Build frontend
         env:
           DEPLOYMENT_VERSION: ${{ github.sha }}
-          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend.azurewebsites.net' }}
+          ZEROOPS_BACKEND_URL: ${{ vars.ZEROOPS_BACKEND_URL || 'https://zeroops-backend-v2.azurewebsites.net' }}
         run: npm run build
 
       - name: Prepare deployment artifact
@@ -136,8 +136,10 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@b686016b4de8820a23519503685d8d03fbfa03a6 # v3
         with:
-          app-name: 'zeroopsai'
+          app-name: 'zeroopsai-v2'
           slot-name: 'Production'
+          clean: true
+          restart: true
           package: .
           startup-command: 'node server.js'
 
@@ -146,7 +148,7 @@ jobs:
           for attempt in {1..30}; do
             if curl --fail --silent --show-error --max-time 5 --output /dev/null \
               --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ZeroOpsReleaseCheck/1.0" \
-              https://zeroopsai.azurewebsites.net/; then
+              https://zeroopsai-v2.azurewebsites.net/; then
               exit 0
             fi
             echo "Frontend response check ${attempt}/30 failed; retrying in 5 seconds"

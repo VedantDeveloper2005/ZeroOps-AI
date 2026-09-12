@@ -27,9 +27,6 @@ from backend.contracts.ai import (
 from backend.services.providers import (
     AzureFoundryProvider,
     AzureOpenAIProvider,
-    GitHubModelsProvider,
-    GroqProvider,
-    NvidiaProvider,
     ProviderConfiguration,
     ProviderConfigurationError,
     ProviderCredentialUnavailableError,
@@ -74,129 +71,50 @@ class StructuredGenerationResult(Generic[OutputContract]):
 def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
     """Resolve exactly one workload route without consulting legacy AI keys."""
     if workload == AIWorkload.REPOSITORY_ANALYSIS:
+        provider = config.AI_REPOSITORY_PROVIDER
+        endpoint = config.AI_REPOSITORY_ENDPOINT
+        agent_name = config.AI_REPOSITORY_AGENT_NAME
+        if getattr(config, "ZEROOPS_DEMO_AI", False) and not config.AI_REPOSITORY_API_KEY:
+            provider = "azure-foundry"
+            endpoint = config.FOUNDRY_PROJECT_ENDPOINT
+            agent_name = config.FOUNDRY_AGENT_NAME
         return ProviderConfiguration(
-            provider=config.AI_REPOSITORY_PROVIDER,
-            endpoint=config.AI_REPOSITORY_ENDPOINT,
+            provider=provider,
+            endpoint=endpoint,
             model=config.AI_REPOSITORY_MODEL,
             api_key=config.AI_REPOSITORY_API_KEY,
-            agent_name=config.AI_REPOSITORY_AGENT_NAME,
-            api_version=config.AI_GITHUB_API_VERSION,
+            agent_name=agent_name,
             timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
             max_input_chars=config.AI_REPOSITORY_MAX_INPUT_CHARS,
             max_output_tokens=config.AI_REPOSITORY_MAX_OUTPUT_TOKENS,
             prompt_version=config.AI_REPOSITORY_PROMPT_VERSION,
+            agent_version=getattr(config, "FOUNDRY_AGENT_VERSION", "1") or "1",
         )
     if workload == AIWorkload.TERRAFORM_GENERATION:
+        provider = config.AI_TERRAFORM_PROVIDER
+        endpoint = config.AI_TERRAFORM_ENDPOINT
+        agent_name = config.AI_TERRAFORM_AGENT_NAME
+        if getattr(config, "ZEROOPS_DEMO_AI", False) and not config.AI_TERRAFORM_API_KEY:
+            provider = "azure-foundry"
+            endpoint = config.FOUNDRY_PROJECT_ENDPOINT
+            agent_name = config.FOUNDRY_AGENT_NAME
         return ProviderConfiguration(
-            provider=config.AI_TERRAFORM_PROVIDER,
-            endpoint=config.AI_TERRAFORM_ENDPOINT,
+            provider=provider,
+            endpoint=endpoint,
             model=config.AI_TERRAFORM_MODEL,
             api_key=config.AI_TERRAFORM_API_KEY,
-            agent_name=config.AI_TERRAFORM_AGENT_NAME,
-            api_version=config.AI_GITHUB_API_VERSION,
+            agent_name=agent_name,
             timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
             max_input_chars=config.AI_TERRAFORM_MAX_INPUT_CHARS,
             max_output_tokens=config.AI_TERRAFORM_MAX_OUTPUT_TOKENS,
             prompt_version=config.AI_TERRAFORM_PROMPT_VERSION,
-        )
-    raise ModelRouteNotConfiguredError("Unsupported AI workload.")
-
-
-def secondary_route_configuration(workload: AIWorkload) -> ProviderConfiguration:
-    """Return a secondary NVIDIA route using the second account credential.
-
-    Reuses the same endpoint, model, and budgets as the primary NVIDIA route
-    but carries a distinct API key. An empty secondary key means the tier is
-    not available; callers must check for ProviderConfigurationError.
-    """
-    if workload == AIWorkload.REPOSITORY_ANALYSIS:
-        secondary_key = config.AI_REPOSITORY_SECONDARY_API_KEY
-        if not secondary_key:
-            raise ProviderConfigurationError(
-                "No secondary NVIDIA credential is configured for repository analysis."
-            )
-        return ProviderConfiguration(
-            provider=config.AI_REPOSITORY_PROVIDER,
-            endpoint=config.AI_REPOSITORY_ENDPOINT,
-            model=config.AI_REPOSITORY_MODEL,
-            api_key=secondary_key,
-            agent_name=config.AI_REPOSITORY_AGENT_NAME,
-            api_version=config.AI_GITHUB_API_VERSION,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
-            max_input_chars=config.AI_REPOSITORY_MAX_INPUT_CHARS,
-            max_output_tokens=config.AI_REPOSITORY_MAX_OUTPUT_TOKENS,
-            prompt_version=config.AI_REPOSITORY_PROMPT_VERSION,
-        )
-    if workload == AIWorkload.TERRAFORM_GENERATION:
-        secondary_key = config.AI_TERRAFORM_SECONDARY_API_KEY
-        if not secondary_key:
-            raise ProviderConfigurationError(
-                "No secondary NVIDIA credential is configured for Terraform generation."
-            )
-        return ProviderConfiguration(
-            provider=config.AI_TERRAFORM_PROVIDER,
-            endpoint=config.AI_TERRAFORM_ENDPOINT,
-            model=config.AI_TERRAFORM_MODEL,
-            api_key=secondary_key,
-            agent_name=config.AI_TERRAFORM_AGENT_NAME,
-            api_version=config.AI_GITHUB_API_VERSION,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
-            max_input_chars=config.AI_TERRAFORM_MAX_INPUT_CHARS,
-            max_output_tokens=config.AI_TERRAFORM_MAX_OUTPUT_TOKENS,
-            prompt_version=config.AI_TERRAFORM_PROMPT_VERSION,
-        )
-    raise ModelRouteNotConfiguredError("Unsupported AI workload.")
-
-
-def fallback_route_configuration(workload: AIWorkload) -> ProviderConfiguration:
-    """Resolve the explicitly isolated fallback route for one workload."""
-    if workload == AIWorkload.REPOSITORY_ANALYSIS:
-        provider_name = config.AI_REPOSITORY_FALLBACK_PROVIDER.strip().lower().replace(
-            "_", "-"
-        )
-        if provider_name != "groq":
-            raise ProviderConfigurationError(
-                "Repository analysis fallback provider must be Groq."
-            )
-        return ProviderConfiguration(
-            provider=provider_name,
-            endpoint=config.AI_REPOSITORY_FALLBACK_ENDPOINT,
-            model=config.AI_REPOSITORY_FALLBACK_MODEL,
-            api_key=config.AI_REPOSITORY_FALLBACK_API_KEY,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
-            max_input_chars=config.AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS,
-            max_output_tokens=config.AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS,
-            prompt_version=config.AI_REPOSITORY_FALLBACK_PROMPT_VERSION,
-        )
-    if workload == AIWorkload.TERRAFORM_GENERATION:
-        provider_name = config.AI_TERRAFORM_FALLBACK_PROVIDER.strip().lower().replace(
-            "_", "-"
-        )
-        if provider_name != "groq":
-            raise ProviderConfigurationError(
-                "Terraform generation fallback provider must be Groq."
-            )
-        return ProviderConfiguration(
-            provider=provider_name,
-            endpoint=config.AI_TERRAFORM_FALLBACK_ENDPOINT,
-            model=config.AI_TERRAFORM_FALLBACK_MODEL,
-            api_key=config.AI_TERRAFORM_FALLBACK_API_KEY,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
-            max_input_chars=config.AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS,
-            max_output_tokens=config.AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS,
-            prompt_version=config.AI_TERRAFORM_FALLBACK_PROMPT_VERSION,
+            agent_version=getattr(config, "FOUNDRY_AGENT_VERSION", "1") or "1",
         )
     raise ModelRouteNotConfiguredError("Unsupported AI workload.")
 
 
 def build_provider(configuration: ProviderConfiguration) -> StructuredModelProvider:
     provider_name = configuration.provider.strip().lower().replace("_", "-")
-    if provider_name == "nvidia":
-        return NvidiaProvider(configuration)
-    if provider_name == "groq":
-        return GroqProvider(configuration)
-    if provider_name == "github-models":
-        return GitHubModelsProvider(configuration)
     if provider_name in {"azure-foundry", "microsoft-foundry"}:
         return AzureFoundryProvider(configuration)
     if provider_name in {
@@ -258,7 +176,7 @@ _UNSUPPORTED_STRICT_SCHEMA_KEYS = {
 
 
 def _strict_provider_output_schema(schema: dict) -> dict:
-    """Return the conservative strict subset shared by Foundry and Groq.
+    """Return the conservative strict subset supported by Microsoft Foundry.
 
     Constraints omitted from this transport schema remain enforced by the
     authoritative Pydantic product contract after inference.
@@ -351,13 +269,9 @@ class ModelGateway:
         *,
         configurations: dict[AIWorkload, ProviderConfiguration] | None = None,
         providers: dict[AIWorkload, StructuredModelProvider] | None = None,
-        fallback_configurations: dict[AIWorkload, ProviderConfiguration] | None = None,
-        fallback_providers: dict[AIWorkload, StructuredModelProvider] | None = None,
     ) -> None:
         self._configurations = configurations or {}
         self._providers = providers or {}
-        self._fallback_configurations = fallback_configurations or {}
-        self._fallback_providers = fallback_providers or {}
 
     def configuration_for(self, workload: AIWorkload) -> ProviderConfiguration:
         return self._configurations.get(workload) or route_configuration(workload)
@@ -370,125 +284,6 @@ class ModelGateway:
         self._providers[workload] = provider
         return provider
 
-    def fallback_configuration_for(
-        self, workload: AIWorkload
-    ) -> ProviderConfiguration:
-        configuration = self._fallback_configurations.get(
-            workload
-        ) or fallback_route_configuration(workload)
-        provider_name = configuration.provider.strip().lower().replace("_", "-")
-        if provider_name != "groq":
-            raise ProviderConfigurationError(
-                "AI workload fallback routes must use Groq."
-            )
-        return configuration
-
-    def secondary_configuration_for(
-        self, workload: AIWorkload
-    ) -> ProviderConfiguration:
-        """Return the secondary NVIDIA route for a workload.
-
-        Raises ProviderConfigurationError if the secondary credential is absent.
-        """
-        return secondary_route_configuration(workload)
-
-    def _generate_with_secondary(
-        self,
-        *,
-        workload: AIWorkload,
-        system_prompt: str,
-        user_prompt: str,
-        output_contract: type[OutputContract],
-        correlation_id: UUID,
-        max_output_tokens: int | None,
-        temperature: float,
-    ) -> StructuredGenerationResult[OutputContract] | None:
-        """Attempt the secondary NVIDIA route before escalating to Groq.
-
-        Returns None if the secondary credential is not configured, so the
-        caller can proceed directly to the Groq fallback.
-        """
-        try:
-            configuration = self.secondary_configuration_for(workload)
-        except (ProviderConfigurationError, ModelRouteNotConfiguredError):
-            return None
-        if not configuration.api_key.strip():
-            return None
-        secondary_gateway = ModelGateway(
-            configurations={workload: configuration},
-        )
-        return secondary_gateway.generate_structured(
-            workload=workload,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            output_contract=output_contract,
-            correlation_id=correlation_id,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-            _allow_fallback=False,
-        )
-
-    def _generate_with_fallback(
-        self,
-        *,
-        workload: AIWorkload,
-        system_prompt: str,
-        user_prompt: str,
-        output_contract: type[OutputContract],
-        correlation_id: UUID,
-        max_output_tokens: int | None,
-        temperature: float,
-    ) -> StructuredGenerationResult[OutputContract] | None:
-        """Run secondary NVIDIA then Groq fallback with recursive fallback disabled.
-
-        Chain: NVIDIA primary → [this method] → NVIDIA secondary → Groq.
-        ``None`` means even the secondary/fallback configuration object was
-        invalid. A configured route that fails returns the normal outcome.
-        """
-        # First, attempt the secondary NVIDIA route (Account 2) if configured.
-        secondary_result = self._generate_with_secondary(
-            workload=workload,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            output_contract=output_contract,
-            correlation_id=correlation_id,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-        )
-        if secondary_result is not None and secondary_result.value is not None:
-            return secondary_result
-
-        # Second, attempt the Groq fallback route if configured.
-        try:
-            configuration = self.fallback_configuration_for(workload)
-        except (ProviderConfigurationError, ModelRouteNotConfiguredError):
-            return secondary_result
-
-        provider = self._fallback_providers.get(workload)
-        if (
-            provider is not None
-            and provider.name.strip().lower().replace("_", "-") != "groq"
-        ):
-            return secondary_result
-        if provider is None and not configuration.api_key.strip():
-            # An unconfigured optional backup is not an attempted inference
-            # route; preserve the secondary or primary route's result.
-            return secondary_result
-        fallback_gateway = ModelGateway(
-            configurations={workload: configuration},
-            providers={workload: provider} if provider is not None else None,
-        )
-        return fallback_gateway.generate_structured(
-            workload=workload,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            output_contract=output_contract,
-            correlation_id=correlation_id,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-            _allow_fallback=False,
-        )
-
     def generate_structured(
         self,
         *,
@@ -499,7 +294,6 @@ class ModelGateway:
         correlation_id: UUID | None = None,
         max_output_tokens: int | None = None,
         temperature: float = 0.0,
-        _allow_fallback: bool = True,
     ) -> StructuredGenerationResult[OutputContract]:
         """Generate and validate output with one repair call per selected route."""
         if not 0.0 <= temperature <= 1.0:
@@ -514,7 +308,6 @@ class ModelGateway:
 
         def resolve_route_failure(
             *,
-            allow_fallback: bool,
             configuration: ProviderConfiguration,
             request_hash: str,
             reason: str,
@@ -526,45 +319,6 @@ class ModelGateway:
             latency_ms: int = 0,
             repair_attempted: bool = False,
         ) -> StructuredGenerationResult[OutputContract]:
-            primary_provider = configuration.provider.strip().lower().replace(
-                "_", "-"
-            )
-            fallback_considered = (
-                _allow_fallback and allow_fallback and primary_provider == "nvidia"
-            )
-            if fallback_considered:
-                fallback_result = self._generate_with_fallback(
-                    workload=workload,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    output_contract=output_contract,
-                    correlation_id=correlation,
-                    max_output_tokens=max_output_tokens,
-                    temperature=temperature,
-                )
-                if fallback_result is not None:
-                    fallback_succeeded = (
-                        fallback_result.value is not None
-                        and fallback_result.provenance.execution_mode == "model"
-                    )
-                    fallback_provenance = fallback_result.provenance.model_copy(
-                        update={
-                            "selected_route": (
-                                "fallback" if fallback_succeeded else "none"
-                            ),
-                            "fallback_attempted": True,
-                            "primary_failure_code": reason,
-                            "primary_input_tokens": input_tokens,
-                            "primary_output_tokens": output_tokens,
-                            "primary_latency_ms": latency_ms,
-                            "primary_repair_attempted": repair_attempted,
-                        }
-                    )
-                    return StructuredGenerationResult(
-                        value=fallback_result.value,
-                        provenance=fallback_provenance,
-                        degraded_reason=fallback_result.degraded_reason,
-                    )
             degraded = self._degrade_or_raise(
                 workload=workload,
                 configuration=configuration,
@@ -580,25 +334,7 @@ class ModelGateway:
                 latency_ms=latency_ms,
                 repair_attempted=repair_attempted,
             )
-            if not fallback_considered:
-                return degraded
-            return StructuredGenerationResult(
-                value=degraded.value,
-                provenance=degraded.provenance.model_copy(
-                    update={
-                        "selected_route": "none",
-                        # ``None`` from _generate_with_fallback means route
-                        # resolution stopped before any Groq inference call.
-                        "fallback_attempted": False,
-                        "primary_failure_code": reason,
-                        "primary_input_tokens": input_tokens,
-                        "primary_output_tokens": output_tokens,
-                        "primary_latency_ms": latency_ms,
-                        "primary_repair_attempted": repair_attempted,
-                    }
-                ),
-                degraded_reason=degraded.degraded_reason,
-            )
+            return degraded
 
         try:
             configuration = self.configuration_for(workload)
@@ -625,7 +361,6 @@ class ModelGateway:
             return resolve_route_failure(
                 # Invalid budgets/settings are configuration policy failures,
                 # not evidence that the primary inference service is down.
-                allow_fallback=False,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="provider_not_configured",
@@ -636,7 +371,7 @@ class ModelGateway:
         provider_output_schema = (
             _strict_provider_output_schema(output_schema)
             if configuration.provider.strip().lower().replace("_", "-")
-            in {"azure-foundry", "microsoft-foundry", "groq"}
+            in {"azure-foundry", "microsoft-foundry", "azure-openai", "foundry-openai", "microsoft-foundry-openai"}
             else output_schema
         )
         serialized_schema = json.dumps(
@@ -659,7 +394,6 @@ class ModelGateway:
         ):
             return resolve_route_failure(
                 # Input/policy validation is never a fallback trigger.
-                allow_fallback=False,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="input_budget_exceeded",
@@ -670,7 +404,6 @@ class ModelGateway:
             provider = self.provider_for(workload)
         except ProviderCredentialUnavailableError:
             return resolve_route_failure(
-                allow_fallback=True,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="provider_not_configured",
@@ -680,7 +413,6 @@ class ModelGateway:
             )
         except (ProviderConfigurationError, ProviderError):
             return resolve_route_failure(
-                allow_fallback=False,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="provider_not_configured",
@@ -713,7 +445,6 @@ class ModelGateway:
             latency_ms += initial.latency_ms
         except ProviderInputBudgetError:
             return resolve_route_failure(
-                allow_fallback=False,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="input_budget_exceeded",
@@ -723,7 +454,6 @@ class ModelGateway:
             )
         except ProviderError:
             return resolve_route_failure(
-                allow_fallback=True,
                 configuration=configuration,
                 request_hash=request_digest,
                 reason="provider_unavailable",
@@ -733,25 +463,6 @@ class ModelGateway:
         try:
             value = output_contract.model_validate(_parse_json_object(initial.content))
         except (ValueError, json.JSONDecodeError, ValidationError):
-            # Groq is the rate-limited backup path. One strict-schema request
-            # is its complete bounded attempt; do not double token usage with
-            # a repair call. NVIDIA retains the existing single repair.
-            if provider.name.strip().lower().replace("_", "-") == "groq":
-                return resolve_route_failure(
-                    allow_fallback=False,
-                    configuration=configuration,
-                    request_hash=request_digest,
-                    reason="invalid_model_output",
-                    exception=ModelOutputValidationError(
-                        "AI output did not satisfy the required contract."
-                    ),
-                    provider_name=provider.name,
-                    model=initial.model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    latency_ms=latency_ms,
-                    repair_attempted=False,
-                )
             repair_attempted = True
             repair_system = (
                 "Repair the candidate JSON so it matches the supplied JSON Schema exactly. "
@@ -767,7 +478,6 @@ class ModelGateway:
             )
             if len(repair_system) + len(repair_user) > configuration.max_input_chars:
                 return resolve_route_failure(
-                    allow_fallback=False,
                     configuration=configuration,
                     request_hash=request_digest,
                     reason="invalid_model_output",
@@ -800,7 +510,6 @@ class ModelGateway:
                 response_model = repaired.model
             except ProviderInputBudgetError:
                 return resolve_route_failure(
-                    allow_fallback=False,
                     configuration=configuration,
                     request_hash=request_digest,
                     reason="input_budget_exceeded",
@@ -821,7 +530,6 @@ class ModelGateway:
                 ValidationError,
             ):
                 return resolve_route_failure(
-                    allow_fallback=True,
                     configuration=configuration,
                     request_hash=request_digest,
                     reason="invalid_model_output",
@@ -980,7 +688,6 @@ __all__ = [
     "ModelRouteNotConfiguredError",
     "StructuredGenerationResult",
     "build_provider",
-    "fallback_route_configuration",
     "generate_repository_assessment",
     "load_repository_instructions",
     "route_configuration",

@@ -157,8 +157,6 @@ module "analysis_function" {
   model_key_vault_uri                 = module.model_key_vaults.analysis_vault_uri
   model_api_key_setting_name          = "AI_REPOSITORY_API_KEY"
   model_api_key_secret_name           = "ai-repository-api-key"
-  fallback_model_api_key_setting_name = "AI_REPOSITORY_FALLBACK_API_KEY"
-  fallback_model_api_key_secret_name  = "ai-repository-fallback-api-key"
   app_insights_connection             = module.observability.application_insights_connection_strings.analysis
   app_insights_id                     = module.observability.application_insights_ids.analysis
   max_instances                       = var.analysis_function_max_instances
@@ -173,13 +171,6 @@ module "analysis_function" {
     AI_REPOSITORY_ENDPOINT                   = var.repository_ai_endpoint
     AI_REPOSITORY_MODEL                      = var.repository_ai_model
     AI_REPOSITORY_PROMPT_VERSION             = "repository-analysis.v1"
-    AI_REPOSITORY_FALLBACK_PROVIDER          = "groq"
-    AI_REPOSITORY_FALLBACK_ENDPOINT          = "https://api.groq.com/openai/v1"
-    AI_REPOSITORY_FALLBACK_MODEL             = "openai/gpt-oss-120b"
-    AI_REPOSITORY_FALLBACK_PROMPT_VERSION    = "repository-analysis.v1"
-    AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS   = "14000"
-    AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS = "800"
-    AI_REPOSITORY_FALLBACK_TIMEOUT_SECONDS   = "30"
   }
   tags = local.standard_tags
 
@@ -209,8 +200,6 @@ module "terraform_generation_function" {
   model_key_vault_uri                 = module.model_key_vaults.terraform_vault_uri
   model_api_key_setting_name          = "AI_TERRAFORM_API_KEY"
   model_api_key_secret_name           = "ai-terraform-api-key"
-  fallback_model_api_key_setting_name = "AI_TERRAFORM_FALLBACK_API_KEY"
-  fallback_model_api_key_secret_name  = "ai-terraform-fallback-api-key"
   app_insights_connection             = module.observability.application_insights_connection_strings.terraform_generation
   app_insights_id                     = module.observability.application_insights_ids.terraform_generation
   max_instances                       = var.terraform_function_max_instances
@@ -226,13 +215,6 @@ module "terraform_generation_function" {
     AI_TERRAFORM_ENDPOINT                   = var.terraform_ai_endpoint
     AI_TERRAFORM_MODEL                      = var.terraform_ai_model
     AI_TERRAFORM_PROMPT_VERSION             = "terraform-generation.v1"
-    AI_TERRAFORM_FALLBACK_PROVIDER          = "groq"
-    AI_TERRAFORM_FALLBACK_ENDPOINT          = "https://api.groq.com/openai/v1"
-    AI_TERRAFORM_FALLBACK_MODEL             = "openai/gpt-oss-120b"
-    AI_TERRAFORM_FALLBACK_PROMPT_VERSION    = "terraform-generation.v1"
-    AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS   = "14000"
-    AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS = "1000"
-    AI_TERRAFORM_FALLBACK_TIMEOUT_SECONDS   = "30"
   }
   tags = local.standard_tags
 

@@ -1,3 +1,5 @@
+> Configuration update (2026-09-11): Microsoft Foundry is the sole supported AI provider. NVIDIA, Groq, GitHub Models, and their fallback settings below are historical and must not be configured. See [the live repair report](../production-repair-2026-09-11.md).
+
 # ZeroOps AI Azure Enterprise Architecture
 
 ## Purpose

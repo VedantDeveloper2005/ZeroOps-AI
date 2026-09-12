@@ -181,49 +181,49 @@ variable "function_instance_memory_mb" {
 }
 
 variable "repository_ai_provider" {
-  description = "Primary provider for repository analysis. NVIDIA remains the default; azure-openai targets a Microsoft Foundry deployment."
+  description = "Primary provider for repository analysis. Only Microsoft Foundry deployments are supported."
   type        = string
-  default     = "nvidia"
+  default     = "azure-openai"
 
   validation {
-    condition     = contains(["nvidia", "azure-openai"], var.repository_ai_provider)
-    error_message = "repository_ai_provider must be nvidia or azure-openai."
+    condition     = contains(["azure-openai"], var.repository_ai_provider)
+    error_message = "repository_ai_provider must be azure-openai."
   }
 }
 
 variable "repository_ai_endpoint" {
   description = "Non-secret endpoint for repository analysis. Azure OpenAI must use https://<resource>.openai.azure.com/openai/v1."
   type        = string
-  default     = "https://integrate.api.nvidia.com/v1"
+  default     = ""
 }
 
 variable "repository_ai_model" {
-  description = "NVIDIA catalog model ID or Microsoft Foundry Azure OpenAI deployment name for repository analysis."
+  description = "Microsoft Foundry Azure OpenAI deployment name for repository analysis."
   type        = string
-  default     = "z-ai/glm-5.2"
+  default     = ""
 }
 
 variable "terraform_ai_provider" {
-  description = "Primary provider for Terraform generation. NVIDIA remains the default; azure-openai targets a Microsoft Foundry deployment."
+  description = "Primary provider for Terraform generation. Only Microsoft Foundry deployments are supported."
   type        = string
-  default     = "nvidia"
+  default     = "azure-openai"
 
   validation {
-    condition     = contains(["nvidia", "azure-openai"], var.terraform_ai_provider)
-    error_message = "terraform_ai_provider must be nvidia or azure-openai."
+    condition     = contains(["azure-openai"], var.terraform_ai_provider)
+    error_message = "terraform_ai_provider must be azure-openai."
   }
 }
 
 variable "terraform_ai_endpoint" {
   description = "Non-secret endpoint for Terraform generation. Azure OpenAI must use https://<resource>.openai.azure.com/openai/v1."
   type        = string
-  default     = "https://integrate.api.nvidia.com/v1"
+  default     = ""
 }
 
 variable "terraform_ai_model" {
-  description = "NVIDIA catalog model ID or Microsoft Foundry Azure OpenAI deployment name for Terraform generation."
+  description = "Microsoft Foundry Azure OpenAI deployment name for Terraform generation."
   type        = string
-  default     = "z-ai/glm-5.2"
+  default     = ""
 }
 
 variable "vmss_sku" {
