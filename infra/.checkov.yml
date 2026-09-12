@@ -20,19 +20,28 @@ skip-check:
   # Registry scanning and signed promotion are CI/Defender controls. Registry
   # quarantine is not enabled until a release scanner can mark images trusted;
   # geo-replication is intentionally deferred for this single-region MVP.
+  # Dedicated data endpoints and untagged retention policies require Premium SKU.
   - CKV_AZURE_163
   - CKV_AZURE_166
   - CKV_AZURE_164
   - CKV_AZURE_165
+  - CKV_AZURE_167
+  - CKV_AZURE_237
 
-  # Platform-managed encryption is used for the cost-optimized MVP. CMK and
-  # Service Bus double encryption remain an explicit regulated-tier upgrade.
+  # Platform-managed encryption is used for the cost-optimized MVP. CMK,
+  # Service Bus double encryption, and host encryption remain an explicit regulated-tier upgrade.
   - CKV_AZURE_199
   - CKV_AZURE_201
   - CKV2_AZURE_1
+  - CKV_AZURE_97
+
+  # Service Bus execution plane namespace uses Entra RBAC for all callers; managed identity
+  # provider on namespace is reserved for outbound telemetry.
+  - CKV_AZURE_202
 
   # Queue analytics and Blob/Queue data-plane diagnostic settings are modeled
   # as separate AzureRM resources; Checkov's storage-account/container checks
   # do not join those resources across this module boundary.
   - CKV_AZURE_33
+  - CKV2_AZURE_33
   - CKV2_AZURE_21
