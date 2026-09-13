@@ -32,6 +32,8 @@ ai_logger = logging.getLogger("zeroops.ai.observability")
 DEPLOYABLE_AUTOMATION_ALLOWLIST = {
     "azure app service",
     "app service",
+    "azure app service for linux",
+    "azure app service (linux)",
 }
 
 ADVISORY_UNSUPPORTED_NOTE = "Advisory recommendation — deployment automation not currently supported"
@@ -80,25 +82,27 @@ class FoundryAdvisorClient:
 
         try:
             from azure.ai.projects import AIProjectClient
-            from azure.identity import DefaultAzureCredential
+            from backend.services.foundry_identity import foundry_credential
         except ImportError as err:
             raise FoundryAdvisorError(
                 "The azure-ai-projects package is not installed."
             ) from err
 
         try:
-            # DefaultAzureCredential supports az login in dev, and App Service MI in prod
-            credential = DefaultAzureCredential(
-                exclude_interactive_browser_credential=True,
-            )
+            credential = foundry_credential()
             if self._project_client is None:
                 self._project_client = AIProjectClient(
                     endpoint=self.endpoint,
                     credential=credential,
+                    allow_preview=True,
                 )
 
-            # Use get_openai_client() and invoke agent via agent_reference in extra_body
-            self._openai_client = self._project_client.get_openai_client()
+            # Invoke the existing agent without requiring project-level agents/write.
+            self._openai_client = self._project_client.get_openai_client(
+                agent_name=self.agent_name,
+                timeout=config.FOUNDRY_REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
         except Exception as err:
             err_str = str(err).lower()
             if "authentication" in err_str or "credential" in err_str:
@@ -145,7 +149,8 @@ def build_sanitized_advisor_prompt(
 
     query_part = f"\nUser specific questions/constraints:\n{user_query.strip()}\n" if user_query else ""
 
-    prompt = f"""You are the ZeroOps Architecture and Cost Advisor.
+    prompt = f"""TASK_TYPE: ARCHITECTURE_RECOMMENDATION
+You are the ZeroOps Architecture and Cost Advisor.
 Review the following sanitized repository facts and recommend a justified Azure architecture.
 
 Consult the attached ZeroOps AI Knowledge Master and use Web Search for current Microsoft Azure documentation/SKUs where appropriate.
@@ -171,12 +176,26 @@ Provide your advisory response covering:
 5. Ordered Checklist of validation required before provisioning.
 
 Note: ZeroOps currently automates deployment only for Azure App Service. Other recommended services will be presented to the user as advisory recommendations.
+
+Return ONLY one concise JSON object with recommendation (string), confidence
+(high/medium/low), assumptions and missing_information (string arrays),
+proposed_components (objects with id, role, service, proposed_sku, instance_count,
+reason, evidence, security_requirements, validation_required), cost_status
+(not_verified unless scoped prices were supplied), cost_considerations and
+validation_required (string arrays). Use at most four components, three entries
+per array, and one short sentence per explanation. Do not repeat the full source
+facts or knowledge document. Tool use is optional; do not search private repository
+content. Never claim deployment or validation succeeded without execution evidence.
 """
     return prompt
 
 
 def _parse_components_from_text(text: str) -> list[ComponentRecommendation]:
     """Parse structured component recommendations from model response text or headings."""
+    def string_list(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return value if isinstance(value, list) else []
     # First, attempt to parse structured JSON block if present
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate_json = json_match.group(1) if json_match else None
@@ -200,11 +219,11 @@ def _parse_components_from_text(text: str) -> list[ComponentRecommendation]:
                                 proposed_sku=comp_data.get("proposed_sku"),
                                 instance_count=comp_data.get("instance_count"),
                                 reason=str(comp_data.get("reason") or ""),
-                                evidence=comp_data.get("evidence") or [],
-                                security_requirements=comp_data.get("security_requirements") or [],
+                                evidence=string_list(comp_data.get("evidence")),
+                                security_requirements=string_list(comp_data.get("security_requirements")),
                                 availability_recovery=comp_data.get("availability_recovery"),
                                 cost_status=comp_data.get("cost_status"),
-                                validation_required=comp_data.get("validation_required") or [],
+                                validation_required=string_list(comp_data.get("validation_required")),
                                 deployable=is_deployable,
                                 status_note=DEPLOYABLE_SUPPORTED_NOTE if is_deployable else ADVISORY_UNSUPPORTED_NOTE,
                             )
@@ -279,7 +298,7 @@ def invoke_architecture_advisor(
     prompt = build_sanitized_advisor_prompt(facts, project_name, user_query)
     payload: dict[str, Any] = {
         "input": prompt,
-        "max_output_tokens": 3_500,
+        "max_output_tokens": 6_000,
     }
     if conversation_id:
         payload["conversation"] = conversation_id
@@ -471,13 +490,14 @@ def advisor_chat(
         "region": current_plan.get("region_label", "East US"),
     })
 
-    prompt = f"""Current ZeroOps Plan:
+    prompt = f"""TASK_TYPE: ARCHITECTURE_CHAT
+Current ZeroOps Plan:
 {context_str}
 
 User Question/Instruction:
 {message}
 
-Answer with specific architectural advice citing ZeroOps knowledge and current Azure documentation where relevant.
+Answer concisely with specific architectural advice. Cite sources only when actually used.
 Do not claim that resources have already been deployed or altered in the cloud.
 """
 
@@ -497,6 +517,8 @@ Do not claim that resources have already been deployed or altered in the cloud.
         payload["conversation"] = active_conversation_id
 
     response = openai_client.responses.create(**payload)
+    if getattr(response, "status", "completed") != "completed":
+        raise FoundryAdvisorError("Microsoft Foundry did not complete the chat response. Please retry.")
     output_text = str(getattr(response, "output_text", "") or "").strip()
     raw_annotations = extract_annotations(response)
     citations = _classify_citations(raw_annotations)

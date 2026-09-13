@@ -92,10 +92,14 @@ class AzureFoundryProvider:
                 self._project_client = AIProjectClient(
                     endpoint=self.configuration.endpoint,
                     credential=credential,
+                    allow_preview=True,
                 )
 
-            # Use get_openai_client() and invoke via agent_reference in extra_body
-            self._openai_client = self._project_client.get_openai_client()
+            self._openai_client = self._project_client.get_openai_client(
+                agent_name=self.configuration.agent_name or None,
+                timeout=self.configuration.timeout_seconds,
+                max_retries=0,
+            )
         except Exception as error:
             error_str = str(error)
             if "Authentication" in error_str or "Credential" in error_str:

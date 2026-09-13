@@ -62,6 +62,33 @@ def test_extract_json_from_plain_text():
     assert data == {"key": "value", "number": 42}
 
 
+@pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled"])
+def test_partial_agent_output_cannot_be_reported_as_live_success(status):
+    client, api = _make_mock_client('{"summary":"partial"}')
+    api.responses.create.return_value.status = status
+    with pytest.raises(FoundryAgentError, match="did not complete"):
+        client.call_agent_structured(TASK_TERRAFORM_GENERATION, "Generate HCL")
+
+
+def test_agent_chat_needs_no_direct_model_key_and_redacts_context(monkeypatch):
+    from backend import config
+    from backend.services import ai
+    monkeypatch.setattr(config, "ZEROOPS_DEMO_AI", True)
+    monkeypatch.setattr(ai, "AI_REPOSITORY_API_KEY", "")
+    monkeypatch.setattr(ai, "AI_CHAT_MAX_CONTEXT_CHARS", 1000)
+    agent = MagicMock()
+    agent.architecture_chat.return_value = ("real agent reply", None)
+    monkeypatch.setattr("backend.services.zeroops_foundry.get_foundry_client", lambda: agent)
+    result = ai.generate_chat_response("Status?", {"password":"secret-value", "logs":"x" * 2000})
+    assert result == "real agent reply"
+    context = agent.architecture_chat.call_args.args[1]["recorded_context"]
+    assert "secret-value" not in context
+    assert "context truncated" in context
+    agent.architecture_chat.side_effect = RuntimeError("unavailable")
+    monkeypatch.setattr(ai, "OpenAI", lambda **kwargs: pytest.fail("Must not switch models on failure"))
+    assert "No AI response was generated" in ai.generate_chat_response("Status?", {})
+
+
 def test_extract_json_from_markdown_block():
     raw = "Here is the response:\n```json\n{\n  \"action\": \"allow\",\n  \"count\": 1\n}\n```\nDone."
     data = extract_json_from_text(raw)

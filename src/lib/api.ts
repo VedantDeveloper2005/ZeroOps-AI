@@ -1257,7 +1257,7 @@ export const api = {
     request<{ reply: string; plan_updated?: boolean; infrastructure_plan?: InfrastructurePlan | null }>("/api/ai/chat", {
       method: "POST",
       body: JSON.stringify({ message, project_id: projectId }),
-    }),
+    }, 150_000),
 
   analyzeRepository: (projectId: string) =>
     request<Record<string, unknown>>(`/api/projects/${projectId}/analyze`, { method: "POST" }),
@@ -1283,7 +1283,7 @@ export const api = {
     request<{ reply: string; plan_updated: boolean; plan: InfrastructurePlan | null; citations?: CitationEvidence[] }>("/api/ai/architect-chat", {
       method: "POST",
       body: JSON.stringify({ message, project_id: projectId })
-    }),
+    }, 150_000),
 
   // ── Dashboard ──
   getDashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),

@@ -149,8 +149,8 @@ FOUNDRY_PROJECT_ENDPOINT = _setting(
     "FOUNDRY_PROJECT_ENDPOINT",
     "https://zeroops-aitest-resource.services.ai.azure.com/api/projects/zeroops-aitest",
 ).rstrip("/")
-FOUNDRY_AGENT_NAME = _setting("FOUNDRY_AGENT_NAME", "demo")
-FOUNDRY_AGENT_VERSION = _setting("FOUNDRY_AGENT_VERSION", "1")
+FOUNDRY_AGENT_NAME = _setting("FOUNDRY_AGENT_NAME", "zeroops-architecture-advisor")
+FOUNDRY_AGENT_VERSION = _setting("FOUNDRY_AGENT_VERSION", "3")
 FOUNDRY_REQUEST_TIMEOUT_SECONDS = _integer("FOUNDRY_REQUEST_TIMEOUT_SECONDS", 120)
 ZEROOPS_DEMO_AI = (
     os.environ.get("ZEROOPS_DEMO_AI", "").strip().lower() in {"true", "1", "yes", "on"}

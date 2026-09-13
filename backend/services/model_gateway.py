@@ -74,7 +74,8 @@ def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
         provider = config.AI_REPOSITORY_PROVIDER
         endpoint = config.AI_REPOSITORY_ENDPOINT
         agent_name = config.AI_REPOSITORY_AGENT_NAME
-        if getattr(config, "ZEROOPS_DEMO_AI", False) and not config.AI_REPOSITORY_API_KEY:
+        use_agent = getattr(config, "ZEROOPS_DEMO_AI", False)
+        if use_agent:
             provider = "azure-foundry"
             endpoint = config.FOUNDRY_PROJECT_ENDPOINT
             agent_name = config.FOUNDRY_AGENT_NAME
@@ -82,9 +83,9 @@ def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
             provider=provider,
             endpoint=endpoint,
             model=config.AI_REPOSITORY_MODEL,
-            api_key=config.AI_REPOSITORY_API_KEY,
+            api_key="" if use_agent else config.AI_REPOSITORY_API_KEY,
             agent_name=agent_name,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
+            timeout_seconds=config.FOUNDRY_REQUEST_TIMEOUT_SECONDS if use_agent else config.AI_MODEL_TIMEOUT_SECONDS,
             max_input_chars=config.AI_REPOSITORY_MAX_INPUT_CHARS,
             max_output_tokens=config.AI_REPOSITORY_MAX_OUTPUT_TOKENS,
             prompt_version=config.AI_REPOSITORY_PROMPT_VERSION,
@@ -94,7 +95,8 @@ def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
         provider = config.AI_TERRAFORM_PROVIDER
         endpoint = config.AI_TERRAFORM_ENDPOINT
         agent_name = config.AI_TERRAFORM_AGENT_NAME
-        if getattr(config, "ZEROOPS_DEMO_AI", False) and not config.AI_TERRAFORM_API_KEY:
+        use_agent = getattr(config, "ZEROOPS_DEMO_AI", False)
+        if use_agent:
             provider = "azure-foundry"
             endpoint = config.FOUNDRY_PROJECT_ENDPOINT
             agent_name = config.FOUNDRY_AGENT_NAME
@@ -102,9 +104,9 @@ def route_configuration(workload: AIWorkload) -> ProviderConfiguration:
             provider=provider,
             endpoint=endpoint,
             model=config.AI_TERRAFORM_MODEL,
-            api_key=config.AI_TERRAFORM_API_KEY,
+            api_key="" if use_agent else config.AI_TERRAFORM_API_KEY,
             agent_name=agent_name,
-            timeout_seconds=config.AI_MODEL_TIMEOUT_SECONDS,
+            timeout_seconds=config.FOUNDRY_REQUEST_TIMEOUT_SECONDS if use_agent else config.AI_MODEL_TIMEOUT_SECONDS,
             max_input_chars=config.AI_TERRAFORM_MAX_INPUT_CHARS,
             max_output_tokens=config.AI_TERRAFORM_MAX_OUTPUT_TOKENS,
             prompt_version=config.AI_TERRAFORM_PROMPT_VERSION,

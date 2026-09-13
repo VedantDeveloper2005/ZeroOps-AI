@@ -1484,19 +1484,16 @@ spec:
 
 def _foundry_chat(message: str, context: dict) -> str:
     """Use the configured Foundry deployment, surfacing failures explicitly."""
-    if (
-        getattr(config, "ZEROOPS_DEMO_AI", False)
-        and AI_REPOSITORY_API_KEY is not False
-        and AI_REPOSITORY_API_KEY != ""
-    ):
+    if getattr(config, "ZEROOPS_DEMO_AI", False):
         try:
             from backend.services.zeroops_foundry import get_foundry_client
             foundry = get_foundry_client()
-            reply, _ = foundry.architecture_chat(message, context)
+            reply, _ = foundry.architecture_chat(message, {"recorded_context": _bounded_chat_context(context)})
             if reply and reply.strip():
                 return reply.strip()
         except Exception as err:
-            ai_logger.warning("ZeroOps Foundry client chat failed, falling back: %s", err)
+            ai_logger.warning("ZeroOps Foundry agent chat failed: %s", type(err).__name__)
+        return "Microsoft Foundry is temporarily unavailable. No AI response was generated. Please retry."
 
     from backend.services.providers.azure_openai import _validated_endpoint
     if not AI_REPOSITORY_API_KEY or not AI_REPOSITORY_MODEL:

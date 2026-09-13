@@ -85,6 +85,7 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
     provider = os.getenv("AI_REPOSITORY_PROVIDER", "azure-openai")
     if provider.strip().lower().replace("_", "-") not in {
         "azure-openai",
+        "azure-foundry",
         "foundry-openai",
         "microsoft-foundry-openai",
     }:
@@ -94,6 +95,10 @@ def dependencies_from_environment() -> RepositoryHandlerDependencies:
     try:
         model_client = StructuredModelClient(
             provider=provider,
+            credential=credential,
+            agent_name=os.getenv("FOUNDRY_AGENT_NAME", "zeroops-architecture-advisor"),
+            agent_version=os.getenv("FOUNDRY_AGENT_VERSION", "3"),
+            timeout_seconds=120.0,
             endpoint=os.getenv(
                 "AI_REPOSITORY_ENDPOINT",
                 "",

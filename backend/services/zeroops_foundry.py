@@ -1,6 +1,6 @@
 """Centralized Azure AI Foundry client service for ZeroOps AI.
 
-Integrates the unified Microsoft Foundry Prompt Agent (`demo`, version `1`)
+Integrates the configured Microsoft Foundry Prompt Agent (`zeroops-architecture-advisor`)
 as the primary AI engine for the ZeroOps college demonstration. Supports:
 - REPOSITORY_ANALYSIS
 - ARCHITECTURE_RECOMMENDATION
@@ -80,8 +80,8 @@ class FoundryAuthorizationError(FoundryAgentError):
 @dataclass(frozen=True)
 class FoundryProvenance:
     provider: str = "azure-ai-foundry"
-    agent: str = "demo"
-    agent_version: str = "1"
+    agent: str = "zeroops-architecture-advisor"
+    agent_version: str = "3"
     task_type: str = ""
     execution_mode: str = "live"
     ai_used: bool = True
@@ -139,7 +139,7 @@ def extract_json_from_text(text: str) -> dict[str, Any]:
 
 
 class ZeroOpsFoundryClient:
-    """Unified client communicating with the Azure AI Foundry 'demo' v1 agent."""
+    """Unified client communicating with the retained ZeroOps Foundry agent."""
 
     def __init__(
         self,
@@ -152,8 +152,8 @@ class ZeroOpsFoundryClient:
         timeout_seconds: int | None = None,
     ) -> None:
         self.endpoint = (endpoint or config.FOUNDRY_PROJECT_ENDPOINT).strip().rstrip("/")
-        self.agent_name = (agent_name or config.FOUNDRY_AGENT_NAME or "demo").strip()
-        self.agent_version = (agent_version or config.FOUNDRY_AGENT_VERSION or "1").strip()
+        self.agent_name = (agent_name or config.FOUNDRY_AGENT_NAME or "zeroops-architecture-advisor").strip()
+        self.agent_version = (agent_version or config.FOUNDRY_AGENT_VERSION or "3").strip()
         self.timeout_seconds = timeout_seconds or getattr(config, "FOUNDRY_REQUEST_TIMEOUT_SECONDS", 120)
 
         self._project_client = project_client
@@ -192,10 +192,15 @@ class ZeroOpsFoundryClient:
                 self._project_client = AIProjectClient(
                     endpoint=self.endpoint,
                     credential=credential,
+                    allow_preview=True,
                 )
-            # Use get_openai_client without agent_name so invocation happens via
-            # extra_body={"agent_reference": ...} without needing agents/write permissions
-            self._openai_client = self._project_client.get_openai_client()
+            # Agent invocation is scoped to the existing agent; project responses
+            # require agents/write even when an agent_reference is supplied.
+            self._openai_client = self._project_client.get_openai_client(
+                agent_name=self.agent_name,
+                timeout=self.timeout_seconds,
+                max_retries=0,
+            )
             return self._openai_client
         except Exception as err:
             err_str = str(err).lower()
@@ -305,6 +310,12 @@ Never claim an operation succeeded unless execution results confirm it.
             ) from err
 
         latency_ms = max(0, round((time.perf_counter() - started) * 1_000))
+        if getattr(response, "status", "completed") != "completed":
+            raise FoundryAgentError(
+                "Microsoft Foundry response did not complete.",
+                task_type=task_type,
+                error_code="incomplete_response",
+            )
         output_text = str(getattr(response, "output_text", "") or "").strip()
 
         if not output_text:
@@ -445,6 +456,7 @@ Never claim an operation succeeded unless execution results confirm it.
             task_type=TASK_ARCHITECTURE_CHAT,
             user_input=user_input,
             context=context,
+            max_output_tokens=config.AI_CHAT_MAX_OUTPUT_TOKENS,
         )
 
     def analyze_failure(

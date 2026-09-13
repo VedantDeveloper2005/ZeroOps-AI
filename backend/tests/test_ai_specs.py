@@ -92,7 +92,7 @@ def test_evaluation_datasets_are_valid_jsonl_and_contain_regression_coverage():
         assert "cost" in tags
 
 
-def test_specs_use_current_github_model_conventions_and_foundry_isolation():
+def test_prompt_assets_and_active_foundry_configuration():
     repository_prompt = (
         SPEC_ROOT / "repository-analysis/github-models.prompt.yml"
     ).read_text(encoding="utf-8")
@@ -105,11 +105,13 @@ def test_specs_use_current_github_model_conventions_and_foundry_isolation():
     assert "model: openai/gpt-4.1" in terraform_prompt
     assert "temperature: 0" in repository_prompt
     assert "temperature: 0" in terraform_prompt
-    assert "https://models.github.ai/inference" in portal_guide
-    assert "zeroops-repository-analyst" in portal_guide
-    assert "zeroops-terraform-generator" in portal_guide
+    assert "https://models.github.ai/inference" not in portal_guide
+    assert "FOUNDRY_AGENT_NAME=zeroops-architecture-advisor" in portal_guide
+    assert "FOUNDRY_AGENT_VERSION=3" in portal_guide
+    assert "AI_REPOSITORY_PROVIDER=azure-foundry" in portal_guide
+    assert "AI_TERRAFORM_PROVIDER=azure-foundry" in portal_guide
     assert "managed identity" in portal_guide.lower()
-    assert "must not be able to read" in " ".join(portal_guide.lower().split())
+    assert "own managed identity" in " ".join(portal_guide.lower().split())
 
 
 def test_instruction_files_preserve_truth_security_cost_and_execution_boundaries():

@@ -1,5 +1,3 @@
-> Configuration update (2026-09-11): Microsoft Foundry is the sole supported AI provider. NVIDIA, Groq, GitHub Models, and their fallback settings below are historical and must not be configured. See [the live repair report](../docs/production-repair-2026-09-11.md).
-
 # ZeroOps Azure Functions
 
 Three Python 3.13 Flex Consumption Function apps implement the asynchronous
@@ -103,70 +101,34 @@ POSTGRES_ENTRA_USER=<database principal mapped to the Function identity>
 POSTGRES_SSL_MODE=verify-full
 ```
 
-Repository analysis:
+## Current model configuration and deployment status
+
+The live backend uses `zeroops-architecture-advisor` version 3. See
+[the Foundry guide](../ai-specs/FOUNDRY-PORTAL.md). The removed demo agent and
+NVIDIA/Groq/GitHub Models providers must not be configured.
+
+The isolated Functions support the retained prompt agent through managed identity:
 
 ```text
-REPOSITORY_ANALYSIS_QUEUE_NAME=repo-analysis
-ARTIFACT_STORAGE_ACCOUNT_URL=https://<artifact-account>.blob.core.windows.net
-AI_REPOSITORY_PROVIDER=nvidia
-AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
-AI_REPOSITORY_MODEL=z-ai/glm-5.2
-AI_REPOSITORY_API_KEY=<Key Vault reference resolved by the Function platform>
-AI_REPOSITORY_PROMPT_VERSION=repository-analysis.v1
-AI_REPOSITORY_FALLBACK_PROVIDER=groq
-AI_REPOSITORY_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
-AI_REPOSITORY_FALLBACK_MODEL=openai/gpt-oss-120b
-AI_REPOSITORY_FALLBACK_API_KEY=<a second reference in the analysis Key Vault>
-AI_REPOSITORY_FALLBACK_PROMPT_VERSION=repository-analysis.v1
-AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS=14000
-AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS=800
+AI_REPOSITORY_PROVIDER=azure-foundry
+AI_REPOSITORY_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+AI_REPOSITORY_MODEL=<deployment-name>
+AI_TERRAFORM_PROVIDER=azure-foundry
+AI_TERRAFORM_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+AI_TERRAFORM_MODEL=<deployment-name>
+FOUNDRY_AGENT_NAME=zeroops-architecture-advisor
+FOUNDRY_AGENT_VERSION=3
 ```
 
-`AI_REPOSITORY_API_KEY` is a versionless reference to the
-`ai-repository-api-key` secret and `AI_REPOSITORY_FALLBACK_API_KEY` references
-`ai-repository-fallback-api-key` in the repository-analysis Key Vault.
+Each Function uses its own workload identity; API keys are ignored on the agent
+route. The Terraform agent route generates and validates actual model output
+before enqueueing the immutable bundle. The compatibility `azure-openai` route
+retains the deterministic App Service renderer. Model and execution provenance
+remain distinct. The adapter passed a live connectivity test; Function deployment
+and end-to-end application integration remain in progress.
 
-Terraform generation:
-
-```text
-TERRAFORM_GENERATION_QUEUE_NAME=terraform-generation
-TERRAFORM_PLAN_QUEUE_NAME=terraform-plan
-ARTIFACT_STORAGE_ACCOUNT_URL=https://<artifact-account>.blob.core.windows.net
-AI_TERRAFORM_PROVIDER=nvidia
-AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
-AI_TERRAFORM_MODEL=z-ai/glm-5.2
-AI_TERRAFORM_API_KEY=<a different Key Vault reference>
-AI_TERRAFORM_PROMPT_VERSION=terraform-generation.v1
-AI_TERRAFORM_FALLBACK_PROVIDER=groq
-AI_TERRAFORM_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
-AI_TERRAFORM_FALLBACK_MODEL=openai/gpt-oss-120b
-AI_TERRAFORM_FALLBACK_API_KEY=<a second reference in the Terraform Key Vault>
-AI_TERRAFORM_FALLBACK_PROMPT_VERSION=terraform-generation.v1
-AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS=14000
-AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS=1000
-```
-
-`AI_TERRAFORM_API_KEY` is a versionless reference to the
-`ai-terraform-api-key` secret and `AI_TERRAFORM_FALLBACK_API_KEY` references
-`ai-terraform-fallback-api-key` in the Terraform-generation Key Vault. The two
-workers use different managed identities and cannot read each other's vault.
-`GROQ_API_KEY` is deliberately ignored; neither workload inherits a generic
-credential or the other workload's fallback key. For a local test, the two
-fallback secrets may be populated explicitly with the same Groq value. They
-remain separate settings and must use independently rotatable credentials in
-production.
-
-Each worker makes at most one Groq request after an eligible NVIDIA provider or
-structured-contract failure. Groq input/output budgets are smaller than the
-primary route and Groq receives no repair request. Input-budget failures and
-deterministic policy violations never trigger fallback. After both routes fail,
-repository analysis returns its evidence-only result while Terraform generation
-fails closed. A successful fallback still passes Pydantic, semantic, Terraform,
-policy, VMSS plan, and human-approval gates. The generation Function never
-performs `terraform apply`; a later VMSS apply job can do so only for the exact
-saved plan after the durable approval, cost, scope, and policy bindings pass.
-
-The VMSS never receives any model setting or model Key Vault permission.
+The VMSS receives no model credential. Apply remains bound to an exact saved
+plan and durable approval; successful model output is never execution proof.
 
 ## Local tests
 

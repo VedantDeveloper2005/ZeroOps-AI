@@ -247,6 +247,9 @@ class StructuredModelClient:
         timeout_seconds: float = 45.0,
         api_version: str = "2026-03-10",
         transport: httpx.BaseTransport | None = None,
+        credential: Any = None,
+        agent_name: str = "zeroops-architecture-advisor",
+        agent_version: str = "3",
     ):
         self.provider = provider.strip().lower().replace("_", "-")
         self.endpoint = endpoint.strip().rstrip("/")
@@ -259,6 +262,20 @@ class StructuredModelClient:
         self.timeout_seconds = timeout_seconds
         self.api_version = api_version.strip()
         self.transport = transport
+        self.agent_name = agent_name
+        self.agent_version = agent_version
+        self.credential = credential
+        if self.provider == "azure-foundry":
+            parsed = urlparse(self.endpoint)
+            if (parsed.scheme != "https" or not (parsed.hostname or "").endswith(".services.ai.azure.com")
+                    or not parsed.path.startswith("/api/projects/") or parsed.username
+                    or parsed.password or parsed.query or parsed.fragment or parsed.port):
+                raise ValueError("Foundry agent requires an HTTPS project endpoint")
+            if credential is None or not agent_name or not agent_version:
+                raise ModelUnavailableError("Foundry agent identity and version are required")
+            self.model = model.strip() or agent_name
+            self.api_key = ""
+            return
         if self.provider in {"azure-openai", "foundry-openai", "microsoft-foundry-openai"}:
             self.provider = "azure-openai"
             self.endpoint = _azure_openai_endpoint(self.endpoint)
@@ -380,7 +397,32 @@ class StructuredModelClient:
         *,
         output_schema: dict[str, Any],
     ) -> tuple[str, dict[str, int]]:
+        if self.provider == "azure-foundry":
+            return self._request_foundry_agent(messages)
         return self._request_azure_openai(messages, output_schema=output_schema)
+
+    def _request_foundry_agent(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
+        from azure.ai.projects import AIProjectClient
+
+        task = "TERRAFORM_GENERATION" if self.workload == "terraform-generation" else "REPOSITORY_ANALYSIS"
+        try:
+            with AIProjectClient(endpoint=self.endpoint, credential=self.credential, allow_preview=True) as project:
+                with project.get_openai_client(agent_name=self.agent_name, timeout=self.timeout_seconds, max_retries=0) as client:
+                    response = client.responses.create(
+                        input=[{"role": "user", "content": f"TASK_TYPE: {task}\n" + json.dumps(messages)}],
+                        extra_body={"agent_reference": {"type": "agent_reference", "name": self.agent_name, "version": self.agent_version}},
+                        max_output_tokens=self.maximum_output_tokens,
+                        store=False,
+                    )
+        except Exception as error:
+            raise ModelUnavailableError("Foundry agent request failed") from error
+        if response.status != "completed" or not response.output_text:
+            raise ModelContractError("Foundry agent did not complete structured output")
+        usage = response.usage
+        return response.output_text, {
+            "prompt_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "completion_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        }
 
     def _request_azure_openai(
         self,

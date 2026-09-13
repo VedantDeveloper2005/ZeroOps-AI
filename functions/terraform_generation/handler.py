@@ -562,6 +562,7 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
     primary_provider = os.getenv("AI_TERRAFORM_PROVIDER", "azure-openai")
     if primary_provider.strip().lower().replace("_", "-") not in {
         "azure-openai",
+        "azure-foundry",
         "foundry-openai",
         "microsoft-foundry-openai",
     }:
@@ -569,6 +570,10 @@ def dependencies_from_environment() -> TerraformHandlerDependencies:
     try:
         model_client: StructuredModelClient | None = StructuredModelClient(
             provider=primary_provider,
+            credential=credential,
+            agent_name=os.getenv("FOUNDRY_AGENT_NAME", "zeroops-architecture-advisor"),
+            agent_version=os.getenv("FOUNDRY_AGENT_VERSION", "3"),
+            timeout_seconds=120.0,
             endpoint=os.getenv(
                 "AI_TERRAFORM_ENDPOINT",
                 "",
@@ -647,11 +652,23 @@ def handle_terraform_generation(
             raise ValueError(
                 "Terraform request identity, revision, or approved-plan digest mismatch."
             )
-        bundle = _render_approved_bundle(request)
-        provenance_value = _deterministic_provenance(
-            request,
-            correlation_id=job.correlation_id,
-        )
+        if getattr(deps.model_client, "provider", None) == "azure-foundry":
+            bundle, provenance, routing = generate_with_provenance(
+                primary=deps.model_client,
+                system_instructions=deps.instructions,
+                input_value=request.model_dump(mode="json"),
+                output_model=TerraformBundle,
+                schema_version="terraform-bundle.v1",
+                correlation_id=job.correlation_id,
+                semantic_validator=lambda value: validate_terraform_bundle(value, request),
+            )
+            provenance_value = {**asdict(provenance), "routing": asdict(routing)}
+        else:
+            bundle = _render_approved_bundle(request)
+            provenance_value = _deterministic_provenance(
+                request,
+                correlation_id=job.correlation_id,
+            )
         validate_terraform_bundle(bundle, request)
         ordered_files = sorted(bundle.files, key=lambda item: item.path)
         file_manifest = [

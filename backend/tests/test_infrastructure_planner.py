@@ -140,6 +140,7 @@ def test_chat_explicit_command_can_switch_a_detected_database_to_cosmos():
 
 
 def test_architect_question_explains_the_saved_plan_without_mutating_it(monkeypatch):
+    monkeypatch.setattr("backend.config.ZEROOPS_DEMO_AI", False)
     plan = planner.build_infrastructure_plan(source_facts(), region="eastus")
     monkeypatch.setattr("backend.services.ai.AI_REPOSITORY_API_KEY", "")
 

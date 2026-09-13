@@ -1,3 +1,46 @@
+# September 13: complete application release workflow
+
+Status: Implementation and validation in progress.
+
+Authorization: User explicitly requests application source preparation (including Dockerfiles and necessary fixes), Foundry Terraform generation, execution on the existing VMSS, and a separate resource group for each project in Mohit's subscription. A standalone VM is authorized only if VMSS proves unsuitable. Preserve real checks and approval bindings; never substitute fabricated success.
+
+Target: Mohit subscription 7abbc9d1-585e-452a-9f6d-a137a0015959, Central India. Reuse the existing execution VMSS and registry where possible. Establish deterministic project-specific resource-group names, immutable prepared-source revisions, and Terraform saved-plan execution before application release.
+
+Work: inspect existing application preparation and queue boundaries; implement the missing production execution integration; validate code and IaC; deploy prepared components; run the existing azure-demo project through preparation, Terraform, application release and live health checks. Record actual logs, resource IDs and failures. Changes to user source must be reviewable and source-bound before infrastructure generation.
+
+---
+
+# September 13: Foundry and Mohit workload hosting repair
+
+Status: Hosting foundation deployed; application workflow integration pending. User explicitly selected Mohit's subscription for application resources, requested real Terraform provisioning, and requested keeping zeroops-architecture-advisor while removing demo after verification.
+
+Scope: Repair existing frontend/backend; retain the existing Foundry project and publish agent version 3 with all workload instructions. Prepare an isolated Terraform root for one Linux B1 App Service plan and one Basic ACR in the existing empty zeroops-demo-workload-rg, Central India, subscription 7abbc9d1-585e-452a-9f6d-a137a0015959, tenant 4df935fe-ee7e-4b05-9701-bf58fd1fd854. Reuse remote Entra-only Terraform state in zeroopstfstate7abb/platform-tfstate with a distinct workload-hosting key. No changes to the VMSS or other existing resource groups in this hosting stage.
+
+Validation: ARM preflight for Linux B1 in this exact resource group and region succeeded. Terraform fmt, validate, immutable saved-plan inspection and apply verification passed (proof below). Creating a hosting plan/registry does not establish an application release, deploy missing queue consumers, or implement the absent production repository executor. Do not record fabricated deployment results.
+
+Foundry: Cross-tenant federation and agent-bound Responses endpoint verified with real HTTP 200 from the backend. Agent v3 was created preserving its web_search and file_search tools. SDK versions resolve for Python 3.11. The user deleted demo; Foundry lists only zeroops-architecture-advisor v3. Live Chrome advisor output and plan-assistant chat both returned successfully on September 13.
+
+## September 13 connection repair
+
+- Created `zeroops-mohit-workloads` application identity (client ID 2634be71-2605-4c0d-843a-028a1b1347d9), Contributor on only zeroops-demo-workload-rg. No subscription-wide role or role-assignment delegation was added.
+- Saved its credential only in Key Vault. Connected the existing VedantDeveloper2005 user using the application's actual validation and save function, with real Azure resource lookups.
+- Fixed Azure SDK 26 compatibility: resources.get_by_id requires keyword-only api_version. Seven connector regression tests passed with a matching mock signature.
+- Exact target verified at 2026-09-13T04:01:11Z: Mohit subscription, Central India, zeroopsapps7abb.azurecr.io, asp-zeroops-workloads.
+- Backend SDK-fix ZIP SHA-256: 4795372c7828e92d83b1eac9320e762f0895207b9070a317cb38c5cfb984c4b6. Azure deployment d720ac27-5039-45e3-8e29-a737f4292d38 completed RuntimeSuccessful; runtime startup completed at 04:09:08 UTC. Live Chrome Verify & save succeeded after sign-in refresh; the database records a fresh verification at 04:11:00 UTC.
+- Outstanding: isolated Function consumers, production application worker/repository sandbox, and narrowly scoped application identity registry-pull provisioning. No end-to-end application release has been verified.
+
+## September 13 hosting validation proof
+- Terraform 1.15.8 and Azure CLI authenticated to the explicitly selected Mohit subscription.
+- `terraform init -input=false`: Entra-only remote backend connected; AzureRM 4.81.0 installed with verified provider signature.
+- `terraform fmt -check` and `terraform validate`: passed.
+- `terraform plan -input=false`: exactly two creates (Linux B1 plan and Basic ACR), zero updates or destroys; existing workload resource group is read only.
+- Microsoft.Web and Microsoft.ContainerRegistry are registered. ARM hosting preflight succeeded in Central India. No new role assignments, plaintext credentials, anonymous registry access or changes to existing resources are in this plan.
+- Terraform apply completed: 2 added, 0 changed, 0 destroyed. Outputs: asp-zeroops-workloads, zeroopsapps7abb.azurecr.io, centralindia, zeroops-demo-workload-rg. This was a real operator-applied hosting bootstrap, not a VMSS application workflow result.
+- Saved plan SHA-256: 6e6b33c72583cbc9a805e8262a6a633f52d326071934c2796aca9c34f0706f1b.
+- User authorization: explicit request to deploy resources in Mohit's subscription and fix end-to-end deployment. This apply establishes hosting prerequisites only; queue consumers and application execution remain separate outstanding steps.
+
+---
+
 # September 11 integration repair — code release
 
 Status: Validated (frontend/backend code packages only). The historical infrastructure

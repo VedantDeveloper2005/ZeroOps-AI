@@ -124,7 +124,7 @@ def _validate_target_resources(
         app_service_plan,
     )
 
-    registry = resource_client.resources.get_by_id(registry_id, ACR_RESOURCE_API_VERSION)
+    registry = resource_client.resources.get_by_id(registry_id, api_version=ACR_RESOURCE_API_VERSION)
     _validate_resource_identity(
         registry,
         expected_id=registry_id,
@@ -140,7 +140,7 @@ def _validate_target_resources(
     if registry_state and registry_state != "succeeded":
         raise AzureTargetValidationError("The configured container registry is not ready.")
 
-    plan = resource_client.resources.get_by_id(plan_id, APP_SERVICE_PLAN_API_VERSION)
+    plan = resource_client.resources.get_by_id(plan_id, api_version=APP_SERVICE_PLAN_API_VERSION)
     _validate_resource_identity(
         plan,
         expected_id=plan_id,

@@ -4324,7 +4324,7 @@ async def ai_chat(
                 plan_updated = True
             plan_payload = _serialize_infrastructure_plan(architecture_plan).model_dump(mode="json")
 
-    reply = ai.generate_chat_response(req.message, project_metadata)
+    reply = await asyncio.to_thread(ai.generate_chat_response, req.message, project_metadata)
     if plan_update_summary:
         reply = f"{reply}\n\nArchitecture plan updated: {plan_update_summary} Review and approve the revised plan before deployment."
     return {
@@ -6044,5 +6044,4 @@ async def post_architect_chat(
         plan=_serialize_infrastructure_plan(plan),
         citations=citations,
     )
-
 

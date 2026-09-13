@@ -1,0 +1,10 @@
+{
+  "provider": "azure-ai-foundry",
+  "agent": "zeroops-architecture-advisor",
+  "agent_version": "3",
+  "task_type": "TERRAFORM_GENERATION",
+  "execution_mode": "live",
+  "ai_used": true,
+  "latency_ms": 12742,
+  "fallback_reason": null
+}

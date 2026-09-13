@@ -406,6 +406,51 @@ def test_model_claimed_citations_do_not_prove_tool_use():
     assert [c.source_type for c in result.evidence_sources] == ["repository"]
 
 
+@pytest.mark.parametrize("kind", ["advisor", "unified", "provider"])
+def test_all_foundry_clients_use_federation_and_agent_endpoint(monkeypatch, kind):
+    from backend.services.zeroops_foundry import ZeroOpsFoundryClient
+    from backend import config as settings
+
+    credential = object()
+    with patch("backend.services.foundry_identity.foundry_credential", return_value=credential), \
+         patch("azure.ai.projects.AIProjectClient") as project:
+        if kind == "advisor":
+            client = FoundryAdvisorClient(agent_name="demo", agent_version="1")
+            client.get_client()
+            timeout = settings.FOUNDRY_REQUEST_TIMEOUT_SECONDS
+        elif kind == "unified":
+            client = ZeroOpsFoundryClient(agent_name="demo", agent_version="1", timeout_seconds=45)
+            client._get_openai_client()
+            timeout = 45
+        else:
+            client = AzureFoundryProvider(ProviderConfiguration(
+                provider="azure-foundry", endpoint=settings.FOUNDRY_PROJECT_ENDPOINT,
+                model="gpt-5.6-terra", agent_name="demo", agent_version="1", timeout_seconds=45,
+            ))
+            client._client()
+            timeout = 45
+        assert project.call_args.kwargs["credential"] is credential
+        assert project.call_args.kwargs["allow_preview"] is True
+        project.return_value.get_openai_client.assert_called_once_with(
+            agent_name="demo", timeout=timeout, max_retries=0,
+        )
+
+
+def test_agent_component_text_fields_are_preserved_as_single_items():
+    from backend.services.foundry_advisor import _parse_components_from_text
+    content = {"proposed_components": [{
+        "id": "web", "service": "Azure App Service for Linux", "role": "Runtime",
+        "reason": "Docker was detected", "evidence": "Dockerfile",
+        "security_requirements": "HTTPS", "validation_required": "Verify startup",
+    }]}
+    components = _parse_components_from_text(json.dumps(content))
+    assert len(components) == 1
+    assert components[0].evidence == ["Dockerfile"]
+    assert components[0].security_requirements == ["HTTPS"]
+    assert components[0].validation_required == ["Verify startup"]
+    assert components[0].deployable is True
+
+
 def test_cross_tenant_credential_exchanges_source_identity_for_target(monkeypatch):
     from backend import config
     from backend.services.foundry_identity import foundry_credential

@@ -66,7 +66,7 @@ def _install_azure_sdk_mocks(monkeypatch, *, registry=None, plan=None, error=Non
             return SimpleNamespace(name=resource_group)
 
     class Resources:
-        def get_by_id(self, resource_id, api_version):
+        def get_by_id(self, resource_id, *, api_version):
             calls["resources"].append((resource_id, api_version))
             if error is not None:
                 raise error

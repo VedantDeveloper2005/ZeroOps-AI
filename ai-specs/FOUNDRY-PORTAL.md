@@ -1,128 +1,49 @@
-> Configuration update (2026-09-11): Microsoft Foundry is the sole supported AI provider. NVIDIA, Groq, GitHub Models, and their fallback settings below are historical and must not be configured. See [the live repair report](../docs/production-repair-2026-09-11.md).
+# Microsoft Foundry configuration
 
-# Microsoft Foundry portal and import guide
+ZeroOps uses the retained `zeroops-architecture-advisor` agent, version `3`, in
+project `zeroops-aitest`. The `demo` agent was deleted by the user and its absence
+was verified in Foundry on September 13, 2026. Do not recreate it or configure
+NVIDIA, Groq, or GitHub Models as runtime providers.
 
-Use two separate prompt agents in the ZeroOps Foundry project.
-
-| Agent | Suggested name | Canonical assets |
-|---|---|---|
-| Repository analysis | `zeroops-repository-analyst` | `repository-analysis/instructions.md`, `repository-analysis/response.foundry.schema.json` |
-| Terraform generation | `zeroops-terraform-generator` | `terraform-generation/instructions.md`, `terraform-generation/response.foundry.schema.json` |
-
-Do not combine these into a single general-purpose agent. Separation provides
-independent access control, model selection, evaluation, quota, rotation, and
-incident containment.
-
-## Portal setup
-
-For each agent:
-
-1. Create a prompt agent in the intended Foundry project.
-2. Choose a model deployment that supports strict structured JSON output.
-3. Paste the complete matching `instructions.md` into Agent instructions.
-4. Configure Text format as JSON Schema and paste the complete matching
-   `response.foundry.schema.json`. The application retains
-   `response.schema.json` for richer runtime validation.
-5. Do not attach Code Interpreter, File Search, web search, Azure action, shell,
-   MCP, or deployment tools. The agents only transform bounded input to
-   bounded JSON.
-6. Disable agent memory for application traffic. Invoke each request as an
-   isolated operation; ZeroOps owns tenant history.
-7. Enable Application Insights tracing, but record identifiers, model/version,
-   token counts, latency, validation status, and error codes only. Do not
-   export repository contents, Terraform source, secrets, or raw prompts to
-   telemetry.
-8. Create an evaluation using the matching `evaluation.dataset.jsonl`. Map
-   `query` to the user input and use `expected_behavior`, `must_include`, and
-   `must_not_include` in deterministic/custom evaluators.
-
-Repository content and approved-plan JSON are untrusted request data. Never
-interpolate them into persistent agent instructions or saved workflow
-variables. Structured inputs may carry trusted, non-secret values such as
-`prompt_version` or `policy_version`; they must not carry source code, access
-tokens, SAS URLs, connection strings, or tenant display names.
-
-## Runtime configuration
-
-During NVIDIA Build testing, keep the two independent primary and fallback
-setting groups:
+## Live backend route
 
 ```text
-AI_REPOSITORY_PROVIDER=nvidia
-AI_REPOSITORY_ENDPOINT=https://integrate.api.nvidia.com/v1
-AI_REPOSITORY_MODEL=z-ai/glm-5.2
-AI_REPOSITORY_API_KEY=<Key Vault secret>
-AI_REPOSITORY_FALLBACK_PROVIDER=groq
-AI_REPOSITORY_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
-AI_REPOSITORY_FALLBACK_MODEL=openai/gpt-oss-120b
-AI_REPOSITORY_FALLBACK_API_KEY=<analysis-vault fallback secret>
-AI_REPOSITORY_FALLBACK_MAX_INPUT_CHARS=14000
-AI_REPOSITORY_FALLBACK_MAX_OUTPUT_TOKENS=800
-
-AI_TERRAFORM_PROVIDER=nvidia
-AI_TERRAFORM_ENDPOINT=https://integrate.api.nvidia.com/v1
-AI_TERRAFORM_MODEL=z-ai/glm-5.2
-AI_TERRAFORM_API_KEY=<different Key Vault secret>
-AI_TERRAFORM_FALLBACK_PROVIDER=groq
-AI_TERRAFORM_FALLBACK_ENDPOINT=https://api.groq.com/openai/v1
-AI_TERRAFORM_FALLBACK_MODEL=openai/gpt-oss-120b
-AI_TERRAFORM_FALLBACK_API_KEY=<Terraform-vault fallback secret>
-AI_TERRAFORM_FALLBACK_MAX_INPUT_CHARS=14000
-AI_TERRAFORM_FALLBACK_MAX_OUTPUT_TOKENS=1000
+FOUNDRY_PROJECT_ENDPOINT=https://zeroops-aitest-resource.services.ai.azure.com/api/projects/zeroops-aitest
+FOUNDRY_AGENT_NAME=zeroops-architecture-advisor
+FOUNDRY_AGENT_VERSION=3
 ```
 
-The runtime never reads a generic `GROQ_API_KEY`. A small test may put the same
-newly rotated Groq value into the two explicitly named fallback secrets, but
-each Function identity can resolve only its own vault reference. The fallback
-is attempted once only after NVIDIA transport or structured-output failure. It
-is not attempted for input-budget, evidence-policy, or Terraform safety
-rejection, and Groq receives no repair retry.
+The deployment uses the existing backend managed identity and cross-tenant
+federation into Mohit's tenant. The agent-bound Responses client must use
+`AIProjectClient(allow_preview=True)` and `get_openai_client(agent_name=...)`.
+Project-wide Responses requests are not an equivalent authorization path.
+The pinned SDK is `azure-ai-projects==2.1.0`.
 
-The checked-in GitHub Models prompt assets remain available for manual prompt
-evaluation at `https://models.github.ai/inference`; they are not a runtime
-fallback and do not receive either workload credential.
+The historical `ZEROOPS_DEMO_AI` setting selects the unified real Foundry route;
+it does not authorize fabricated output or the development repository executor.
+Production must keep `ZEROOPS_DEMO_EXECUTOR=false`.
 
-For a Foundry prompt-agent route authenticated with managed identity, use these
-settings and leave both API-key settings empty:
+Canonical retained-agent instructions are in
+[foundry-advisor-instructions.txt](../docs/foundry-advisor-instructions.txt).
+They cover analysis, architecture, chat, failure investigation, security,
+Terraform generation and deployment guidance. Web/file search tools remain
+attached; their use and returned citations must be reported from actual calls.
+The model must never execute deployments or manufacture execution evidence.
 
-```text
-AI_REPOSITORY_PROVIDER=azure-foundry
-AI_REPOSITORY_ENDPOINT=https://<account>.ai.azure.com/api/projects/<project>
-AI_REPOSITORY_AGENT_NAME=zeroops-repository-analyst
+## Isolated workload integration status
 
-AI_TERRAFORM_PROVIDER=azure-foundry
-AI_TERRAFORM_ENDPOINT=https://<account>.ai.azure.com/api/projects/<project>
-AI_TERRAFORM_AGENT_NAME=zeroops-terraform-generator
-```
+The Function packages now support the retained prompt agent with
+`AI_REPOSITORY_PROVIDER=azure-foundry` and `AI_TERRAFORM_PROVIDER=azure-foundry`.
+Set each workload's endpoint to the project URL above, and grant its own managed
+identity the required project access. No API key is needed for this route.
+The agent route performs real inference and validates structured output before
+creating an immutable Terraform bundle. Partial responses fail closed.
+The older Azure OpenAI route retains the deterministic App Service renderer.
 
-Grant each workload identity only the Foundry role required to invoke its own
-agent. The API, Terraform VMSS, and the other AI workload must not be able to
-read that workload's model credential.
-
-For a Microsoft Foundry **Azure OpenAI model deployment** using an API key, the
-runtime now supports the OpenAI v1 Responses API. This is separate from the
-managed-identity prompt-agent route above. Keep NVIDIA as the default unless
-you deliberately switch a workload:
-
-```text
-AI_REPOSITORY_PROVIDER=azure-openai
-AI_REPOSITORY_ENDPOINT=https://<resource>.openai.azure.com/openai/v1
-AI_REPOSITORY_MODEL=<repository deployment name>
-AI_REPOSITORY_API_KEY=<repository-vault API-key secret>
-
-AI_TERRAFORM_PROVIDER=azure-openai
-AI_TERRAFORM_ENDPOINT=https://<resource>.openai.azure.com/openai/v1
-AI_TERRAFORM_MODEL=<terraform deployment name>
-AI_TERRAFORM_API_KEY=<terraform-vault API-key secret>
-```
-
-The API key is only read from the existing workload-specific key setting; it
-is never logged or shared across workers. The endpoint and model/deployment
-name are non-secret app settings. `foundry-openai` is accepted as an alias, but
-use `azure-openai` in new configuration. The existing Groq fallback remains
-unchanged. After a Terraform-managed deployment, set the corresponding
-`repository_ai_*` or `terraform_ai_*` Terraform variables too, so a later
-apply does not restore the NVIDIA defaults.
+The adapter passed a live agent connectivity test. Production Function deployment,
+application-worker integration and full release verification remain in progress.
+A Docker repository executor has been added with disposable, network-disabled
+containers; it still needs live verification and integration with prepared images.
 
 ## Application invocation contract
 

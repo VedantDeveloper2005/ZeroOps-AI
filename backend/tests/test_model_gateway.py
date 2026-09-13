@@ -123,6 +123,7 @@ class FakeProvider:
 
 
 def test_workload_routes_use_distinct_credentials_without_legacy_fallback(monkeypatch):
+    monkeypatch.setattr(config, "ZEROOPS_DEMO_AI", False)
     monkeypatch.setattr(config, "AI_REPOSITORY_API_KEY", "repository-key")
     monkeypatch.setattr(config, "AI_TERRAFORM_API_KEY", "terraform-key")
 
@@ -139,6 +140,18 @@ def test_workload_routes_use_distinct_credentials_without_legacy_fallback(monkey
 
     monkeypatch.setattr(config, "AI_REPOSITORY_API_KEY", "")
     assert route_configuration(AIWorkload.REPOSITORY_ANALYSIS).api_key == ""
+
+
+@pytest.mark.parametrize("workload", list(AIWorkload))
+def test_unified_agent_overrides_stale_direct_model_keys(monkeypatch, workload):
+    monkeypatch.setattr(config, "ZEROOPS_DEMO_AI", True)
+    monkeypatch.setattr(config, "AI_REPOSITORY_API_KEY", "stale-repository-key")
+    monkeypatch.setattr(config, "AI_TERRAFORM_API_KEY", "stale-terraform-key")
+    route = route_configuration(workload)
+    assert route.provider == "azure-foundry"
+    assert route.agent_name == config.FOUNDRY_AGENT_NAME
+    assert route.api_key == ""
+    assert route.timeout_seconds == config.FOUNDRY_REQUEST_TIMEOUT_SECONDS
 
 
 def test_missing_repository_route_degrades_but_terraform_fails_closed():
