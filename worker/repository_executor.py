@@ -58,7 +58,7 @@ class DockerRepositoryCheckExecutor:
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
                 "--pids-limit", "256", "--memory", "1536m", "--cpus", "2",
                 "--user", "10001:10001", "--workdir", "/work",
-                "--tmpfs", "/work:rw,nosuid,nodev,uid=10001,gid=10001,size=2147483648",
+                "--tmpfs", "/work:rw,exec,nosuid,nodev,uid=10001,gid=10001,size=2147483648",
                 "--tmpfs", "/tmp:rw,nosuid,nodev,uid=10001,gid=10001,size=268435456",
                 "--entrypoint", "/bin/sh", self.image, "-c",
                 "cp -R /source/. /work/ && touch /tmp/zeroops-source-ready && exec sleep 2100",

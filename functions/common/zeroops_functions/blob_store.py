@@ -99,7 +99,7 @@ class BlobArtifactStore:
         digest = sha256_bytes(body)
         blob = self._client.get_blob_client(container=container, blob=blob_name)
         safe_metadata = {
-            str(key).lower().replace("_", "-")[:128]: str(item)[:1024]
+            str(key).lower().replace("-", "_")[:128]: str(item)[:1024]
             for key, item in metadata.items()
         }
         safe_metadata["sha256"] = digest

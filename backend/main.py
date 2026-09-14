@@ -44,14 +44,14 @@ except ImportError:
 
 try:
     from backend import config, database
-    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow
+    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config, database
-    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow
+    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -3975,12 +3975,22 @@ async def approve_infrastructure_plan(
     await _run_digital_twin(db, project=project, user_id=current_user.id, plan=plan)
 
     # Queue isolated Terraform generation if a verified Azure connection is active
+    plan_data = dict(plan.plan_data or {})
     try:
         azure_conn = await get_active_azure_connection(db, current_user.id)
         if azure_conn and deployment_targets.has_verified_app_service_target(azure_conn):
+            if azure_conn.region and plan.region != azure_conn.region:
+                plan.region = azure_conn.region
+                plan_data["region_label"] = planner.human_region(azure_conn.region)
+            components = plan_data.get("components") or []
+            for comp in components:
+                if comp.get("id") == "application" and comp.get("service") == "Azure App Service":
+                    if comp.get("tier") in {"Existing Linux App Service plan required", None} and azure_conn.app_service_plan:
+                        comp["tier"] = azure_conn.app_service_plan
+            plan.plan_data = plan_data
             tenant = await tenancy.resolve_tenant(db, user=current_user)
             store = artifacts.get_artifact_store()
-            await terraform_workflow.enqueue_approved_plan(
+            queued = await terraform_workflow.enqueue_approved_plan(
                 db,
                 store=store,
                 tenant=tenant,
@@ -3989,8 +3999,61 @@ async def approve_infrastructure_plan(
                 plan=plan,
                 azure_connection=azure_conn,
             )
+            plan_data["terraform_status"] = "generating"
+            plan_data["terraform_operation_run_id"] = str(queued.operation_run_id)
+            plan.plan_data = plan_data
+            logger.info("Terraform generation queued on approval for project %s (run %s)", project.id, queued.operation_run_id)
+        else:
+            logger.info("Terraform generation not auto-queued: no verified Azure target connection for user %s", current_user.id)
     except Exception as queue_err:
-        logger.info("Terraform generation not auto-queued on approval: %s", queue_err)
+        logger.error("Terraform generation not auto-queued on approval: %s", queue_err, exc_info=True)
+        plan_data["terraform_status"] = "failed"
+        plan_data["terraform_error"] = str(queue_err)
+        plan.plan_data = plan_data
+        db.add(models.ActivityEvent(
+            user_id=current_user.id,
+            project_id=project_id,
+            action="Terraform generation failed",
+            details=f"Terraform generation could not be queued: {queue_err}",
+        ))
+        try:
+            plan_digest = terraform_workflow.approved_plan_digest(plan)
+            tenant = await tenancy.resolve_tenant(db, user=current_user)
+            run_result = await db.execute(
+                select(models.OperationRun).where(
+                    models.OperationRun.tenant_id == tenant.id,
+                    models.OperationRun.project_id == project.id,
+                    models.OperationRun.requested_by_user_id == current_user.id,
+                    models.OperationRun.operation_type == "infrastructure_pipeline",
+                    models.OperationRun.input_digest == plan_digest,
+                )
+            )
+            existing_run = run_result.scalars().first()
+            if existing_run:
+                existing_run.status = "failed"
+                existing_run.error_code = "TERRAFORM_GENERATION_FAILED"
+                existing_run.redacted_error = str(queue_err)
+            else:
+                failed_run = await history.create_operation_run(
+                    db,
+                    tenant_id=tenant.id,
+                    requested_by_user_id=current_user.id,
+                    operation_type="infrastructure_pipeline",
+                    project_id=project.id,
+                    input_digest=plan_digest,
+                    idempotency_key=f"terraform-generation:{plan.id}:{plan.revision}",
+                    summary={
+                        "approved_plan_id": str(plan.id),
+                        "approved_plan_revision": plan.revision,
+                        "approved_plan_digest": plan_digest,
+                        "error": str(queue_err),
+                    },
+                )
+                failed_run.status = "failed"
+                failed_run.error_code = "TERRAFORM_GENERATION_FAILED"
+                failed_run.redacted_error = str(queue_err)
+        except Exception as record_err:
+            logger.warning("Failed to record failed operation run for approval: %s", record_err)
 
     await db.commit()
     await db.refresh(plan)

@@ -137,6 +137,19 @@ def _safe_event_artifact(artifact: EventArtifactV1) -> dict[str, Any]:
 
 
 def _safe_event_data(event: WorkflowEventV1) -> dict[str, Any]:
+    safe_metadata = _without_storage_locators(event.safe_metadata)
+    preserved_keys = {
+        "job_id",
+        "job_digest",
+        "approval_id",
+        "plan_sha256",
+        "bundle_sha256",
+        "operation",
+        "revision",
+    }
+    preserved = {k: safe_metadata[k] for k in preserved_keys if k in safe_metadata}
+    redacted_meta = redact(safe_metadata)
+    redacted_meta.update(preserved)
     return {
         "schema_version": event.schema_version,
         "event_id": event.event_id,
@@ -145,7 +158,7 @@ def _safe_event_data(event: WorkflowEventV1) -> dict[str, Any]:
         "status": event.status,
         "actor_id": event.actor_id,
         "artifacts": [_safe_event_artifact(artifact) for artifact in event.artifacts],
-        "metadata": redact(_without_storage_locators(event.safe_metadata)),
+        "metadata": redacted_meta,
         "error_code": event.error_code,
     }
 
@@ -228,12 +241,7 @@ def _prior_attempt(summary: Any) -> int:
 
 def _is_terminal_status(value: Any) -> bool:
     normalized = str(value or "").lower()
-    return (
-        normalized in {"completed", "degraded", "failed", "cancelled"}
-        or normalized.endswith("_completed")
-        or normalized.endswith("_degraded")
-        or normalized.endswith("_failed")
-    )
+    return normalized in {"completed", "degraded", "failed", "cancelled"}
 
 
 def _attempt_is_already_terminal(
@@ -489,11 +497,14 @@ class PostgresHistoryProjector:
             INSERT INTO terraform_plan_results (
                 operation_run_id, tenant_id, project_id, plan_job_id,
                 plan_job_digest, revision, bundle, input_variables,
-                guardrails, saved_plan, plan_summary, planned_at
+                guardrails, saved_plan, plan_summary, planned_at,
+                created_at, updated_at
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
                 $9::jsonb, $10::jsonb, $11::jsonb,
+                $12::timestamptz AT TIME ZONE 'UTC',
+                $12::timestamptz AT TIME ZONE 'UTC',
                 $12::timestamptz AT TIME ZONE 'UTC'
             )
             """,
@@ -677,12 +688,12 @@ class PostgresHistoryProjector:
                 output_tokens = COALESCE($10, output_tokens),
                 model_cost_microusd = COALESCE($11, model_cost_microusd),
                 error_code = CASE
-                    WHEN $12 IS NOT NULL THEN $12
+                    WHEN $12::text IS NOT NULL THEN $12::text
                     WHEN $15 THEN NULL
                     ELSE error_code
                 END,
                 redacted_error = CASE
-                    WHEN $13 IS NOT NULL THEN $13
+                    WHEN $13::text IS NOT NULL THEN $13::text
                     WHEN $15 THEN NULL
                     ELSE redacted_error
                 END,

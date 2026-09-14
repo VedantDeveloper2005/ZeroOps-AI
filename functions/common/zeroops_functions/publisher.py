@@ -11,13 +11,15 @@ from .security import canonical_json_bytes
 
 
 class ServiceBusPublisher:
-    def __init__(self, fully_qualified_namespace: str, credential: Any):
+    def __init__(self, fully_qualified_namespace: str, credential: Any, transport_type: Any | None = None):
         namespace = fully_qualified_namespace.strip()
         if not namespace.endswith(".servicebus.windows.net"):
             raise ValueError("Service Bus namespace is invalid")
+        from azure.servicebus import TransportType
         self._client = ServiceBusClient(
             fully_qualified_namespace=namespace,
             credential=credential,
+            transport_type=transport_type or TransportType.AmqpOverWebsocket,
         )
 
     def send_json(

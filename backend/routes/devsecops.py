@@ -1918,6 +1918,7 @@ async def reject_pipeline_run(
 
 
 @router.post("/api/terraform-runs/{operation_run_id}/cost-evidence")
+@router.post("/api/terraform/operations/{operation_run_id}/cost-evidence")
 async def refresh_terraform_cost_evidence(
     operation_run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -1953,6 +1954,7 @@ async def refresh_terraform_cost_evidence(
     )
     await db.commit()
     return {
+        "success": True,
         "status": "verified",
         "idempotent": cost.idempotent,
         "operation_run_id": str(cost.operation_run_id),
@@ -2043,6 +2045,7 @@ async def get_terraform_apply_approval(
 
 
 @router.get("/api/projects/{project_id}/terraform-review")
+@router.get("/api/projects/{project_id}/terraform/review")
 async def get_project_terraform_review(
     project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -2070,6 +2073,16 @@ async def get_project_terraform_review(
     )
     operation_run = run_result.scalars().first()
     if operation_run is None:
+        plan_terraform_status = (plan.plan_data or {}).get("terraform_status")
+        if plan_terraform_status == "failed":
+            return {
+                "status": "failed",
+                "project_id": str(project.id),
+                "plan_id": str(plan.id),
+                "revision": plan.revision,
+                "error_code": "TERRAFORM_GENERATION_FAILED",
+                "message": (plan.plan_data or {}).get("terraform_error") or "Terraform generation failed on approval.",
+            }
         return {
             "status": "not_queued",
             "project_id": str(project.id),
@@ -2129,6 +2142,7 @@ async def get_project_terraform_review(
 
 
 @router.post("/api/terraform-runs/{operation_run_id}/approve")
+@router.post("/api/terraform/operations/{operation_run_id}/apply")
 async def approve_terraform_apply(
     operation_run_id: uuid.UUID,
     request: TerraformApplyApprovalRequest,
@@ -2172,6 +2186,7 @@ async def approve_terraform_apply(
     ))
     await db.commit()
     return {
+        "success": True,
         "status": "approved_consumed",
         "idempotent": consumed.idempotent,
         "operation_run_id": str(consumed.operation_run_id),

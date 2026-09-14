@@ -375,10 +375,11 @@ def deploy_image(
     image_ref: str,
     metadata: dict[str, Any],
     environment_variables: dict[str, tuple[str, bool]] | None = None,
+    project_resource_group: str | None = None,
 ) -> Generator[str | AppServiceRelease, None, None]:
     """Publish to Terraform-provisioned App Service without changing Azure RBAC."""
     app_name = normalize_app_name(app_name)
-    resource_group = str(connection.resource_group)
+    resource_group = project_resource_group or str(connection.resource_group)
     plan_name = str(getattr(connection, "app_service_plan", "") or "").strip()
     registry_server = str(connection.acr_login_server or "").rstrip("/")
     if not plan_name:

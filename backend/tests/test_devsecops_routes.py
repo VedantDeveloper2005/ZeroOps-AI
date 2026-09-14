@@ -1398,3 +1398,45 @@ async def test_health_remediation_reuses_provider_bound_app_service_identity(
         "attempts": 1,
         "delay_seconds": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_project_terraform_review_supports_slash_path(devsecops_harness):
+    harness = devsecops_harness
+    _plan, run, result = await _seed_terraform_review(harness)
+
+    # Test the slash path matching frontend api.ts
+    response = await harness.client.get(
+        f"/api/projects/{harness.project.id}/terraform/review"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready_for_approval"
+    assert payload["operation_run_id"] == str(run.id)
+    assert payload["revision"] == result.revision
+
+
+@pytest.mark.asyncio
+async def test_project_terraform_review_reports_failed_generation(devsecops_harness):
+    harness = devsecops_harness
+    plan = models.InfrastructurePlan(
+        user_id=harness.owner.id,
+        project_id=harness.project.id,
+        provider="azure",
+        region="eastus",
+        status="approved",
+        revision=1,
+        plan_data={"terraform_status": "failed", "terraform_error": "aiohttp package is not installed"},
+    )
+    harness.session.add(plan)
+    await harness.session.commit()
+
+    response = await harness.client.get(
+        f"/api/projects/{harness.project.id}/terraform/review"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["error_code"] == "TERRAFORM_GENERATION_FAILED"
+    assert "aiohttp" in payload["message"]
+

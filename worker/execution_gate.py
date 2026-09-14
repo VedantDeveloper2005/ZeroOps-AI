@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from worker.contracts import ContractError, ExecutionEnvelope, SHA256_PATTERN
+from worker.contracts import ContractError, ExecutionEnvelope, SHA256_PATTERN, canonical_digest
 
 
 MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
@@ -279,6 +279,8 @@ def summarize_plan_json(raw_json: bytes) -> dict[str, Any]:
 def validate_plan_guardrails(
     raw_json: bytes,
     envelope: ExecutionEnvelope,
+    *,
+    approved_input_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate resource types, action counts, and resource-group scope."""
 
@@ -288,6 +290,29 @@ def validate_plan_guardrails(
         raise ExecutionGateError("Terraform returned invalid plan JSON.") from error
     if not isinstance(document, dict):
         raise ExecutionGateError("Terraform returned invalid plan JSON.")
+    registry_scope = None
+    if approved_input_values is not None:
+        digest_no_nl = canonical_digest(approved_input_values)
+        canonical_input_bytes = (
+            json.dumps(
+                approved_input_values,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+        digest_with_nl = hashlib.sha256(canonical_input_bytes).hexdigest()
+        if envelope.input_variables.sha256 not in (digest_no_nl, digest_with_nl):
+            raise ExecutionGateError("Approved input values digest mismatch.")
+        candidate = approved_input_values.get("container_registry_id")
+        registry_pattern = (
+            rf"/subscriptions/{re.escape(envelope.target_subscription_id)}/resourceGroups/"
+            r"[A-Za-z0-9._()\-]+/providers/Microsoft.ContainerRegistry/registries/[A-Za-z0-9]+"
+        )
+        if isinstance(candidate, str) and re.fullmatch(registry_pattern, candidate, re.IGNORECASE):
+            registry_scope = candidate.lower()
     summary = summarize_plan_json(raw_json)
     actions = summary["actions"]
     total_changes = sum(
@@ -339,9 +364,19 @@ def validate_plan_guardrails(
             scope = body.get("scope")
             if isinstance(scope, str):
                 normalized_scope = scope.rstrip("/").lower()
+                shared_registry_pull = (
+                    resource_type == "azurerm_role_assignment"
+                    and registry_scope is not None
+                    and normalized_scope == registry_scope
+                    and body.get("role_definition_name") == "AcrPull"
+                    and not body.get("condition")
+                    and actions_value == ["create"]
+                    and _is_application_identity_grant(document, change)
+                )
                 if not (
                     normalized_scope == target_prefix
                     or normalized_scope.startswith(target_prefix + "/")
+                    or shared_registry_pull
                 ):
                     raise ExecutionGateError("Terraform plan escapes the approved ARM scope.")
                 scoped = True
@@ -369,6 +404,33 @@ def validate_plan_guardrails(
                 "Terraform plan resource scope cannot be proven inside the approved group."
             )
     return summary
+
+
+def _is_application_identity_grant(document: dict[str, Any], change: dict[str, Any]) -> bool:
+    """Restrict shared-registry exceptions to the newly created application identity."""
+    configuration = document.get("configuration", {}).get("root_module", {}).get("resources", [])
+    resource = next((item for item in configuration if item.get("address") == change.get("address")), None)
+    if not isinstance(resource, dict):
+        return False
+    expression = resource.get("expressions", {}).get("principal_id", {})
+    references = expression.get("references", [])
+    if not references or "constant_value" in expression:
+        return False
+    applications = [item for item in document.get("resource_changes", [])
+                    if item.get("type") == "azurerm_linux_web_app"
+                    and item.get("change", {}).get("actions") == ["create"]]
+    if len(applications) != 1:
+        return False
+    address = applications[0].get("address", "")
+    allowed = {
+        address,
+        address + ".identity",
+        address + ".identity[0]",
+        address + ".identity[0].principal_id",
+    }
+    return bool(address) and set(references).issubset(allowed) and any(
+        reference.startswith(address + ".identity") for reference in references
+    )
 
 
 def decode_envelope_json(raw_message: bytes) -> ExecutionEnvelope:

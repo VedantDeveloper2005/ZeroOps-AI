@@ -556,18 +556,25 @@ class VmssScaleInProtection:
                 document = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
             raise ExecutionGateError("VM instance metadata is unavailable.") from error
-        required = [
-            "subscriptionId",
-            "resourceGroupName",
-            "vmScaleSetName",
-            "instanceId",
-        ]
-        if not isinstance(document, dict) or any(
-            not isinstance(document.get(key), str) or not document[key]
-            for key in required
-        ):
+        if not isinstance(document, dict):
             raise ExecutionGateError("VM instance metadata is incomplete.")
-        self._metadata = {key: document[key] for key in required}
+        instance_id = document.get("instanceId")
+        if not instance_id and isinstance(document.get("resourceId"), str):
+            parts = document["resourceId"].split("/virtualMachines/")
+            if len(parts) == 2 and parts[1]:
+                instance_id = parts[1]
+        elif not instance_id and isinstance(document.get("name"), str) and "_" in document["name"]:
+            instance_id = document["name"].rsplit("_", 1)[1]
+
+        metadata = {
+            "subscriptionId": document.get("subscriptionId"),
+            "resourceGroupName": document.get("resourceGroupName"),
+            "vmScaleSetName": document.get("vmScaleSetName"),
+            "instanceId": instance_id,
+        }
+        if any(not isinstance(val, str) or not val for val in metadata.values()):
+            raise ExecutionGateError("VM instance metadata is incomplete.")
+        self._metadata = metadata
         return self._metadata
 
     def _set(self, protected: bool) -> None:
@@ -611,7 +618,7 @@ class VmssScaleInProtection:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            method="PATCH",
+            method="PUT",
         )
         try:
             with _open_approved_azure_request(

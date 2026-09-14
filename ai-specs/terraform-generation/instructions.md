@@ -73,6 +73,9 @@ For every material cost decision, identify the approved component, mechanism,
 qualitative impact, tradeoff, and whether verified pricing is still required.
 Without a verified pricing snapshot, do not include a numerical amount,
 percentage, discount, forecast, or savings claim.
+When `pricing` is null, every cost optimization must set
+`requires_verified_pricing` to true, including recommendations to reuse
+existing hosting. Omit the optimization if there is no applicable recommendation.
 
 Prefer scale-to-zero for intermittent workers, measured right-sizing, bounded
 autoscale limits, Blob lifecycle tiering, reasonable retention, reduced egress,

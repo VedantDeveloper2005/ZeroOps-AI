@@ -85,6 +85,8 @@ class TerraformExecutor:
                 "ARM_CLIENT_ID": self.managed_identity_client_id,
                 "ARM_SUBSCRIPTION_ID": envelope.target_subscription_id,
                 "ARM_TENANT_ID": envelope.target_tenant_id,
+                "ARM_PROVIDER_REGISTRATION": "none",
+                "ARM_RESOURCE_PROVIDER_REGISTRATIONS": "none",
                 # The runner container has a read-only root filesystem. TFLint
                 # installs any explicitly requested ruleset plugins under its
                 # plugin directory, so keep that directory in the writable
@@ -124,8 +126,8 @@ class TerraformExecutor:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise TerraformExecutionError(phase) from error
         if completed.returncode != 0:
-            # Tool output can contain variable values, provider diagnostics, or
-            # a rendered plan, so it is deliberately excluded from the error.
+            print(f"[{phase}] STDOUT:\n{completed.stdout.decode('utf-8', errors='replace')}")
+            print(f"[{phase}] STDERR:\n{completed.stderr.decode('utf-8', errors='replace')}")
             raise TerraformExecutionError(phase, completed.returncode)
         return completed.stdout if return_stdout else b""
 
@@ -296,7 +298,13 @@ class TerraformExecutor:
             phase="Terraform plan summarization",
             return_stdout=True,
         )
-        summary = validate_plan_guardrails(raw_plan_json, envelope)
+        validate_input_variables_file(envelope, terraform_root)
+        approved_input_values = json.loads(
+            (terraform_root / envelope.input_variables.file_name).read_bytes()
+        )
+        summary = validate_plan_guardrails(
+            raw_plan_json, envelope, approved_input_values=approved_input_values,
+        )
         del raw_plan_json
 
         plan_sha256 = sha256_file(plan_path)

@@ -56,12 +56,13 @@ POLICY_VERSION = "zeroops-terraform-policy.v1"
 TERRAFORM_VERSION = "1.15.8"
 _RESOURCE_TYPES = {
     "Azure App Service": (
+        "azurerm_resource_group",
         "azurerm_linux_web_app",
         "azurerm_role_assignment",
     ),
 }
 _ZERO_INCREMENTAL_FIXED_COST_RESOURCE_TYPES = frozenset(
-    {"azurerm_linux_web_app", "azurerm_role_assignment"}
+    {"azurerm_resource_group", "azurerm_linux_web_app", "azurerm_role_assignment"}
 )
 _ACR_LOGIN_SERVER = re.compile(r"^(?P<name>[a-z0-9]{5,50})\.azurecr\.io$")
 _PLAN_ACTIONS = ("create", "update", "delete", "replace", "read", "no_op")
@@ -324,6 +325,7 @@ def _verified_pricing(plan: models.InfrastructurePlan) -> VerifiedPricingContext
 def _approved_components(
     plan: models.InfrastructurePlan,
     azure_connection: models.UserAzureConnection,
+    project: models.Project,
 ) -> tuple[list[ApprovedComponent], list[str]]:
     raw_components = (plan.plan_data or {}).get("components")
     if not isinstance(raw_components, list):
@@ -357,9 +359,9 @@ def _approved_components(
                 service=service,
                 tier=tier,
                 properties={
-                    "target_resource_group": azure_connection.resource_group,
+                    "target_resource_group": deployment_targets.project_resource_group(project.id),
                     "existing_app_service_plan_name": azure_connection.app_service_plan,
-                    "create_resource_group": False,
+                    "create_resource_group": True,
                     "public_network_access": True,
                     "managed_identity": "SystemAssigned",
                     "container_registry_role": "AcrPull",
@@ -395,7 +397,7 @@ def _terraform_inputs(
         TerraformInputVariableV1(
             name="app_service_plan_id",
             type="string",
-            value=f"{resource_prefix}/Microsoft.Web/serverfarms/{plan_name}",
+            value=f"{resource_prefix}/Microsoft.Web/serverFarms/{plan_name}",
         ),
         TerraformInputVariableV1(
             name="container_registry_id",
@@ -406,7 +408,7 @@ def _terraform_inputs(
             ),
         ),
         TerraformInputVariableV1(name="location", type="string", value=plan.region),
-        TerraformInputVariableV1(name="resource_group_name", type="string", value=resource_group),
+        TerraformInputVariableV1(name="resource_group_name", type="string", value=deployment_targets.project_resource_group(project.id)),
     ]
 
 
@@ -445,7 +447,7 @@ async def enqueue_approved_plan(
     if azure_connection.user_id != user.id:
         raise ValueError("The Azure deployment target is outside the authenticated user boundary.")
 
-    components, allowed_resource_types = _approved_components(plan, azure_connection)
+    components, allowed_resource_types = _approved_components(plan, azure_connection, project)
     plan_digest = approved_plan_digest(plan)
     request = TerraformGenerationRequest(
         schema_version="terraform-generation-request.v1",
@@ -462,9 +464,9 @@ async def enqueue_approved_plan(
         module_catalog_version=MODULE_CATALOG_VERSION,
         policy_version=POLICY_VERSION,
         constraints=[
-            "Use only the verified existing resource group and Linux App Service plan.",
+            "Create exactly one project resource group using the supplied resource_group_name; reuse the verified existing Linux App Service plan and container registry in their existing hosting resource group.",
             "Create exactly one system-assigned Linux Web App and one AcrPull role assignment scoped to the verified existing container registry.",
-            "Do not create credentials, resource groups, service plans, registries, or any other role assignment.",
+            "Do not create credentials, additional resource groups, service plans, registries, or any other role assignment.",
             "Use deterministic ZeroOps names and standard tags.",
             "Keep non-secret runtime values in the supplied Terraform input-variable contract.",
         ],
@@ -474,7 +476,7 @@ async def enqueue_approved_plan(
         {
             "components": [item.model_dump(mode="json") for item in components],
             "allowed_resource_types": allowed_resource_types,
-            "target_resource_group": azure_connection.resource_group,
+            "target_resource_group": deployment_targets.project_resource_group(project.id),
         }
     )
     policy_digest = canonical_digest(
@@ -567,7 +569,7 @@ async def enqueue_approved_plan(
         target_environment="production",
         target_subscription_id=str(azure_connection.subscription_id),
         target_tenant_id=str(azure_connection.tenant_id),
-        target_resource_group=str(azure_connection.resource_group),
+        target_resource_group=deployment_targets.project_resource_group(project.id),
         terraform_version=TERRAFORM_VERSION,
         input_variables=input_variables,
         maximum_resource_changes=config.TERRAFORM_MAX_RESOURCE_CHANGES,

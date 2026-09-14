@@ -522,4 +522,6 @@ def generate_with_provenance(
     except (ModelInputBudgetError, ModelPolicyViolationError, ModelUnavailableError, ModelContractError) as error:
         raise ModelRoutesExhaustedError(ModelRoutingProvenance(
             **routing, selected_route="none", primary_failure_code=_safe_failure_code(error))) from error
-    return result, provenance, ModelRoutingProvenance(**routing, selected_route="primary")
+    return result, provenance, ModelRoutingProvenance(
+        **routing, selected_route="primary", primary_failure_code=None,
+    )

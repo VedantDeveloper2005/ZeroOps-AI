@@ -1568,7 +1568,7 @@ async def run_deployment_pipeline(
             metadata_container.update({
                 "target_provider": selected_target.provider,
                 "target_reason": selected_target.reason,
-                "target": deployment_targets.metadata_for_target(selected_target),
+                "target": deployment_targets.metadata_for_target(selected_target, project_id=project.id),
                 "available_targets": deployment_targets.status_payload(azure_connection)["targets"],
             })
             deployment.infrastructure_metadata = metadata_container
@@ -2069,6 +2069,7 @@ async def run_deployment_pipeline(
                         image_ref=verified_image,
                         metadata=analysis_metadata,
                         environment_variables=runtime_variables,
+                        project_resource_group=deployment_targets.project_resource_group(project.id),
                     ))
                 )
                 app_release = next(
@@ -2188,7 +2189,7 @@ async def run_deployment_pipeline(
                 "image": verified_image,
                 "target_provider": selected_target.provider,
                 "target_reason": selected_target.reason,
-                "target": deployment_targets.metadata_for_target(selected_target),
+                "target": deployment_targets.metadata_for_target(selected_target, project_id=project.id),
                 "release": release_metadata,
                 "framework": analysis_metadata.get("framework"),
                 "language": analysis_metadata.get("language"),

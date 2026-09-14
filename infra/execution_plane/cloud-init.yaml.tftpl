@@ -137,7 +137,7 @@ write_files:
       ExecStartPre=/usr/bin/install -d -o root -g root -m 0700 /run/zeroops-docker
       ExecStartPre=/usr/local/sbin/zeroops-acr-login
       ExecStartPre=/usr/local/bin/docker pull ${runner_image_reference}
-      ExecStart=/usr/local/bin/docker run --rm --name zeroops-runner --network host --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=512m --tmpfs /work:rw,nosuid,nodev,size=4096m --env-file /etc/zeroops-runner.env ${runner_image_reference}
+      ExecStart=/usr/local/bin/docker run --rm --name zeroops-runner --network host --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777 --tmpfs /work:rw,exec,nosuid,nodev,size=4096m,mode=1777 --env-file /etc/zeroops-runner.env ${runner_image_reference}
       ExecStop=/usr/local/bin/docker stop --time 300 zeroops-runner
       TimeoutStopSec=330
 

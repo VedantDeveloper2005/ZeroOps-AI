@@ -42,6 +42,9 @@ def test_source_bound_verified_docker_isolation(monkeypatch):
     create = next(args for args in calls if args[0] == "create")
     assert create[create.index("--network") + 1] == "none"
     assert "--read-only" in create and "--cap-drop" in create
+    work_mount = next(arg for arg in create if arg.startswith("/work:"))
+    assert "exec" in work_mount.split(":", 1)[1].split(",")
+    assert "nosuid" in work_mount and "nodev" in work_mount
     assert not any(arg in create for arg in ["--privileged", "--volume", "-v", "--env-file"])
     executor.close()
     assert calls[-1] == ["rm", "--force", attestation.isolation_id]

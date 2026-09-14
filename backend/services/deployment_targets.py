@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import re
+import uuid
 from typing import Any, Mapping
 
 
@@ -257,6 +258,11 @@ def app_service_application_name(project_name: str, project_id: Any) -> str:
     return f"zo-{slug}-{project_key}"
 
 
+def project_resource_group(project_id: Any) -> str:
+    """Keep workload isolation stable across project renames and retries."""
+    return f"rg-zeroops-{uuid.UUID(str(project_id)).hex}"
+
+
 def image_ref_for_target(target: SelectedTarget, project_slug: str, version: str) -> str:
     registry = _clean(getattr(target.connection, "acr_login_server", "")).rstrip("/")
     if not registry:
@@ -264,7 +270,7 @@ def image_ref_for_target(target: SelectedTarget, project_slug: str, version: str
     return f"{registry}/{project_slug}:{version}"
 
 
-def metadata_for_target(target: SelectedTarget) -> dict:
+def metadata_for_target(target: SelectedTarget, *, project_id: Any | None = None) -> dict:
     metadata = {
         "provider": target.provider,
         "subscription_id": getattr(target.connection, "subscription_id", None),
@@ -276,6 +282,9 @@ def metadata_for_target(target: SelectedTarget) -> dict:
     if target.provider == "azure-aks":
         metadata["aks_cluster_name"] = getattr(target.connection, "aks_cluster_name", None)
         metadata.pop("app_service_plan", None)
+    elif project_id is not None:
+        metadata["hosting_resource_group"] = metadata["resource_group"]
+        metadata["resource_group"] = project_resource_group(project_id)
     return metadata
 
 

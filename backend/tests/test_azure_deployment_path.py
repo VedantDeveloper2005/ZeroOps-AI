@@ -53,6 +53,25 @@ def test_azure_target_selects_only_azure_app_service():
     assert deployment_targets.metadata_for_target(target)["app_service_plan"] == "customer-linux-plan"
 
 
+def test_project_resource_groups_are_distinct_and_do_not_retarget_shared_hosting():
+    from backend.services.terraform_workflow import _terraform_inputs
+    first = SimpleNamespace(id="11111111-1111-4111-8111-111111111111", name="same-name")
+    second = SimpleNamespace(id="22222222-2222-4222-8222-222222222222", name="same-name")
+    connection = azure_connection()
+    plan = SimpleNamespace(region="eastus")
+    first_values = {item.name: item.value for item in _terraform_inputs(first, plan, connection)}
+    second_values = {item.name: item.value for item in _terraform_inputs(second, plan, connection)}
+    assert first_values["resource_group_name"] != second_values["resource_group_name"]
+    assert first_values["resource_group_name"] == "rg-zeroops-11111111111141118111111111111111"
+    assert "/resourceGroups/apps-rg/" in first_values["app_service_plan_id"]
+    assert "/resourceGroups/apps-rg/" in first_values["container_registry_id"]
+    assert deployment_targets.has_verified_app_service_target(connection)
+    target = deployment_targets.choose_target({}, connection, "auto")
+    metadata = deployment_targets.metadata_for_target(target, project_id=first.id)
+    assert metadata["resource_group"] == first_values["resource_group_name"]
+    assert metadata["hosting_resource_group"] == "apps-rg"
+
+
 def test_nonempty_but_unverified_azure_target_is_not_ready():
     connection = azure_connection(
         deployment_target_fingerprint=None,
