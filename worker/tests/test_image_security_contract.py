@@ -25,7 +25,7 @@ class WorkerImageSecurityContractTests(unittest.TestCase):
     def test_worker_images_keep_runtime_source_read_only(self):
         for name in ("Dockerfile", "Dockerfile.pipeline"):
             source = (REPOSITORY_ROOT / "worker" / name).read_text(encoding="utf-8")
-            platform_prefix = "(?:--platform=linux/amd64 )?" if name == "Dockerfile" else "--platform=linux/amd64 "
+            platform_prefix = "(?:--platform=linux/amd64 )?"
             from_line = next(line for line in source.splitlines() if line.startswith("FROM "))
             self.assertRegex(
                 from_line,

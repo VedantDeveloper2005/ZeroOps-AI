@@ -1,3 +1,15 @@
+# September 14: deployment timeline repair
+
+Status: Validated (frontend code package only; application worker rollout is still under validation).
+
+Authorization: User requested fixing the application end-to-end failures. Reuse `zeroopsai-v2`, `zeroops-rg`, subscription `6f0a17f3-f270-4bf7-a2dd-5571fb503ff2`, Central India; no hosting resource changes.
+
+Recipe: Azure CLI ZIP deployment to the existing Node 22 App Service.
+
+Validation proof: `npm run typecheck` passed; `npm run test:dashboard` passed 17 tests; `node --test scripts/pipeline-stream.test.mjs` passed 2 stream-identity regressions; `npm run build` passed all 39 pages. `python scripts/package_appservice_frontend.py` created 2043 files, excluded environment files, and verified the backend rewrite. ZIP SHA-256: `5eb7e27044c72cf1df811c3c61dc0910b2d3f022930ff20d1b589c9acdf5f4a5`. Azure CLI verified the existing site is Running in Central India on NODE|22-lts. Bicep/what-if and RBAC mutation are not applicable to this frontend code-only update.
+
+---
+
 # September 13: complete application release workflow
 
 Status: Implementation and validation in progress.

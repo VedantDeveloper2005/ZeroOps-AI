@@ -211,6 +211,7 @@ def _finding_digest(result: SecurityScanResult, finding: Any) -> str:
         "tool": result.tool,
         "kind": result.kind,
         "rule": finding.rule_id,
+        "title": getattr(finding, "title", None),
         "path": finding.path,
         "line": finding.line,
         "fingerprint": finding.fingerprint,
@@ -291,24 +292,31 @@ async def persist_security_scan(
     )
     db.add(scan)
     await db.flush()
+    seen_fingerprints: set[str] = set()
     for finding in result.findings:
+        fingerprint = _finding_digest(result, finding)
+        if fingerprint in seen_fingerprints:
+            continue
+        seen_fingerprints.add(fingerprint)
         severity = finding.severity if finding.severity in counts else "info"
+        line_start = finding.line if finding.line is not None and finding.line >= 1 else None
         db.add(models.SecurityFinding(
             tenant_id=pipeline_run.tenant_id,
             project_id=pipeline_run.project_id,
             deployment_id=pipeline_run.deployment_id,
             security_scan_id=scan.id,
-            fingerprint=_finding_digest(result, finding),
+            fingerprint=fingerprint,
             rule_id=redact_sensitive_text(finding.rule_id, maximum_length=256),
             category=scan_type,
             severity=severity,
             status="open",
             title=redact_sensitive_text(finding.title, maximum_length=1_000),
             location_path=finding.path,
-            line_start=finding.line,
+            line_start=line_start,
             is_blocking=result.blocking and severity in {"critical", "high"},
             masked_evidence="Finding evidence was reduced to rule, severity, and location metadata.",
             evidence={"source_retained": False, "secret_retained": False},
         ))
     await db.flush()
     return scan
+

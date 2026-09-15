@@ -21,6 +21,8 @@ import {
   RotateCcw,
   ServerCog,
   ShieldCheck,
+  Sparkles,
+  Trash2,
   Wifi,
   WifiOff,
   XCircle,
@@ -86,6 +88,7 @@ interface DeploymentStreamEvent {
   lineType?: unknown;
   line_number?: unknown;
   stage_key?: unknown;
+  key?: unknown;
   name?: unknown;
   order?: unknown;
   attempt?: unknown;
@@ -222,7 +225,9 @@ function parseRecordedStages(value: unknown): PipelineStageAttempt[] {
         stage_key:
           typeof item.stage_key === "string" && item.stage_key.trim()
             ? item.stage_key.trim()
-            : id,
+            : typeof item.key === "string" && item.key.trim()
+              ? item.key.trim()
+              : id,
         name,
         description: typeof item.description === "string" ? item.description : null,
         status: normalizeStageStatus(item.status),
@@ -669,6 +674,8 @@ function DeploymentsPageContent() {
   const [resolutionOpen, setResolutionOpen] = useState(false);
 
   const [redeploying, setRedeploying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [approvalAction, setApprovalAction] = useState<
     "approve" | "reject" | null
   >(null);
@@ -899,7 +906,8 @@ function DeploymentsPageContent() {
                   const existingIndex = previous.findIndex(
                     (stage) =>
                       stage.id === eventStage.id ||
-                      stage.stage_key === eventStage.stage_key,
+                      (stage.stage_key === eventStage.stage_key &&
+                        stage.attempt === eventStage.attempt),
                   );
                   if (existingIndex === -1) {
                     return [...previous, eventStage];
@@ -1204,6 +1212,41 @@ function DeploymentsPageContent() {
     }
   };
 
+  const handleDeleteDeployment = async () => {
+    if (!currentDeployment) return;
+    if (!deleteConfirmOpen) {
+      setDeleteConfirmOpen(true);
+      return;
+    }
+    setDeleting(true);
+    setDeleteConfirmOpen(false);
+    try {
+      const result = await api.deleteDeployment(currentDeployment.id);
+      const teardownMsg =
+        result.azure_teardown === "success"
+          ? " Azure resources removed."
+          : result.azure_teardown === "failed"
+            ? ` Azure teardown warning: ${result.azure_teardown_error ?? "unknown error"}`
+            : " (No Azure resources to remove.)"
+      addToast(`Deployment deleted.${teardownMsg}`, "success");
+      // Remove from local history list
+      setHistory((prev) => prev.filter((d) => d.id !== currentDeployment.id));
+      setCurrentDeployment(null);
+      // Navigate back to deployments list
+      const params = new URLSearchParams();
+      if (currentDeployment.project_id) params.set("project", currentDeployment.project_id);
+      if (currentDeployment.project_name) params.set("repo", currentDeployment.project_name);
+      router.push(`/dashboard/deployments?${params.toString()}`);
+    } catch (error) {
+      addToast(
+        getErrorMessage(error, "Deployment could not be deleted."),
+        "error",
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handlePipelineApproval = async () => {
     if (!pipelineRun || !approvalPending || approvalAction) return;
 
@@ -1455,6 +1498,35 @@ function DeploymentsPageContent() {
                           : "Redeploy as new deployment"}
                     </button>
                   )}
+                  {currentDeployment && terminalStatuses.has(currentDeployment.status) && (
+                    <button
+                      id="delete-deployment-btn"
+                      type="button"
+                      onClick={() => void handleDeleteDeployment()}
+                      disabled={deleting}
+                      className={[
+                        "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
+                        deleteConfirmOpen
+                          ? "bg-red-600 text-white hover:bg-red-700"
+                          : "border border-red-500/40 text-red-400 hover:border-red-500 hover:bg-red-500/10",
+                      ].join(" ")}
+                    >
+                      {deleting ? (
+                        <Loader2
+                          size={14}
+                          className="animate-spin motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <Trash2 size={14} aria-hidden="true" />
+                      )}
+                      {deleting
+                        ? "Deleting…"
+                        : deleteConfirmOpen
+                          ? "Confirm — this cannot be undone"
+                          : "Delete deployment"}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1556,17 +1628,24 @@ function DeploymentsPageContent() {
                     className="mt-0.5 shrink-0 text-danger"
                     aria-hidden="true"
                   />
-                  <div>
-                    <h3
-                      id="failure-analysis-heading"
-                      className="text-sm font-semibold text-foreground"
-                    >
-                      Failure diagnostics
-                    </h3>
-                    <p className="mt-1 text-xs leading-5 text-foreground-muted">
-                      Review the recorded analysis and raw deployment logs before
-                      starting another run.
-                    </p>
+                  <div className="flex flex-1 items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3
+                          id="failure-analysis-heading"
+                          className="text-sm font-semibold text-foreground"
+                        >
+                          Failure diagnostics & AI Cure
+                        </h3>
+                        <span className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                          <Sparkles size={12} aria-hidden="true" />
+                          AI Cure Ready
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                        Review the diagnosed root cause and recommended AI cure before launching a new release.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -1581,7 +1660,7 @@ function DeploymentsPageContent() {
                         className="animate-spin text-primary motion-reduce:animate-none"
                         aria-hidden="true"
                       />
-                      Loading recorded failure analysis
+                      Loading recorded failure analysis & AI cure
                     </div>
                   ) : failureAnalysis ? (
                     <div className="space-y-5">
@@ -1603,10 +1682,11 @@ function DeploymentsPageContent() {
                           </dd>
                         </div>
                         <div>
-                          <dt className="text-xs font-semibold text-foreground">
-                            Recommended fix
+                          <dt className="flex items-center gap-1 text-xs font-semibold text-foreground">
+                            <Sparkles size={12} className="text-primary" aria-hidden="true" />
+                            AI Cure & Recommended fix
                           </dt>
-                          <dd className="mt-1.5 text-sm leading-6 text-foreground-muted">
+                          <dd className="mt-1.5 text-sm leading-6 text-foreground font-medium">
                             {failureAnalysis.recommended_fix}
                           </dd>
                         </div>
@@ -1640,8 +1720,8 @@ function DeploymentsPageContent() {
                             className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-danger/25 bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:bg-card-hover"
                           >
                             {resolutionOpen
-                              ? "Hide resolution steps"
-                              : "Show resolution steps"}
+                              ? "Hide AI cure resolution steps"
+                              : "Show AI cure resolution steps"}
                             {resolutionOpen ? (
                               <ChevronUp size={15} aria-hidden="true" />
                             ) : (
@@ -1684,6 +1764,23 @@ function DeploymentsPageContent() {
                     >
                       View logs
                     </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleRedeploy()}
+                      disabled={redeploying || !selectedDeploymentIsExact}
+                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                    >
+                      {redeploying ? (
+                        <Loader2
+                          size={14}
+                          className="animate-spin motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <RotateCcw size={14} aria-hidden="true" />
+                      )}
+                      Apply AI Cure & Redeploy
+                    </button>
                     <button
                       type="button"
                       onClick={() => setPaidFixConfirmationOpen(true)}

@@ -20,6 +20,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator
@@ -91,14 +92,19 @@ def _run(command: list[str], *, env: dict[str, str], cwd: str | None = None) -> 
     except FileNotFoundError as error:
         raise AzureDeploymentError("The deployment worker is missing the Azure CLI.") from error
 
+    collected_output: list[str] = []
     if process.stdout:
         with io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace") as output:
             for line in output:
                 value = redact_sensitive_text(line.strip(), maximum_length=10_000)
                 if value:
+                    collected_output.append(value)
                     yield value
-    if process.wait():
-        raise AzureDeploymentError("Azure rejected the deployment request. Review the Azure deployment log.")
+    returncode = process.wait()
+    if returncode:
+        details = " | ".join(collected_output[-5:]) if collected_output else "Unknown error"
+        cmd_summary = f"{command[0]} {command[1] if len(command) > 1 else ''} {command[2] if len(command) > 2 else ''}"
+        raise AzureDeploymentError(f"Azure rejected the deployment request ({cmd_summary}): {details}")
 
 
 def _capture(command: list[str], *, env: dict[str, str], cwd: str | None = None) -> str:
@@ -138,6 +144,8 @@ def _sign_in(connection: Any, client_secret: str, env: dict[str, str]) -> None:
         "--service-principal",
         "--username",
         str(connection.client_id),
+        "-p",
+        "@-",
         "--tenant",
         str(connection.tenant_id),
         "--output",
@@ -174,6 +182,7 @@ def _port_for(metadata: dict[str, Any]) -> int:
     return 8080 if metadata.get("framework") in {"FastAPI", "Flask"} else 3000
 
 
+
 def _dockerfile_for(repo_path: str, generated_dockerfile: str | None) -> str:
     existing = Path(repo_path) / "Dockerfile"
     if existing.is_file():
@@ -200,11 +209,12 @@ def build_image(
         env = _azure_environment(connection, config_dir)
         _sign_in(connection, client_secret, env)
         dockerfile = _dockerfile_for(repo_path, generated_dockerfile)
+        dockerfile_path = str((Path(repo_path) / dockerfile).resolve())
         yield "Building your application in Azure…"
         yield from _run([
             "az", "acr", "build", "--registry", registry, "--image", repository_and_tag,
-            "--file", dockerfile, repo_path, "--output", "none",
-        ], env=env)
+            "--file", dockerfile_path, repo_path, "--output", "none",
+        ], env=env, cwd=repo_path)
         yield "Your application image is ready."
     finally:
         shutil.rmtree(config_dir, ignore_errors=True)
@@ -431,7 +441,10 @@ def deploy_image(
         yield "Publishing your new version…"
         yield from _run([
             "az", "webapp", "config", "set", "--name", app_name, "--resource-group", resource_group,
-            "--generic-configurations", '{"acrUseManagedIdentityCreds": true}', "--output", "none",
+            "--generic-configurations", "acrUseManagedIdentityCreds=true",
+            "--acr-identity", "[system]",
+            "--acr-use-identity", "true",
+            "--output", "none",
         ], env=env)
         yield from _run([
             "az", "webapp", "config", "container", "set", "--name", app_name,
@@ -630,3 +643,226 @@ def verify_public_endpoint(
         if attempt + 1 < bounded_attempts:
             time.sleep(bounded_delay)
     raise AzureDeploymentError("The application did not become healthy after Azure reported it running.") from failure
+
+
+def teardown_app_service(
+    *,
+    connection: Any,
+    client_secret: str,
+    app_name: str,
+    resource_group: str,
+) -> list[str]:
+    """Delete the deployed Azure App Service web app.
+
+    This is a best-effort teardown: it authenticates with the service principal
+    and calls ``az webapp delete``. The caller is responsible for handling
+    ``AzureDeploymentError`` — a failure here must not prevent the database
+    record from being removed.
+
+    The App Service Plan and ACR registry are NOT deleted; those are shared
+    infrastructure managed at the connection level.
+    """
+    if not app_name or not str(app_name).strip():
+        raise AzureDeploymentError("A valid application name is required to perform teardown.")
+    if not resource_group or not str(resource_group).strip():
+        raise AzureDeploymentError("A valid resource group is required to perform teardown.")
+    safe_app_name = normalize_app_name(app_name)
+
+    config_dir = tempfile.mkdtemp(prefix="zeroops-az-teardown-")
+    messages: list[str] = []
+    try:
+        env = _azure_environment(connection, config_dir)
+        _sign_in(connection, client_secret, env)
+
+        # Check the web app exists before attempting deletion (avoids noisy errors)
+        try:
+            state = _capture([
+                "az", "webapp", "show",
+                "--name", safe_app_name,
+                "--resource-group", resource_group,
+                "--query", "state",
+                "--output", "tsv",
+            ], env=env).strip().lower()
+        except AzureDeploymentError:
+            # App already gone or RBAC issue — treat as success
+            messages.append(f"App Service '{safe_app_name}' was not found in Azure; skipping deletion.")
+            return messages
+
+        if not state:
+            messages.append(f"App Service '{safe_app_name}' not found; skipping deletion.")
+            return messages
+
+        messages.append(f"Deleting App Service '{safe_app_name}' from resource group '{resource_group}'…")
+        list(_run([
+            "az", "webapp", "delete",
+            "--name", safe_app_name,
+            "--resource-group", resource_group,
+            "--output", "none",
+        ], env=env))
+        messages.append(f"App Service '{safe_app_name}' deleted successfully.")
+        return messages
+    finally:
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+
+def teardown_project_resources(
+    *,
+    connection: Any,
+    client_secret: str,
+    project_id: Any,
+    deployment_metadata_list: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Clean up all Azure resources created for this project.
+
+    Performs complete cloud cleanup:
+    1. Deletes all Azure App Service web apps created by the project's deployments.
+    2. Deletes the project's dedicated resource group (``rg-zeroops-<project_id_hex>``).
+
+    Shared tenant infrastructure (App Service Plan, ACR) is preserved.
+    """
+    if not project_id:
+        raise AzureDeploymentError("A valid project ID is required to perform project teardown.")
+
+    project_rg = f"rg-zeroops-{uuid.UUID(str(project_id)).hex}"
+    config_dir = tempfile.mkdtemp(prefix="zeroops-az-proj-teardown-")
+    messages: list[str] = []
+    deleted_apps: list[str] = []
+    deleted_rg: bool = False
+
+    try:
+        env = _azure_environment(connection, config_dir)
+        _sign_in(connection, client_secret, env)
+
+        # 1. Delete known App Services from deployment metadata
+        apps_to_delete: set[tuple[str, str]] = set()
+        if deployment_metadata_list:
+            for meta in deployment_metadata_list:
+                release_meta = meta.get("release", {}) or {}
+                target_meta = meta.get("target", {}) or {}
+                app_name = release_meta.get("application_name") or target_meta.get("application_name")
+                rg = target_meta.get("resource_group") or meta.get("resource_group") or project_rg
+                if app_name:
+                    apps_to_delete.add((normalize_app_name(app_name), rg))
+
+        for safe_app_name, rg in apps_to_delete:
+            try:
+                list(_run([
+                    "az", "webapp", "delete",
+                    "--name", safe_app_name,
+                    "--resource-group", rg,
+                    "--output", "none",
+                ], env=env))
+                messages.append(f"Deleted App Service '{safe_app_name}' from resource group '{rg}'.")
+                deleted_apps.append(safe_app_name)
+            except Exception as app_err:
+                messages.append(f"App Service '{safe_app_name}' deletion status: {app_err}")
+
+        # 2. Delete the dedicated project resource group
+        try:
+            rg_exists = _capture([
+                "az", "group", "exists",
+                "--name", project_rg,
+                "--output", "tsv",
+            ], env=env).strip().lower() == "true"
+
+            if rg_exists:
+                messages.append(f"Deleting project resource group '{project_rg}'…")
+                list(_run([
+                    "az", "group", "delete",
+                    "--name", project_rg,
+                    "--yes",
+                    "--no-wait",
+                ], env=env))
+                messages.append(f"Project resource group '{project_rg}' deletion initiated.")
+                deleted_rg = True
+            else:
+                messages.append(f"Project resource group '{project_rg}' does not exist; skipping.")
+        except Exception as rg_err:
+            messages.append(f"Project resource group '{project_rg}' teardown note: {rg_err}")
+
+        return {
+            "status": "success",
+            "project_resource_group": project_rg,
+            "deleted_apps": deleted_apps,
+            "deleted_rg": deleted_rg,
+            "messages": messages,
+        }
+    finally:
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+
+def poll_app_service_metrics(
+    *,
+    connection: Any,
+    client_secret: str,
+    app_name: str,
+    resource_group: str,
+) -> dict[str, Any]:
+    """Fetch current App Service runtime metrics from Azure Monitor.
+
+    Returns a dict with keys: ``cpu_percent``, ``request_count``,
+    ``http_error_rate_percent``, ``response_latency_ms``. Values may be
+    ``None`` if not available (e.g. freshly deployed app with < 5 min data).
+
+    Raises ``AzureDeploymentError`` if Azure CLI is unavailable or auth fails.
+    """
+    safe_app_name = normalize_app_name(app_name)
+    config_dir = tempfile.mkdtemp(prefix="zeroops-az-metrics-")
+    try:
+        env = _azure_environment(connection, config_dir)
+        _sign_in(connection, client_secret, env)
+
+        # Build the resource ID for the web app
+        subscription_id = str(getattr(connection, "subscription_id", "") or "").strip()
+        resource_id = (
+            f"/subscriptions/{subscription_id}"
+            f"/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.Web/sites/{safe_app_name}"
+        )
+
+        def _fetch_metric(metric_name: str, aggregation: str = "Average") -> float | None:
+            try:
+                raw = _capture([
+                    "az", "monitor", "metrics", "list",
+                    "--resource", resource_id,
+                    "--metric", metric_name,
+                    "--interval", "PT5M",
+                    "--aggregation", aggregation,
+                    "--query", f"value[0].timeseries[0].data[-1].{aggregation.lower()}",
+                    "--output", "tsv",
+                ], env=env).strip()
+                value = float(raw)
+                return value if value >= 0 else None
+            except (AzureDeploymentError, ValueError, TypeError):
+                return None
+
+        cpu = _fetch_metric("CpuPercentage", "Average")
+        if cpu is not None:
+            cpu = round(cpu, 2)
+
+        requests_total_val = _fetch_metric("Requests", "Total")
+        requests_total = int(requests_total_val) if requests_total_val is not None else None
+
+        http_5xx_val = _fetch_metric("Http5xx", "Total")
+        http_5xx = float(http_5xx_val) if http_5xx_val is not None else None
+
+        error_rate: float | None = None
+        if requests_total is not None and requests_total > 0 and http_5xx is not None:
+            error_rate = round((http_5xx / requests_total) * 100, 2)
+        elif requests_total == 0:
+            error_rate = 0.0
+
+        latency_raw = _fetch_metric("AverageResponseTime", "Average")
+        # Azure returns AverageResponseTime in seconds; convert to ms
+        latency = round(latency_raw * 1000, 1) if latency_raw is not None else None
+
+        return {
+            "cpu_percent": cpu,
+            "request_count": requests_total,
+            "http_error_rate_percent": error_rate,
+            "response_latency_ms": latency,
+        }
+    finally:
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+

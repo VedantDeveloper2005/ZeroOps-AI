@@ -1140,9 +1140,9 @@ Repository tree:
         return outcome if include_provenance else outcome.analysis
 
 
-def analyze_failure_local(logs: list, build_logs: list) -> dict:
-    """High-fidelity local fallback analyzer scanning for common logs patterns."""
-    all_logs = "\n".join((logs or []) + (build_logs or []))
+def analyze_failure_local(logs: list, build_logs: list, events: list | None = None) -> dict:
+    """High-fidelity local fallback analyzer scanning for common logs patterns and pipeline events."""
+    all_logs = "\n".join((logs or []) + (build_logs or []) + (events or []))
     
     summary = "Deployment failed during execution."
     cause = "An unspecified error occurred during the build or container deployment process."
@@ -1153,8 +1153,74 @@ def analyze_failure_local(logs: list, build_logs: list) -> dict:
         "Verify environment variables and secrets are configured correctly.",
         "Trigger a new deployment."
     ]
+
+    lower_logs = all_logs.lower()
     
-    if "DATABASE_URL" in all_logs and ("missing" in all_logs or "not found" in all_logs or "connection refused" in all_logs):
+    if "container_security" in lower_logs or "trivy" in lower_logs:
+        if "integrityerror" in lower_logs or "duplicate key" in lower_logs or "uq_security_findings" in lower_logs:
+            summary = "Container security scan encountered duplicate finding integrity conflict during persistence."
+            cause = "Trivy container scan discovered overlapping vulnerability findings across layers which collided with the database unique constraint before deduplication was applied."
+            severity = "error"
+            fix = "Deduplicate scan finding fingerprints prior to persistence and restart the pipeline execution worker."
+            steps = [
+                "Ensure pipeline evidence adapter deduplicates scanner findings prior to SQL persistence.",
+                "Deploy updated worker package to VMSS execution cluster.",
+                "Restart zeroops-pipeline-worker systemd unit.",
+                "Trigger a fresh deployment."
+            ]
+        else:
+            summary = "Container Security Scan (Trivy) detected vulnerabilities in the container image."
+            cause = "The container image built from the repository contains packages or base layers with known CVE security vulnerabilities flagged by Trivy scanner policy."
+            severity = "critical" if "critical" in lower_logs else "error"
+            fix = "Update the container base image to a hardened, minimal distribution (e.g., node:20-alpine) and audit dependencies."
+            steps = [
+                "Update the base image in Dockerfile to a minimal alpine or slim variant (e.g., 'FROM node:20-alpine').",
+                "Run 'npm audit fix' or update vulnerable packages in package.json.",
+                "Test container build locally with 'docker build -t test-app .'.",
+                "Commit and push changes to trigger automated pipeline re-validation."
+            ]
+    elif "gitleaks" in lower_logs or "secret scan" in lower_logs or "leaked secret" in lower_logs:
+        summary = "Secret Scan (Gitleaks) detected potential credentials or tokens committed to source code."
+        cause = "Gitleaks identified hardcoded secrets, API keys, or private certificates in the repository files or commit history."
+        severity = "critical"
+        fix = "Remove hardcoded credentials from code, rotate the exposed secrets immediately, and use ZeroOps Vault / Environment Variables."
+        steps = [
+            "Revoke and rotate any compromised API keys, passwords, or tokens immediately.",
+            "Remove the raw credentials from the repository code.",
+            "Add the secrets securely via ZeroOps Dashboard > Secrets (backed by Azure Key Vault).",
+            "Commit and push cleaned files to trigger a new deployment."
+        ]
+    elif "semgrep" in lower_logs or "sast" in lower_logs:
+        summary = "Static Application Security Testing (Semgrep) identified code vulnerabilities."
+        cause = "Semgrep detected insecure code patterns such as SQL injection, unescaped user input, or insecure cryptographic algorithms."
+        severity = "high"
+        fix = "Remediate the insecure coding patterns identified in the SAST report."
+        steps = [
+            "Review the flagged file locations and rules in the Security tab.",
+            "Apply secure coding patterns (e.g., parameterized queries, input validation).",
+            "Commit fixes and push to re-run pipeline security validation."
+        ]
+    elif "checkov" in lower_logs or "iac_security" in lower_logs:
+        summary = "Infrastructure-as-Code scan (Checkov) flagged security policy violations."
+        cause = "Checkov detected misconfigurations in Terraform or cloud resource definitions violating security benchmarks."
+        severity = "high"
+        fix = "Update infrastructure templates to satisfy cloud security compliance rules."
+        steps = [
+            "Examine failed Checkov policy IDs in the deployment stage log.",
+            "Update Terraform configuration with recommended encryption, network, or access controls.",
+            "Commit changes and re-run deployment."
+        ]
+    elif "integrityerror" in lower_logs or "duplicate key" in lower_logs:
+        summary = "Pipeline stage aborted due to a database record constraint conflict."
+        cause = "An asynchronous operation attempted to insert duplicate or conflicting records into the pipeline execution store."
+        severity = "error"
+        fix = "Deduplicate pipeline stage artifacts before persistence and restart worker."
+        steps = [
+            "Ensure worker deduplicates records before persisting to the deployment database.",
+            "Re-run the deployment pipeline worker.",
+            "Trigger a new deployment release."
+        ]
+    elif "database_url" in lower_logs and ("missing" in lower_logs or "not found" in lower_logs or "connection refused" in lower_logs):
         summary = "Build failed because environment variable DATABASE_URL is missing."
         cause = "The application attempted to establish a database connection, but the DATABASE_URL environment variable was either not provided or is invalid."
         severity = "critical"
@@ -1166,7 +1232,7 @@ def analyze_failure_local(logs: list, build_logs: list) -> dict:
             "Ensure the database network security rules allow connections from ZeroOps App Service.",
             "Trigger a redeployment."
         ]
-    elif "port" in all_logs and ("already in use" in all_logs or "EADDRINUSE" in all_logs):
+    elif "port" in lower_logs and ("already in use" in lower_logs or "eaddrinuse" in lower_logs):
         summary = "Port collision detected: target port already in use."
         cause = "The application attempted to bind to a port that is already occupied by another service on the host container."
         severity = "error"
@@ -1177,7 +1243,7 @@ def analyze_failure_local(logs: list, build_logs: list) -> dict:
             "Verify that no other replica or old container is blocking the port.",
             "Trigger a redeployment."
         ]
-    elif "npm ERR!" in all_logs or "yarn error" in all_logs or "SyntaxError" in all_logs:
+    elif "npm err!" in lower_logs or "yarn error" in lower_logs or "syntaxerror" in lower_logs:
         summary = "Build failed due to dependency compilation or syntax error."
         cause = "The package builder encountered syntax errors or unresolved dependencies during the build phase (npm run build)."
         severity = "error"
@@ -1187,7 +1253,7 @@ def analyze_failure_local(logs: list, build_logs: list) -> dict:
             "Run npm run build locally to diagnose typescript compiler or linter errors.",
             "Commit fixes and push to trigger a new build."
         ]
-    elif "OutOfMemory" in all_logs or "OOMKilled" in all_logs:
+    elif "outofmemory" in lower_logs or "oomkilled" in lower_logs:
         summary = "Container was terminated due to an Out Of Memory (OOM) event."
         cause = "The application exceeded its allocated memory and the runtime terminated the process."
         severity = "critical"
@@ -1225,7 +1291,7 @@ def analyze_failure_nemotron(
     durable audit callers can request provenance to distinguish a model result
     from deterministic fallback.
     """
-    local_analysis = analyze_failure_local(logs, build_logs)
+    local_analysis = analyze_failure_local(logs, build_logs, events=events)
 
     logs_str = _redact_model_log_text(logs, maximum=10_000)
     build_logs_str = _redact_model_log_text(build_logs, maximum=10_000)

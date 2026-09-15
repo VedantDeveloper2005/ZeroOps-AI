@@ -254,6 +254,7 @@ def test_worker_generates_internal_artifact_and_persists_metadata_only(monkeypat
         *,
         commit_sha,
         lease_guard,
+        repository_executor=None,
     ):
         actions.append("pipeline")
         assert deploy_id == deployment_id

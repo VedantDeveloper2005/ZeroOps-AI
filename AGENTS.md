@@ -23,16 +23,6 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Added API key management endpoints (`/api/settings/api-key`, `/api/settings/api-key/regenerate`)
 - Removed hardcoded demo API key from settings page
 - Removed mock security data - shows real empty states from API
-### Done
-- Audited database schema integrity (PASS)
-- Added authentication to `/api/monitoring/metrics` endpoint
-- Added authentication and ownership validation to `/api/secrets/*` endpoints
-- Added authentication and ownership validation to `/api/autoscaling/*` endpoints
-- Added authentication and ownership validation to `/api/security/status/*` endpoint
-- Added `api_key` column migration to User model
-- Added API key management endpoints (`/api/settings/api-key`, `/api/settings/api-key/regenerate`)
-- Removed hardcoded demo API key from settings page
-- Removed mock security data - shows real empty states from API
 - Removed manufactured proof completely (`ensure_app_service_apply_proof` deleted; no fake `terraform.apply.completed` or `OperationRun` records created)
 - Decoupled app-code-only existing App Service deployments with truthful stage skips:
   - Infrastructure Validation: `SKIPPED — Existing App Service reused; no infrastructure change.`
@@ -53,22 +43,28 @@ This version has breaking changes — APIs, conventions, and file structure may 
   - Frontend TypeScript validation clean (0 errors via `npm run typecheck`)
   - 30/30 frontend contract tests passing (`test:homepage`, `test:device-gate`, `test:dashboard`)
   - Production bundle build successful (`npm run build`)
+- Executed 100% end-to-end live deployment to Azure App Service:
+  - Fixed Azure CLI `--generic-configurations` formatting to key-value pairs (`acrUseManagedIdentityCreds=true`)
+  - Assigned Contributor RBAC role on workload resource group for worker service principal
+  - Added `WEBSITES_PORT=3000` custom container port routing
+  - Verified live deployment `bf4b17d0-1442-4daf-8761-4a5c451c7f5d` showing `succeeded` status across all 12 stages
+  - Verified live origin endpoint `https://zo-demo-1ed1b668.azurewebsites.net/` returning HTTP 200
 
 ### In Progress
 - (none)
 
 ### Blocked
-- Live rehearsal: PostgreSQL connection timeout when connecting to remote Azure DB from local host; requires local PostgreSQL configuration or cloud runner execution to complete live Azure deployment steps A-E.
+- (none - all blockers resolved)
 
 ## Key Decisions
-- Azure App Service is confirmed as the primary deployment target for the September 17 presentation
+- Azure App Service is confirmed as the primary deployment target
 - No manufactured Terraform apply proofs: code deployments to verified existing App Services truthfully skip Terraform stages without creating fake `terraform.apply.completed` records
 - Real security scanners (Gitleaks, Semgrep, Trivy) are executed directly; missing tools fail or report unavailable truthfully
-- Demo executor uses temporary local directory isolation for development only and is strictly refused in production
-- Current demo status is PARTIALLY READY pending live rehearsal against Azure
+- Target workloads run in isolated customer resource groups with explicit RBAC role assignments
+- Current demo status: READY FOR LIVE DEMO
 
 ## Next Steps
-- Present live rehearsal following `docs/demo-september-17.md`
+- Deliver live presentation following `docs/demo-september-17.md`
 
 ## Critical Context
 - Security endpoints were publicly accessible without authentication (critical security vulnerability) - FIXED

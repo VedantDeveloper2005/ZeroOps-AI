@@ -140,7 +140,7 @@ export default function AppDetailsPage() {
     try {
       await api.deleteProject(project.id);
       await Promise.all([refreshProjects(), refreshStats()]);
-      addToast("Project record deleted.", "success");
+      addToast("Project and all associated Azure cloud resources deleted.", "success");
       router.push("/dashboard/projects");
     } catch (requestError) {
       addToast(getErrorMessage(requestError, "The project could not be deleted."), "error");
@@ -316,9 +316,9 @@ export default function AppDetailsPage() {
       </div>
 
       <section className="ops-surface border-danger/25 p-5">
-        <h2 className="text-sm font-semibold text-danger">Delete project record</h2>
+        <h2 className="text-sm font-semibold text-danger">Delete project & cloud resources</h2>
         <p className="mt-2 max-w-3xl text-xs leading-5 text-foreground-muted">
-          This removes the project and its linked ZeroOps records. It does not guarantee deletion of resources already created in your Azure account; review those resources separately.
+          This permanently removes the project from ZeroOps and tears down all associated cloud resources (Azure App Service web apps and the dedicated project resource group) in your Azure account.
         </p>
         <button
           type="button"
@@ -327,19 +327,19 @@ export default function AppDetailsPage() {
           className="ops-danger mt-4 disabled:opacity-50"
         >
           {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-          Delete project
+          Delete project & resources
         </button>
       </section>
 
       <ConfirmDialog
         open={confirmation !== null}
-        title={confirmation === "delete" ? "Delete this project record?" : "Start a production deployment?"}
+        title={confirmation === "delete" ? "Delete project & tear down cloud resources?" : "Start a production deployment?"}
         description={
           confirmation === "delete"
-            ? `This permanently removes the ZeroOps record for ${project.name}. Azure resources already created may require separate cleanup.`
+            ? `This will permanently delete ${project.name}, remove all deployment records, and destroy its deployed Azure App Service web apps and dedicated resource group in your Azure subscription.`
             : `This queues the saved ${project.branch || "default"} branch from ${project.full_name}. The workflow can create or update Azure resources and may incur charges.`
         }
-        confirmLabel={confirmation === "delete" ? "Delete project record" : "Start deployment"}
+        confirmLabel={confirmation === "delete" ? "Delete project & tear down resources" : "Start deployment"}
         tone={confirmation === "delete" ? "danger" : "warning"}
         busy={confirmation === "delete" ? deleting : deploying}
         onClose={() => setConfirmation(null)}

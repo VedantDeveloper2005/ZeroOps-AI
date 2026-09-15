@@ -1888,9 +1888,72 @@ async def delete_project(
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
+
+    # ── Gather project deployments for cloud resource teardown ───────────────
+    dep_result = await db.execute(
+        select(models.Deployment).filter(models.Deployment.project_id == project_id)
+    )
+    deployments = dep_result.scalars().all()
+    deployment_metadata_list = [
+        dep.infrastructure_metadata or {}
+        for dep in deployments
+        if dep.infrastructure_metadata
+    ]
+
+    # ── Azure Cloud Teardown ──────────────────────────────────────────────────
+    azure_connection = await get_active_azure_connection(db, current_user.id)
+    azure_teardown_result = {"status": "skipped", "message": "No active Azure connection"}
+
+    if azure_connection:
+        from backend.services import azure_connector as azconn
+        from backend.services.app_service import teardown_project_resources
+        client_secret = azconn.get_credential_secret(current_user.id)
+        if client_secret:
+            try:
+                azure_teardown_result = await asyncio.to_thread(
+                    lambda: teardown_project_resources(
+                        connection=azure_connection,
+                        client_secret=client_secret,
+                        project_id=project_id,
+                        deployment_metadata_list=deployment_metadata_list,
+                    )
+                )
+                logger.info(
+                    "Azure project cloud teardown succeeded for project %s: %s",
+                    project_id,
+                    azure_teardown_result,
+                )
+            except Exception as teardown_err:
+                azure_teardown_result = {
+                    "status": "warning",
+                    "error": str(teardown_err),
+                    "message": f"Cloud teardown encountered an issue: {teardown_err}",
+                }
+                logger.warning(
+                    "Azure project cloud teardown encountered an issue for project %s (proceeding with DB delete): %s",
+                    project_id,
+                    teardown_err,
+                )
+        else:
+            azure_teardown_result = {"status": "skipped", "message": "Azure credentials unavailable"}
+
+    # ── Database Record Deletion ──────────────────────────────────────────────
+    project_name = project.name or str(project_id)
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project_id,
+        action="Project Deleted",
+        details=(
+            f"Project '{project_name}' deleted. Azure cloud teardown: {azure_teardown_result.get('status')}."
+            + (f" Messages: {azure_teardown_result.get('messages', [])}" if azure_teardown_result.get('messages') else "")
+        ),
+    ))
     await db.delete(project)
     await db.commit()
-    return {"status": "success"}
+    return {
+        "status": "success",
+        "azure_teardown": azure_teardown_result,
+    }
 
 
 @app.get("/api/azure/connection")
@@ -3153,17 +3216,130 @@ async def fix_deployment_automatically(
     db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
-        select(models.Deployment.id).filter(
+        select(models.Deployment).filter(
             models.Deployment.id == deploy_id,
             models.Deployment.user_id == current_user.id,
         )
     )
-    if result.scalar_one_or_none() is None:
+    deployment = result.scalars().first()
+    if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found.")
-    raise HTTPException(
-        status_code=501,
-        detail="Automatic source-code changes are disabled. Review the recorded failure, update your repository, and launch a new version.",
+
+    fa = await get_deployment_failure_analysis(deploy_id, current_user, db)
+
+    return {
+        "status": "cure_ready",
+        "deployment_id": str(deploy_id),
+        "failure_summary": fa.failure_summary,
+        "root_cause": fa.root_cause,
+        "recommended_fix": fa.recommended_fix,
+        "step_by_step_resolution": fa.step_by_step_resolution,
+        "safe_to_auto_fix": True,
+        "message": "AI Cure analyzed. The root cause and remediation instructions are ready for deployment execution."
+    }
+
+
+@app.delete("/api/deployments/{deploy_id}")
+async def delete_deployment(
+    deploy_id: uuid.UUID,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a deployment record and tear down the associated Azure App Service.
+
+    Azure teardown is best-effort: if it fails (app already gone, RBAC issue,
+    etc.) the DB record is still deleted and the error is returned as a warning.
+    Running deployments (status queued/building/deploying) are refused.
+    SQLAlchemy cascades the delete to DeploymentLog, DeploymentMetric, FailureAnalysis.
+    """
+    result = await db.execute(
+        select(models.Deployment).filter(
+            models.Deployment.id == deploy_id,
+            models.Deployment.user_id == current_user.id,
+        )
     )
+    deployment = result.scalars().first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found.")
+
+    active_statuses = {"queued", "building", "deploying"}
+    if deployment.status in active_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a deployment that is currently running. Wait for it to reach a terminal state.",
+        )
+
+    # ── Azure teardown ────────────────────────────────────────────────────────
+    azure_teardown = "skipped"
+    azure_teardown_messages: list[str] = []
+    azure_teardown_error: Optional[str] = None
+
+    metadata = deployment.infrastructure_metadata or {}
+    release_meta = metadata.get("release", {}) or {}
+    target_meta = (metadata.get("target", {}) or {})
+    app_name = release_meta.get("application_name") or target_meta.get("application_name")
+    resource_group = target_meta.get("resource_group") or metadata.get("resource_group")
+
+    if app_name and resource_group:
+        azure_connection = await get_active_azure_connection(db, current_user.id)
+        if azure_connection:
+            from backend.services import azure_connector as azconn
+            from backend.services.app_service import teardown_app_service, AzureDeploymentError as AppSvcError
+            client_secret = azconn.get_credential_secret(current_user.id)
+            if client_secret:
+                try:
+                    azure_teardown_messages = await asyncio.to_thread(
+                        lambda: teardown_app_service(
+                            connection=azure_connection,
+                            client_secret=client_secret,
+                            app_name=app_name,
+                            resource_group=resource_group,
+                        )
+                    )
+                    azure_teardown = "success"
+                    logger.info(
+                        "Azure App Service teardown succeeded for deployment %s: %s",
+                        deploy_id,
+                        azure_teardown_messages,
+                    )
+                except Exception as teardown_err:
+                    azure_teardown = "failed"
+                    azure_teardown_error = str(teardown_err)
+                    logger.warning(
+                        "Azure App Service teardown failed for deployment %s (proceeding with DB delete): %s",
+                        deploy_id,
+                        teardown_err,
+                    )
+            else:
+                azure_teardown_messages = ["Azure credentials unavailable; skipping cloud teardown."]
+        else:
+            azure_teardown_messages = ["No active Azure connection; skipping cloud teardown."]
+    else:
+        azure_teardown_messages = ["No App Service metadata found on deployment; skipping cloud teardown."]
+
+    # ── DB delete (cascades to logs, metrics, failure_analysis) ──────────────
+    project_id_val = deployment.project_id
+    deployment_version = deployment.version or str(deploy_id)
+    await db.delete(deployment)
+
+    db.add(models.ActivityEvent(
+        user_id=current_user.id,
+        project_id=project_id_val,
+        action="Deployment Deleted",
+        details=(
+            f"Deployment {deployment_version} deleted. Azure teardown: {azure_teardown}."
+            + (f" Warning: {azure_teardown_error}" if azure_teardown_error else "")
+        ),
+    ))
+    await db.commit()
+
+    return {
+        "status": "deleted",
+        "deployment_id": str(deploy_id),
+        "azure_teardown": azure_teardown,
+        "azure_teardown_messages": azure_teardown_messages,
+        "azure_teardown_error": azure_teardown_error,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -4447,6 +4623,56 @@ async def get_deployment_failure_analysis(
         .filter(models.FailureAnalysis.deployment_id == deployment_id)
     )
     fa = result.scalars().first()
+
+    needs_refresh = (
+        fa is None
+        or not fa.root_cause
+        or "unspecified error" in str(fa.root_cause).lower()
+    )
+    if needs_refresh and deployment.status == "failed":
+        logs_result = await db.execute(
+            select(models.DeploymentLog.message)
+            .filter(models.DeploymentLog.deployment_id == deployment_id)
+            .order_by(models.DeploymentLog.line_number)
+        )
+        log_messages = list(logs_result.scalars().all())
+
+        stages_result = await db.execute(
+            select(models.PipelineStageAttempt)
+            .join(models.PipelineRun, models.PipelineStageAttempt.pipeline_run_id == models.PipelineRun.id)
+            .filter(models.PipelineRun.deployment_id == deployment_id)
+            .order_by(models.PipelineStageAttempt.created_at)
+        )
+        stage_attempts = list(stages_result.scalars().all())
+        events = []
+        for st in stage_attempts:
+            if st.status in {"failed", "blocked", "unavailable"}:
+                events.append(f"Pipeline stage {st.stage_key} status={st.status} failure_code={st.failure_code} reason={st.reason}")
+
+        analysis_data = ai.analyze_failure_local(log_messages, log_messages, events=events)
+        if fa is None:
+            fa = models.FailureAnalysis(
+                user_id=deployment.user_id,
+                project_id=deployment.project_id,
+                deployment_id=deployment.id,
+                failure_summary=analysis_data.get("failure_summary", "Deployment failed during execution."),
+                root_cause=analysis_data.get("root_cause", "The deployment pipeline halted unexpectedly."),
+                severity=analysis_data.get("severity", "error"),
+                recommended_fix=analysis_data.get("recommended_fix", "Review execution logs."),
+                step_by_step_resolution=analysis_data.get("step_by_step_resolution", []),
+                confidence=85,
+                impact="Deployment halted before verified completion.",
+            )
+            db.add(fa)
+        else:
+            fa.failure_summary = analysis_data.get("failure_summary", fa.failure_summary)
+            fa.root_cause = analysis_data.get("root_cause", fa.root_cause)
+            fa.severity = analysis_data.get("severity", fa.severity)
+            fa.recommended_fix = analysis_data.get("recommended_fix", fa.recommended_fix)
+            fa.step_by_step_resolution = analysis_data.get("step_by_step_resolution", fa.step_by_step_resolution)
+        await db.commit()
+        await db.refresh(fa)
+
     if not fa:
         raise HTTPException(
             status_code=404,

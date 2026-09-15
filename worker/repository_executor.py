@@ -27,6 +27,19 @@ _TOOLS = frozenset({"python", "python3", "pytest", "node", "npm", "npx", "yarn",
                     "ruff", "flake8", "black", "eslint", "tsc"})
 
 
+def configured_executor(source_revision: str, image_mapping: str):
+    """Resolve a trusted prepared image; its source digest is checked at attest."""
+    images = json.loads(image_mapping)
+    if not isinstance(images, dict):
+        raise ValueError("Repository check image configuration must be an object")
+    image = images.get(source_revision)
+    if image is None:
+        return None
+    if not isinstance(image, str):
+        raise ValueError("Repository check image reference must be a string")
+    return DockerRepositoryCheckExecutor(image)
+
+
 class DockerRepositoryCheckExecutor:
     def __init__(self, image: str):
         if not _IMAGE.fullmatch(image):

@@ -27,7 +27,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 try:
     from backend import config, models
-    from backend.database import AsyncSessionLocal
+    from backend.database import AsyncSessionLocal, async_engine
     from backend.services import (
         ai,
         aks,
@@ -48,7 +48,7 @@ try:
     from backend.services.redaction import redact_sensitive_text, redact_sensitive_values
 except ImportError:  # pragma: no cover - worker-style imports
     import config, models
-    from database import AsyncSessionLocal
+    from database import AsyncSessionLocal, async_engine
     from services import (
         ai,
         aks,
@@ -1293,20 +1293,21 @@ async def _persist_failure_investigation(
     await db.commit()
 
     try:
+        failure_events = [
+            f"Pipeline stage {failed_stage.stage_key if failed_stage else 'unknown'} failed with {failure_code}.",
+            f"Bounded failed-stage evidence: {stage_context}",
+            f"Bounded revision and change evidence: {change_context}",
+        ]
         result = await asyncio.to_thread(
             ai.analyze_failure_nemotron,
             messages,
             messages,
-            [
-                f"Pipeline stage {failed_stage.stage_key if failed_stage else 'unknown'} failed with {failure_code}.",
-                f"Bounded failed-stage evidence: {stage_context}",
-                f"Bounded revision and change evidence: {change_context}",
-            ],
+            failure_events,
             include_provenance=True,
         )
     except Exception:
         result = ai.FailureAnalysisOutcome(
-            analysis=ai.analyze_failure_local(messages, messages),
+            analysis=ai.analyze_failure_local(messages, messages, events=failure_events),
             ai_used=False,
             provider="unavailable",
             model="deterministic-failure-analysis",
@@ -1848,6 +1849,11 @@ async def run_deployment_pipeline(
 
             authenticated_container_scan = None
             if registry_access is not None and verified_image is not None:
+                demo_warn_only = bool(config.ZEROOPS_DEMO_EXECUTOR and not config.IS_PRODUCTION)
+                container_scan_policy = security_scanner.ScanPolicy(
+                    block_critical=not demo_warn_only,
+                    block_high=False,
+                )
                 authenticated_container_scan = lambda path, *, required: (
                     security_scanner.run_authenticated_container_scan(
                         path,
@@ -1856,6 +1862,7 @@ async def run_deployment_pipeline(
                         username=registry_access.username,
                         access_token=registry_access.access_token,
                         required=required,
+                        policy=container_scan_policy,
                     )
                 )
             await _run_security_stage(
@@ -2061,17 +2068,25 @@ async def run_deployment_pipeline(
                     "external_endpoint_verified": False,
                 }
             else:
-                deployment_output = await asyncio.to_thread(
-                    lambda: list(app_service.deploy_image(
-                        connection=selected_target.connection,
-                        client_secret=client_secret,
-                        app_name=application_name,
-                        image_ref=verified_image,
-                        metadata=analysis_metadata,
-                        environment_variables=runtime_variables,
-                        project_resource_group=deployment_targets.project_resource_group(project.id),
-                    ))
-                )
+                try:
+                    deployment_output = await asyncio.to_thread(
+                        lambda: list(app_service.deploy_image(
+                            connection=selected_target.connection,
+                            client_secret=client_secret,
+                            app_name=application_name,
+                            image_ref=verified_image,
+                            metadata=analysis_metadata,
+                            environment_variables=runtime_variables,
+                            project_resource_group=deployment_targets.project_resource_group(project.id),
+                        ))
+                    )
+                except app_service.AzureDeploymentError as deploy_error:
+                    raise PipelineExecutionError(
+                        f"Azure App Service deployment failed: {str(deploy_error)}",
+                        failure_code="APP_SERVICE_DEPLOYMENT_FAILED",
+                        status="failed",
+                        stage_key="application_deployment",
+                    ) from deploy_error
                 app_release = next(
                     (item for item in deployment_output if isinstance(item, app_service.AppServiceRelease)),
                     None,
@@ -2237,6 +2252,51 @@ async def run_deployment_pipeline(
                 {"type": "status", "status": "running", "live_url": live_url},
             )
 
+            # ── Ingest initial App Service metrics into the monitoring store ──
+            # Best-effort: Azure Monitor data has ~5 min delay. If unavailable,
+            # we skip silently — the monitoring page will show "no telemetry"
+            # until the next metric poll. We do NOT block the pipeline on this.
+            if selected_target.provider in {"azure", "azure-app-service"}:
+                try:
+                    ingest_app_name = release_metadata.get("application_name")
+                    ingest_rg = (
+                        deployment_targets.metadata_for_target(
+                            selected_target, project_id=project.id
+                        ).get("resource_group")
+                    )
+                    if ingest_app_name and ingest_rg and client_secret:
+                        raw_metrics = await asyncio.to_thread(
+                            lambda: app_service.poll_app_service_metrics(
+                                connection=selected_target.connection,
+                                client_secret=client_secret,
+                                app_name=ingest_app_name,
+                                resource_group=ingest_rg,
+                            )
+                        )
+                        latency_raw = raw_metrics.get("response_latency_ms")
+                        metric_record = models.DeploymentMetric(
+                            deployment_id=deployment.id,
+                            project_id=deployment.project_id,
+                            cpu_utilization=raw_metrics.get("cpu_percent"),
+                            memory_utilization=None,
+                            request_count=raw_metrics.get("request_count"),
+                            error_rate=raw_metrics.get("http_error_rate_percent"),
+                            response_time_ms=int(latency_raw) if latency_raw is not None else None,
+                            source="azure-monitor",
+                            deployment_health="healthy",
+                            timestamp=datetime.utcnow(),
+                        )
+                        db.add(metric_record)
+                        await db.commit()
+                        await p_logger.log("Initial runtime metrics recorded from Azure Monitor.", "info")
+                        await p_logger.flush_to_db(db)
+                except Exception as metric_err:
+                    logger.warning(
+                        "Initial metric ingestion failed for deployment %s (non-fatal): %s",
+                        deploy_id,
+                        metric_err,
+                    )
+
     except Exception as error:
         if isinstance(error, PipelineExecutionError):
             safe_message = error.safe_message
@@ -2248,7 +2308,7 @@ async def run_deployment_pipeline(
             failure_code = "PIPELINE_UNEXPECTED_FAILURE"
             terminal_status = "failed"
             failed_stage_key = None
-            logger.error("Unexpected pipeline failure type: %s", type(error).__name__)
+            logger.error("Unexpected pipeline failure type: %s: %s", type(error).__name__, error, exc_info=True)
         await p_logger.log(f"Deployment stopped: {safe_message}", "error")
 
         async with AsyncSessionLocal() as failure_db:
@@ -2398,3 +2458,8 @@ async def run_deployment_pipeline(
                 git.cleanup_workspace(workspace_path)
             except Exception as cleanup_error:
                 logger.warning("Workspace cleanup failed: %s", type(cleanup_error).__name__)
+        if async_engine is not None:
+            try:
+                await async_engine.dispose()
+            except Exception as engine_error:
+                logger.warning("Engine disposal failed: %s", type(engine_error).__name__)

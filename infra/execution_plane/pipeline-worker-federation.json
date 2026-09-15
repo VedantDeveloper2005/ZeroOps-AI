@@ -1,0 +1,7 @@
+{
+  "name": "vmss-application-release-worker",
+  "issuer": "https://login.microsoftonline.com/4df935fe-ee7e-4b05-9701-bf58fd1fd854/v2.0",
+  "subject": "a9ae8065-a0cf-4595-981b-7c5358bbbabb",
+  "audiences": ["api://AzureADTokenExchange"],
+  "description": "Existing execution VMSS authenticates the PostgreSQL application release worker without a client secret."
+}

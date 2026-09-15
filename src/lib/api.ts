@@ -1209,6 +1209,15 @@ export const api = {
 
   getDeployment: (id: string) => request<DeploymentDetail>(`/api/deployments/${id}`),
 
+  deleteDeployment: (id: string) =>
+    request<{
+      status: string;
+      deployment_id: string;
+      azure_teardown: "success" | "skipped" | "failed";
+      azure_teardown_messages: string[];
+      azure_teardown_error: string | null;
+    }>(`/api/deployments/${id}`, { method: "DELETE" }),
+
   getDeploymentPipeline: (id: string) =>
     request<PipelineRun>(`/api/deployments/${id}/pipeline`),
 

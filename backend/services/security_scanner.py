@@ -39,7 +39,7 @@ ScanKind = Literal[
 ScanStatus = Literal["passed", "warning", "failed", "blocked", "unavailable"]
 Severity = Literal["critical", "high", "medium", "low", "info", "unknown"]
 
-_MAX_OUTPUT_CHARS = 250_000
+_MAX_OUTPUT_CHARS = 50_000_000
 _MAX_FINDINGS = 500
 _SEVERITY_ORDER = {
     "unknown": 0,
@@ -66,14 +66,17 @@ _FINDING_EXIT_CODES: dict[str, frozenset[int]] = {
     "tflint": frozenset({2}),
 }
 _SAFE_ENVIRONMENT_KEYS = {
+    "APPDATA",
     "COMSPEC",
     "HOME",
     "LANG",
     "LC_ALL",
+    "LOCALAPPDATA",
     "PATH",
     "PATHEXT",
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
+    "SYSTEMDRIVE",
     "SYSTEMROOT",
     "TEMP",
     "TMP",
@@ -617,7 +620,7 @@ def run_scan(
             "--json",
             "--quiet",
             "--error",
-            "--metrics=off",
+            "--metrics=on",
             ".",
         ]
         parser = _parse_semgrep

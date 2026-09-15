@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
+from worker.repository_executor import configured_executor
 
 try:
     from backend.contracts.workflow import canonical_digest
@@ -855,16 +856,22 @@ class TerraformRunner:
             terraform_proof = self._require_completed_terraform_apply(connection, job)
             self._begin_pipeline(connection, job, terraform_proof)
 
-            asyncio.run(
-                pipeline.run_deployment_pipeline(
-                    str(deployment_id),
-                    repository,
-                    branch,
-                    clone_token,
-                    commit_sha=commit_sha,
-                    lease_guard=owns_lease,
+            executor = configured_executor(commit_sha, pipeline.config.REPOSITORY_CHECK_IMAGES)
+            try:
+                asyncio.run(
+                    pipeline.run_deployment_pipeline(
+                        str(deployment_id),
+                        repository,
+                        branch,
+                        clone_token,
+                        commit_sha=commit_sha,
+                        lease_guard=owns_lease,
+                        repository_executor=executor,
+                    )
                 )
-            )
+            finally:
+                if executor is not None:
+                    executor.close()
 
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(

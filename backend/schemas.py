@@ -1,7 +1,7 @@
 import re
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
-from typing import Optional, List, Any, Literal
+from typing import Optional, List, Any, Literal, Union
 from datetime import datetime
 import uuid
 
@@ -608,7 +608,7 @@ class FailureAnalysisResponse(BaseModel):
     step_by_step_resolution: List[str] = []
     confidence: Optional[int] = 0
     impact: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: Optional[Union[datetime, str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 

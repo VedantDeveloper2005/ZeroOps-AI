@@ -38,7 +38,7 @@ def test_semgrep_result_is_parsed_without_retaining_source(tmp_path: Path):
             return security_scanner._ToolExecution(0, "semgrep 1.2.3", "")
         assert command[:4] == ["/tools/semgrep", "scan", "--config", "auto"]
         assert "--error" in command
-        assert "--metrics=off" in command
+        assert "--metrics=on" in command
         assert cwd == str(tmp_path.resolve())
         return security_scanner._ToolExecution(1, payload, "")
 

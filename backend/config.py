@@ -294,6 +294,7 @@ WORKER_HEARTBEAT_SECONDS = _integer("WORKER_HEARTBEAT_SECONDS", 30)
 WORKER_MAX_ATTEMPTS = _integer("WORKER_MAX_ATTEMPTS", 3)
 WORKER_RECOVERY_BATCH_SIZE = _integer("WORKER_RECOVERY_BATCH_SIZE", 25)
 WORKER_HEALTH_PORT = _integer("WORKER_HEALTH_PORT", 8085)
+REPOSITORY_CHECK_IMAGES = _setting("REPOSITORY_CHECK_IMAGES", "{}")
 # ZEROOPS_DEMO_EXECUTOR is defined below (line ~478) with env-var-first
 # resolution so local development works without Azure Key Vault.
 

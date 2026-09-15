@@ -85,7 +85,7 @@ class DemoRepositoryCheckExecutor:
             source_revision=request.source_revision,
             source_digest=request.source_digest,
             issued_at=now,
-            expires_at=now + timedelta(seconds=600),
+            expires_at=now + timedelta(seconds=2100),
             disposable=True,
             fresh_source=True,
             worker_filesystem_access=False,
