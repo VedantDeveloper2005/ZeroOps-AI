@@ -33,11 +33,11 @@ const footerGroups = [
 
 export function PublicFooter() {
   return (
-    <footer className="border-t border-border bg-card/50">
+    <footer style={{ borderTop: "1px solid var(--border)", background: "var(--background-secondary)" }}>
       <div className="mx-auto grid w-full max-w-7xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.2fr_2fr] lg:px-8 lg:py-14">
         <div className="max-w-sm">
           <BrandMark />
-          <p className="mt-3 text-sm leading-6 text-foreground-muted">
+          <p className="mt-3 text-sm leading-6 text-slate-400">
             A review-first path from repository evidence to an exact, approved
             Azure App Service release record.
           </p>
@@ -69,7 +69,7 @@ export function PublicFooter() {
       <div className="border-t border-border">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-2 px-4 py-5 text-xs leading-5 text-foreground-muted sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
           <p>&copy; {new Date().getFullYear()} ZeroOps AI.</p>
-          <p>Legal entity and registered-address details are pending legal review.</p>
+          <p>All rights reserved.</p>
         </div>
       </div>
     </footer>

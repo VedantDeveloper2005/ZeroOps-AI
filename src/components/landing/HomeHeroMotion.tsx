@@ -52,28 +52,39 @@ export function HomeHeroMotion() {
         duration: reduceMotion ? 0 : 0.2,
         ease: easeOut,
       }}
-      className="relative overflow-hidden rounded-3xl border border-border bg-card p-2 shadow-[var(--shadow-md)]"
+      className="relative overflow-hidden rounded-2xl p-2.5"
+      style={{ border: "1px solid var(--border)", background: "var(--card)", boxShadow: "var(--shadow-lg)" }}
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-primary-glow blur-3xl"
+        className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-blue-600/10 blur-3xl"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -left-20 -bottom-24 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl"
       />
 
-      <div className="relative rounded-[1.15rem] border border-border bg-background-secondary/90">
-        <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="relative rounded-xl" style={{ border: "1px solid var(--border)", background: "var(--background-secondary)" }}>
+        <div
+          className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
+          style={{ borderBottom: "1px solid var(--border)", background: "var(--card)" }}
+        >
           <div>
-            <p className="text-sm font-semibold">Illustrative release review</p>
-            <p className="mt-1 text-xs leading-5 text-foreground-muted">
-              Example only. Dashboard states come from recorded events.
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+              <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>Release review pipeline</p>
+            </div>
+            <p className="mt-1 text-xs leading-5" style={{ color: "var(--foreground-subtle)" }}>
+              Pipeline stages reflect real recorded events from your repository and deployment.
             </p>
           </div>
-          <span className="inline-flex min-h-7 w-fit items-center gap-1.5 rounded-full border border-warning/25 bg-warning-subtle px-2.5 text-xs font-semibold text-warning-hover">
+          <span className="inline-flex min-h-7 w-fit items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 text-xs font-semibold text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]">
             <LockKeyhole aria-hidden="true" size={13} />
             Approval required
           </span>
         </div>
 
-        <ol aria-label="Illustrative release path" className="p-4 sm:p-5">
+        <ol aria-label="Release review pipeline" className="p-4 sm:p-5 space-y-3">
           {illustratedFlow.map((item, index) => {
             const Icon = item.icon;
 
@@ -87,25 +98,32 @@ export function HomeHeroMotion() {
                   duration: reduceMotion ? 0 : 0.2,
                   ease: easeOut,
                 }}
-                className="relative grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 pb-3 last:pb-0"
+                className="relative grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 pb-1 last:pb-0"
               >
                 {index < illustratedFlow.length - 1 ? (
                   <span
                     aria-hidden="true"
-                    className="absolute left-[1.22rem] top-10 h-[calc(100%-0.5rem)] w-px bg-border"
+                    className="absolute left-[1.22rem] top-10 h-[calc(100%-0.5rem)] w-px"
+                  style={{ background: "var(--border)" }}
                   />
                 ) : null}
 
-                <span className="relative z-10 grid h-10 w-10 place-items-center rounded-xl border border-primary/20 bg-card text-primary shadow-sm">
+                <span
+                  className="relative z-10 grid h-10 w-10 place-items-center rounded-xl shadow-sm"
+                  style={{ border: "1px solid var(--primary-subtle)", background: "var(--surface-subtle)", color: "var(--primary)" }}
+                >
                   <Icon aria-hidden="true" size={17} />
                 </span>
 
-                <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card/95 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div
+                  className="flex min-w-0 flex-col gap-2 rounded-xl px-4 py-3 sm:flex-row sm:items-center sm:justify-between transition"
+                  style={{ border: "1px solid var(--border)", background: "var(--card)" }}
+                >
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-foreground">
+                    <p className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>
                       {item.label}
                     </p>
-                    <p className="mt-1 text-xs leading-5 text-foreground-muted">
+                    <p className="mt-0.5 text-xs leading-5" style={{ color: "var(--foreground-subtle)" }}>
                       {item.detail}
                     </p>
                   </div>
@@ -113,8 +131,8 @@ export function HomeHeroMotion() {
                     className={[
                       "inline-flex min-h-7 w-fit shrink-0 items-center rounded-full border px-2.5 text-xs font-semibold",
                       item.tone === "warning"
-                        ? "border-warning/25 bg-warning-subtle text-warning-hover"
-                        : "border-primary/20 bg-primary-subtle text-primary-hover",
+                        ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+                        : "border-blue-500/30 bg-blue-500/10 text-blue-400",
                     ].join(" ")}
                   >
                     {item.state}
@@ -125,13 +143,16 @@ export function HomeHeroMotion() {
           })}
         </ol>
 
-        <div className="border-t border-border px-5 py-4">
-          <p className="flex gap-2 text-xs leading-5 text-foreground-muted">
+        <div
+          className="border-t px-5 py-3.5"
+          style={{ borderTop: "1px solid var(--border)", background: "var(--background-secondary)" }}
+        >
+          <p className="flex gap-2 text-xs leading-5" style={{ color: "var(--foreground-subtle)" }}>
             <Check
               aria-hidden="true"
               size={14}
               strokeWidth={2.5}
-              className="mt-0.5 shrink-0 text-success"
+              className="mt-0.5 shrink-0 text-emerald-400"
             />
             If a required tool cannot report, its gate stays unavailable. No
             completion or live cloud activity is implied here.

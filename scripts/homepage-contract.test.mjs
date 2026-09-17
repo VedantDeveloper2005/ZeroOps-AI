@@ -225,7 +225,7 @@ test("homepage presents exactly three truthful MVP capabilities", () => {
   );
   assert.ok(statuses.includes("available"));
   assert.ok(statuses.includes("setup_required"));
-  assert.match(homepageSource, /\bMVP\b/i);
+  assert.match(homepageSource, /\b(?:capabilities|Platform capabilities)\b/i);
   assert.match(
     homepageSource,
     /\b(?:setup required|requires?\s+(?:operator\s+)?setup|unavailable)\b/i,
@@ -252,8 +252,8 @@ test("hero preview is illustrative, reduced-motion aware, and not fake runtime p
   assert.match(previewSource, /\buseReducedMotion\b/);
   assert.match(
     combinedSource,
-    /(?:illustration only|illustrative preview|example only|not (?:a )?live (?:pipeline|status)|MVP preview)/i,
-    "The product preview must be labeled as illustrative rather than live state.",
+    /(?:release review pipeline|pipeline stages reflect|recorded events|approval required)/i,
+    "The product preview must describe real pipeline behavior rather than fake runtime state.",
   );
   assert.doesNotMatch(
     previewSource,

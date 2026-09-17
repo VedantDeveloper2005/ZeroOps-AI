@@ -84,7 +84,8 @@ export function PublicHeader({ current }: PublicHeaderProps) {
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2 lg:ml-4">
+        <div className="ml-auto flex items-center gap-3 lg:ml-4">
+
           <Link
             href="/login"
             className="hidden min-h-11 items-center rounded-lg px-3 text-sm font-medium text-foreground-muted transition-colors hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:inline-flex"
@@ -94,7 +95,7 @@ export function PublicHeader({ current }: PublicHeaderProps) {
           <Link
             href="/signup"
             aria-label="Create a workspace"
-            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-primary px-3.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-4"
+            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-4"
           >
             <span className="sm:hidden">Create</span>
             <span className="hidden sm:inline">Create workspace</span>
