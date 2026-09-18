@@ -101,14 +101,16 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between bg-[#0a0e17] text-[#dfe2ef]">
+    <div className="zo-dark-page min-h-screen flex flex-col justify-between" style={{ background: "var(--background)", color: "var(--foreground)" }}>
+      <div className="zo-aurora" aria-hidden="true" />
       {/* Header Brand Bar */}
-      <header className="w-full h-16 px-6 lg:px-12 flex items-center justify-between border-b border-[#1e293b] bg-[#0a0e17]/85 backdrop-blur-md sticky top-0 z-50">
+      <header className="sticky top-0 z-50 w-full h-16 px-6 lg:px-12 flex items-center justify-between backdrop-blur-xl" style={{ borderBottom: "1px solid var(--border)", background: "color-mix(in srgb, var(--background) 80%, transparent)" }}>
         <BrandMark />
         <div className="flex items-center gap-4">
           <Link
             href="/docs"
-            className="text-xs font-semibold text-slate-400 hover:text-[#f8fafc] transition-colors flex items-center gap-1"
+            className="text-xs font-semibold transition-colors flex items-center gap-1"
+            style={{ color: "var(--foreground-subtle)" }}
           >
             Docs
             <ArrowRight size={13} aria-hidden="true" />
@@ -117,21 +119,21 @@ export default function SignupPage() {
       </header>
 
       {/* Main Split-Screen Container */}
-      <main id="main-content" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12 flex items-center justify-center">
+      <main id="main-content" className="relative z-10 flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12 flex items-center justify-center">
         <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
           {/* Left Column: Registration Form Card */}
           <div className="w-full lg:col-span-6 flex flex-col justify-center max-w-xl mx-auto lg:max-w-none">
-            <div className="bg-[#0f131c] rounded-xl border border-[#1e293b] p-6 sm:p-10 shadow-2xl shadow-black/50 relative overflow-hidden">
+            <div className="zo-glow-card p-6 sm:p-10 shadow-2xl relative">
               <div className="absolute -top-10 right-0 w-44 h-44 bg-blue-500/5 rounded-full blur-2xl pointer-events-none" />
 
               <div className="mb-7">
                 <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 mb-3.5">
                   <span className="text-xs text-blue-400 font-semibold tracking-wide">Deployment Platform</span>
                 </div>
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#f8fafc]">
+                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--foreground)" }}>
                   {checkEmail ? "Check your email" : "Create your ZeroOps AI workspace"}
                 </h1>
-                <p className="text-sm text-slate-400 mt-2">
+                <p className="text-sm mt-2" style={{ color: "var(--foreground-subtle)" }}>
                   {checkEmail
                     ? `Open the single-use verification link sent to ${formData.email}.`
                     : "Create your account to start deploying to Azure with evidence-based approvals."}
@@ -363,48 +365,48 @@ export default function SignupPage() {
 
           {/* Right Column: Platform Value Props Bento */}
           <div className="w-full lg:col-span-6 flex flex-col space-y-5">
-            <div className="relative bg-[#0f131c] rounded-xl border border-[#1e293b] p-6 lg:p-7 shadow-2xl shadow-black/50 overflow-hidden">
+            <div className="zo-glow-card relative p-6 lg:p-7 shadow-2xl">
               <div className="absolute -top-16 -right-16 w-64 h-64 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
               <div className="absolute -bottom-16 -left-16 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
               <div className="mb-6">
                 <span className="text-xs font-semibold uppercase tracking-wider text-blue-400">Deployment Platform</span>
-                <h3 className="text-xl font-bold text-[#f8fafc] mt-1">From repository evidence to live Azure workloads</h3>
-                <p className="text-xs text-slate-400 mt-1">Every release gate is recorded, verified, and audited with zero mock data.</p>
+                <h3 className="text-xl font-bold mt-1" style={{ color: "var(--foreground)" }}>From repository evidence to live Azure workloads</h3>
+                <p className="text-xs mt-1" style={{ color: "var(--foreground-subtle)" }}>Every release gate is recorded, verified, and audited with zero mock data.</p>
               </div>
 
               <div className="space-y-3.5">
-                <div className="bg-[#141926] rounded-lg p-3.5 border border-[#1e293b] flex items-start gap-3">
+                <div className="rounded-lg p-3.5 flex items-start gap-3" style={{ background: "var(--surface-subtle)", border: "1px solid var(--border)" }}>
                   <span className="w-7 h-7 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 text-xs font-bold">1</span>
                   <div>
-                    <h4 className="text-xs font-semibold text-[#f8fafc]">Deep Repository & Stack Analysis</h4>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Detects frameworks, package managers, port configs, and generates declarative Terraform definitions.</p>
+                    <h4 className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>Deep Repository & Stack Analysis</h4>
+                    <p className="text-[11px] mt-0.5" style={{ color: "var(--foreground-subtle)" }}>Detects frameworks, package managers, port configs, and generates declarative Terraform definitions.</p>
                   </div>
                 </div>
 
-                <div className="bg-[#141926] rounded-lg p-3.5 border border-[#1e293b] flex items-start gap-3">
+                <div className="rounded-lg p-3.5 flex items-start gap-3" style={{ background: "var(--surface-subtle)", border: "1px solid var(--border)" }}>
                   <span className="w-7 h-7 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 text-xs font-bold">2</span>
                   <div>
-                    <h4 className="text-xs font-semibold text-[#f8fafc]">Real-Time Security & Policy Enforcement</h4>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Automated scans with Gitleaks, Semgrep, and Trivy running directly in isolated environments.</p>
+                    <h4 className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>Real-Time Security & Policy Enforcement</h4>
+                    <p className="text-[11px] mt-0.5" style={{ color: "var(--foreground-subtle)" }}>Automated scans with Gitleaks, Semgrep, and Trivy running directly in isolated environments.</p>
                   </div>
                 </div>
 
-                <div className="bg-[#141926] rounded-lg p-3.5 border border-[#1e293b] flex items-start gap-3">
+                <div className="rounded-lg p-3.5 flex items-start gap-3" style={{ background: "var(--surface-subtle)", border: "1px solid var(--border)" }}>
                   <span className="w-7 h-7 rounded-md bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 text-xs font-bold">3</span>
                   <div>
-                    <h4 className="text-xs font-semibold text-[#f8fafc]">Live App Service Provisioning & Telemetry</h4>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Direct deployment to Azure App Service with live HTTP health probes and Azure Monitor metrics.</p>
+                    <h4 className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>Live App Service Provisioning & Telemetry</h4>
+                    <p className="text-[11px] mt-0.5" style={{ color: "var(--foreground-subtle)" }}>Direct deployment to Azure App Service with live HTTP health probes and Azure Monitor metrics.</p>
                   </div>
                 </div>
               </div>
 
               {/* Security Strip */}
-              <div className="mt-6 pt-5 border-t border-[#1e293b] flex items-center justify-between text-xs text-slate-400">
-                <span className="flex items-center gap-1.5 font-medium text-[#f8fafc]">
+              <div className="mt-6 pt-5 flex items-center justify-between text-xs" style={{ borderTop: "1px solid var(--border)", color: "var(--foreground-subtle)" }}>
+                <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--foreground)" }}>
                   <span className="text-emerald-400 font-bold">✓</span> Zero fake runtime progress
                 </span>
-                <span className="flex items-center gap-1.5 font-medium text-[#f8fafc]">
+                <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--foreground)" }}>
                   <span className="text-emerald-400 font-bold">✓</span> RBAC isolated tenants
                 </span>
               </div>
@@ -413,7 +415,7 @@ export default function SignupPage() {
         </div>
       </main>
 
-      <footer className="w-full py-4 border-t border-[#1e293b] text-center text-xs text-slate-500">
+      <footer className="relative z-10 w-full py-4 text-center text-xs" style={{ borderTop: "1px solid var(--border)", color: "var(--foreground-subtle)" }}>
         &copy; {new Date().getFullYear()} ZeroOps AI. All rights reserved.
       </footer>
     </div>
@@ -424,7 +426,7 @@ function Field({ id, label, helper, trailing, ...props }: FieldProps) {
   const helperId = helper ? `${id}-helper` : undefined;
   return (
     <div>
-      <label htmlFor={id} className="block text-xs font-medium text-[#e2e8f0] mb-1.5">
+      <label htmlFor={id} className="block text-xs font-medium mb-1.5" style={{ color: "var(--foreground)" }}>
         {label}
       </label>
       <div className="relative">
@@ -432,9 +434,10 @@ function Field({ id, label, helper, trailing, ...props }: FieldProps) {
           {...props}
           id={id}
           aria-describedby={helperId}
-          className={`block w-full rounded-lg border border-[#1e293b] bg-[#0a0e17] px-3.5 py-2.5 text-sm text-[#f8fafc] placeholder:text-slate-600 outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${
+          className={`block w-full rounded-lg px-3.5 py-2.5 text-sm placeholder:text-slate-600 outline-none transition-all focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${
             trailing ? "pr-12" : ""
           }`}
+          style={{ background: "var(--background)", border: "1px solid var(--border)", color: "var(--foreground)" }}
         />
         {trailing && <div className="absolute right-1 top-1/2 -translate-y-1/2">{trailing}</div>}
       </div>

@@ -45,11 +45,11 @@ function HeaderLink({
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       className={[
-        "inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "inline-flex min-h-10 items-center rounded-lg px-3 text-sm font-medium transition-all duration-200",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
         active
-          ? "bg-primary-subtle text-primary"
-          : "text-foreground-muted hover:bg-surface-subtle hover:text-foreground",
+          ? "bg-blue-500/10 text-blue-400"
+          : "text-[var(--foreground-muted)] hover:bg-[var(--surface-subtle)] hover:text-[var(--foreground)]",
       ].join(" ")}
     >
       {label}
@@ -66,13 +66,19 @@ export function PublicHeader({ current }: PublicHeaderProps) {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
+    <header
+      className="sticky top-0 z-40 backdrop-blur-xl"
+      style={{
+        borderBottom: "1px solid var(--border)",
+        background: "color-mix(in srgb, var(--background) 80%, transparent)",
+      }}
+    >
       <div className="mx-auto flex min-h-16 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 lg:px-8">
         <BrandMark />
 
         <nav
           aria-label="Primary navigation"
-          className="ml-auto hidden items-center gap-1 lg:flex"
+          className="ml-auto hidden items-center gap-0.5 lg:flex"
         >
           {navigation.map((item) => (
             <HeaderLink
@@ -85,32 +91,34 @@ export function PublicHeader({ current }: PublicHeaderProps) {
         </nav>
 
         <div className="ml-auto flex items-center gap-3 lg:ml-4">
-
           <Link
             href="/login"
-            className="hidden min-h-11 items-center rounded-lg px-3 text-sm font-medium text-foreground-muted transition-colors hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:inline-flex"
+            className="hidden min-h-10 items-center rounded-lg px-3.5 text-sm font-medium transition-all duration-200 sm:inline-flex"
+            style={{ color: "var(--foreground-muted)" }}
           >
             Sign in
           </Link>
           <Link
             href="/signup"
-            aria-label="Create a workspace"
-            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-4"
+            aria-label="Get started"
+            className="inline-flex min-h-10 items-center justify-center rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-all duration-200 hover:bg-blue-500 hover:shadow-blue-500/30 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
-            <span className="sm:hidden">Create</span>
-            <span className="hidden sm:inline">Create workspace</span>
+            <span className="sm:hidden">Start</span>
+            <span className="hidden sm:inline">Get started</span>
           </Link>
 
           <details ref={mobileMenuRef} className="group relative lg:hidden">
             <summary
               aria-label="Toggle navigation"
-              className="grid min-h-11 min-w-11 cursor-pointer list-none place-items-center rounded-lg border border-border bg-card text-foreground transition-colors hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden"
+              className="grid min-h-10 min-w-10 cursor-pointer list-none place-items-center rounded-lg transition-colors [&::-webkit-details-marker]:hidden"
+              style={{ border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)" }}
             >
-              <Menu aria-hidden="true" size={19} />
+              <Menu aria-hidden="true" size={18} />
             </summary>
             <nav
               aria-label="Mobile navigation"
-              className="absolute right-0 top-[calc(100%+0.6rem)] grid w-56 gap-1 rounded-xl border border-border bg-card p-2 shadow-xl"
+              className="absolute right-0 top-[calc(100%+0.5rem)] grid w-56 gap-0.5 rounded-xl p-2 shadow-xl backdrop-blur-xl"
+              style={{ border: "1px solid var(--border)", background: "var(--card)" }}
             >
               {navigation.map((item) => (
                 <HeaderLink
@@ -121,7 +129,7 @@ export function PublicHeader({ current }: PublicHeaderProps) {
                   onNavigate={closeMobileMenu}
                 />
               ))}
-              <div className="mt-1 border-t border-border pt-1 sm:hidden">
+              <div className="mt-1 pt-1 sm:hidden" style={{ borderTop: "1px solid var(--border)" }}>
                 <HeaderLink
                   href="/login"
                   label="Sign in"
