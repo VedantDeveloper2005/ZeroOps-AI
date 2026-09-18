@@ -57,6 +57,7 @@ RESOURCE DETAILS
 • Name:        {resource.name}
 • Type:        {resource.resource_type} ({resource.sku})
 • Region:      Azure {resource.region}
+• Hourly Subtotal: ${resource.cost_estimate_hourly:.3f}/hr (All-inclusive subtotal)
 • Public IP:   {conn.get('public_ip', 'Allocated')}
 • Hostname:    {conn.get('host', 'N/A')}
 • Username:    {conn.get('username', 'azureuser')}
@@ -100,6 +101,7 @@ ZeroOps AI Cloud Automation
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Resource Name:</td><td style="color: #ffffff; font-weight: 600;">{resource.name}</td></tr>
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Resource Type:</td><td style="color: #ffffff;">{resource.resource_type} ({resource.sku})</td></tr>
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Azure Region:</td><td style="color: #ffffff;">{resource.region}</td></tr>
+                <tr><td style="color: #94a3b8; padding: 6px 0;">Hourly Subtotal:</td><td style="color: #ffffff;">${resource.cost_estimate_hourly:.3f}/hr (All-inclusive)</td></tr>
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Public IP:</td><td style="color: #38bdf8; font-family: monospace; font-weight: 600;">{conn.get('public_ip', 'Allocated')}</td></tr>
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Username:</td><td style="color: #ffffff;">{conn.get('username', 'azureuser')}</td></tr>
                 <tr><td style="color: #94a3b8; padding: 6px 0;">Password:</td><td style="color: #f59e0b; font-family: monospace;">{conn.get('password', 'Generated')}</td></tr>

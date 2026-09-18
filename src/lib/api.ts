@@ -295,6 +295,8 @@ export interface EphemeralResource {
   expires_at: string;
   time_remaining_seconds?: number;
   cost_estimate_hourly: number;
+  hourly_subtotal?: number;
+  total_subtotal?: number;
   connection_info: {
     host?: string;
     public_ip?: string;
@@ -328,6 +330,8 @@ export interface EphemeralResourceProposal {
   ttl_minutes: number;
   os_distro?: string;
   cost_estimate_hourly: number;
+  hourly_subtotal?: number;
+  total_subtotal?: number;
   summary: string;
   startup_script?: string | null;
   open_ports: number[];

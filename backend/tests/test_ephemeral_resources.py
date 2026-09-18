@@ -272,3 +272,121 @@ async def test_inbound_email_developer_request(in_memory_db, monkeypatch):
     assert len(sent_emails) == 1
     assert "Your Cloud Sandbox is Ready" in sent_emails[0]["html"]
     assert "postgresql://" in sent_emails[0]["text"]
+    assert "Hourly Subtotal" in sent_emails[0]["html"]
+    assert "Hourly Subtotal" in sent_emails[0]["text"]
+
+
+def test_rigid_cost_engine_calculations():
+    """Verify rigid cost calculations combine resource aspects, platform ops, and AI into Subtotal."""
+    from backend.services.cost_engine import calculate_hourly_subtotal, calculate_subtotal
+
+    # 1. Standard Linux VM (Standard_B2s: 2 vCPUs, 4GB RAM)
+    # Compute: (2 * 0.012) + (4 * 0.004) = 0.040
+    # Net/Disk: 0.006 => Resource Aspects = 0.046
+    # Platform: 0.012 + (0.046 * 0.05) = 0.0143
+    # AI: 0.008
+    # Subtotal: 0.046 + 0.0143 + 0.008 = 0.0683 => 0.068
+    b2s_linux_rate = calculate_hourly_subtotal("vm_linux", "Standard_B2s")
+    assert b2s_linux_rate == 0.068
+
+    # 2. Windows VM (Standard_B2s: includes Windows licensing: 2 * 0.024 = 0.048)
+    # Subtotal: 0.119
+    b2s_windows_rate = calculate_hourly_subtotal("vm_windows", "Standard_B2s", os_distro="Windows Server 2022")
+    assert b2s_windows_rate == 0.119
+    assert b2s_windows_rate > b2s_linux_rate  # Windows licensing correctly incorporated
+
+    # 3. Database Postgres (Standard_B1ms: includes managed engine overhead $0.015/hr)
+    pg_rate = calculate_hourly_subtotal("database_postgres", "Standard_B1ms")
+    assert pg_rate == 0.063
+
+    # 4. Multi-hour SubtotalQuote scaling
+    quote_3h = calculate_subtotal("vm_linux", "Standard_B2s", duration_minutes=180)
+    assert quote_3h.hourly_subtotal == 0.068
+    assert quote_3h.total_subtotal == round(0.068 * 3.0, 3)
+    assert quote_3h.label == "Subtotal"
+
+
+def test_rigid_cost_engine_strictly_omits_separate_platform_ai_breakdown():
+    """CRITICAL: Ensure platform and AI costs are NOT exposed as separate line items or breakdown keys."""
+    from backend.services.cost_engine import calculate_subtotal
+
+    quote = calculate_subtotal("vm_linux", "Standard_B2s", duration_minutes=120)
+    quote_dict = quote.to_dict()
+
+    # Must only expose unified subtotal fields
+    assert "hourly_subtotal" in quote_dict
+    assert "total_subtotal" in quote_dict
+    assert quote_dict["label"] == "Subtotal"
+
+    # MUST NOT expose separate platform or AI fees
+    forbidden_keys = [
+        "platform_cost",
+        "platform_fee",
+        "platform_price",
+        "ai_cost",
+        "ai_fee",
+        "ai_price",
+        "breakdown",
+    ]
+    for key in forbidden_keys:
+        assert key not in quote_dict, f"Leaked separate fee '{key}' in client quote!"
+
+
+@pytest.mark.asyncio
+async def test_chat_proposal_and_serialization_subtotal(in_memory_db):
+    """Verify EphemeralResourceProposal and serialized response include hourly_subtotal and total_subtotal."""
+    from backend.routes.ephemeral_resources import _serialize_resource
+
+    session, user = in_memory_db
+
+    # 1. Chat proposal
+    res = await process_resource_chat(
+        message="Provision a Linux VM for 2 hours",
+        user=user,
+    )
+    prop = res.proposed_resource
+    assert prop is not None
+    assert prop.hourly_subtotal is not None
+    assert prop.total_subtotal is not None
+    assert prop.hourly_subtotal == 0.068
+    assert prop.total_subtotal == 0.136
+    assert "Hourly Subtotal" in res.reply
+    assert "Estimated Subtotal" in res.reply
+    # Ensure no separate platform/AI line item leaked
+    assert "Platform fee" not in res.reply
+    assert "AI fee" not in res.reply
+
+    # 2. Provision and serialization
+    req = schemas.EphemeralResourceCreateRequest(
+        name="subtotal-test",
+        resource_type="vm_linux",
+        region="eastus",
+        sku="Standard_B2s",
+        ttl_minutes=120,
+    )
+    db_res = await provision_ephemeral_resource(session, user, req)
+    serialized = _serialize_resource(db_res)
+    assert serialized.hourly_subtotal == 0.068
+    assert serialized.total_subtotal == 0.136
+
+
+def test_jira_provision_comment_includes_subtotal_only():
+    """Verify Jira comment includes Hourly Subtotal and does not leak separate platform/AI line items."""
+    fake_resource = models.EphemeralResource(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        name="jira-sandbox",
+        resource_type="vm_linux",
+        region="eastus",
+        sku="Standard_B2s",
+        status="active",
+        ttl_minutes=120,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        cost_estimate_hourly=0.068,
+        connection_info={"public_ip": "20.120.45.10", "ssh_command": "ssh azureuser@20.120.45.10"},
+    )
+    comment = format_jira_provision_comment(fake_resource)
+    assert "*Hourly Subtotal:* $0.068/hr" in comment
+    assert "Platform fee" not in comment
+    assert "AI fee" not in comment
+

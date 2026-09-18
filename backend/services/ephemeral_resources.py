@@ -22,10 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 try:
     from backend import models, schemas
     from backend.services import azure_connector
+    from backend.services.cost_engine import calculate_hourly_subtotal, calculate_subtotal
 except ImportError:
     import models
     import schemas
     from services import azure_connector
+    from services.cost_engine import calculate_hourly_subtotal, calculate_subtotal
 
 logger = logging.getLogger("zeroops.ephemeral_resources")
 
@@ -41,11 +43,11 @@ RESOURCE_CATALOG = {
         "category": "compute",
         "default_sku": "Standard_B2s",
         "skus": [
-            {"id": "Standard_B1s", "label": "Standard_B1s (1 vCPU, 1 GB RAM)", "hourly_cost": 0.015},
-            {"id": "Standard_B2s", "label": "Standard_B2s (2 vCPUs, 4 GB RAM) [Recommended]", "hourly_cost": 0.0416},
-            {"id": "Standard_D2s_v5", "label": "Standard_D2s_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.096},
-            {"id": "Standard_D4s_v5", "label": "Standard_D4s_v5 (4 vCPUs, 16 GB RAM)", "hourly_cost": 0.192},
-            {"id": "Standard_F4s_v2", "label": "Standard_F4s_v2 (Compute Optimized 4 vCPUs, 8 GB)", "hourly_cost": 0.169},
+            {"id": "Standard_B1s", "label": "Standard_B1s (1 vCPU, 1 GB RAM)", "hourly_cost": 0.043},
+            {"id": "Standard_B2s", "label": "Standard_B2s (2 vCPUs, 4 GB RAM) [Recommended]", "hourly_cost": 0.068},
+            {"id": "Standard_D2s_v5", "label": "Standard_D2s_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.087},
+            {"id": "Standard_D4s_v5", "label": "Standard_D4s_v5 (4 vCPUs, 16 GB RAM)", "hourly_cost": 0.150},
+            {"id": "Standard_F4s_v2", "label": "Standard_F4s_v2 (Compute Optimized 4 vCPUs, 8 GB)", "hourly_cost": 0.114},
         ],
         "distros": [
             {"id": "Ubuntu 22.04 LTS", "label": "Ubuntu 22.04 LTS (Jammy Jellyfish)"},
@@ -62,9 +64,9 @@ RESOURCE_CATALOG = {
         "category": "compute",
         "default_sku": "Standard_B2s",
         "skus": [
-            {"id": "Standard_B2s", "label": "Standard_B2s (2 vCPUs, 4 GB RAM)", "hourly_cost": 0.065},
-            {"id": "Standard_D2s_v5", "label": "Standard_D2s_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.14},
-            {"id": "Standard_D4s_v5", "label": "Standard_D4s_v5 (4 vCPUs, 16 GB RAM)", "hourly_cost": 0.28},
+            {"id": "Standard_B2s", "label": "Standard_B2s (2 vCPUs, 4 GB RAM)", "hourly_cost": 0.119},
+            {"id": "Standard_D2s_v5", "label": "Standard_D2s_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.137},
+            {"id": "Standard_D4s_v5", "label": "Standard_D4s_v5 (4 vCPUs, 16 GB RAM)", "hourly_cost": 0.250},
         ],
         "distros": [
             {"id": "Windows Server 2022 Datacenter", "label": "Windows Server 2022 Datacenter Azure Edition"},
@@ -79,9 +81,9 @@ RESOURCE_CATALOG = {
         "category": "database",
         "default_sku": "Standard_B1ms",
         "skus": [
-            {"id": "Standard_B1ms", "label": "Burstable B1ms (1 vCPU, 2 GB RAM, 32GB Storage)", "hourly_cost": 0.035},
-            {"id": "Standard_B2s", "label": "Burstable B2s (2 vCPUs, 4 GB RAM, 64GB Storage)", "hourly_cost": 0.07},
-            {"id": "Standard_D2ds_v5", "label": "General Purpose D2ds_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.18},
+            {"id": "Standard_B1ms", "label": "Burstable B1ms (1 vCPU, 2 GB RAM, 32GB Storage)", "hourly_cost": 0.063},
+            {"id": "Standard_B2s", "label": "Burstable B2s (2 vCPUs, 4 GB RAM, 64GB Storage)", "hourly_cost": 0.091},
+            {"id": "Standard_D2ds_v5", "label": "General Purpose D2ds_v5 (2 vCPUs, 8 GB RAM)", "hourly_cost": 0.120},
         ],
         "distros": [
             {"id": "PostgreSQL 16", "label": "PostgreSQL 16"},
@@ -97,8 +99,8 @@ RESOURCE_CATALOG = {
         "category": "database",
         "default_sku": "Standard_B1ms",
         "skus": [
-            {"id": "Standard_B1ms", "label": "Burstable B1ms (1 vCPU, 2 GB RAM)", "hourly_cost": 0.035},
-            {"id": "Standard_B2s", "label": "Burstable B2s (2 vCPUs, 4 GB RAM)", "hourly_cost": 0.07},
+            {"id": "Standard_B1ms", "label": "Burstable B1ms (1 vCPU, 2 GB RAM)", "hourly_cost": 0.063},
+            {"id": "Standard_B2s", "label": "Burstable B2s (2 vCPUs, 4 GB RAM)", "hourly_cost": 0.091},
         ],
         "distros": [
             {"id": "MySQL 8.0", "label": "MySQL 8.0 Community Edition"},
@@ -112,9 +114,9 @@ RESOURCE_CATALOG = {
         "category": "containers",
         "default_sku": "1.0 CPU / 2.0 GiB",
         "skus": [
-            {"id": "0.5 CPU / 1.0 GiB", "label": "0.5 vCPU / 1.0 GiB RAM", "hourly_cost": 0.024},
-            {"id": "1.0 CPU / 2.0 GiB", "label": "1.0 vCPU / 2.0 GiB RAM", "hourly_cost": 0.048},
-            {"id": "2.0 CPU / 4.0 GiB", "label": "2.0 vCPU / 4.0 GiB RAM", "hourly_cost": 0.096},
+            {"id": "0.5 CPU / 1.0 GiB", "label": "0.5 vCPU / 1.0 GiB RAM", "hourly_cost": 0.045},
+            {"id": "1.0 CPU / 2.0 GiB", "label": "1.0 vCPU / 2.0 GiB RAM", "hourly_cost": 0.068},
+            {"id": "2.0 CPU / 4.0 GiB", "label": "2.0 vCPU / 4.0 GiB RAM", "hourly_cost": 0.114},
         ],
         "distros": [
             {"id": "Docker Container", "label": "Custom Container Image / Web App"},
@@ -128,8 +130,8 @@ RESOURCE_CATALOG = {
         "category": "storage",
         "default_sku": "Standard_LRS",
         "skus": [
-            {"id": "Standard_LRS", "label": "Standard Locally Redundant Storage (LRS)", "hourly_cost": 0.01},
-            {"id": "Standard_GRS", "label": "Standard Geo-Redundant Storage (GRS)", "hourly_cost": 0.02},
+            {"id": "Standard_LRS", "label": "Standard Locally Redundant Storage (LRS)", "hourly_cost": 0.032},
+            {"id": "Standard_GRS", "label": "Standard Geo-Redundant Storage (GRS)", "hourly_cost": 0.042},
         ],
         "distros": [
             {"id": "Blob Storage", "label": "Hot Tier Blob Containers"},
@@ -143,8 +145,8 @@ RESOURCE_CATALOG = {
         "category": "database",
         "default_sku": "Basic_C0",
         "skus": [
-            {"id": "Basic_C0", "label": "Basic C0 (250 MB Memory)", "hourly_cost": 0.022},
-            {"id": "Basic_C1", "label": "Basic C1 (1 GB Memory)", "hourly_cost": 0.055},
+            {"id": "Basic_C0", "label": "Basic C0 (250 MB Memory)", "hourly_cost": 0.046},
+            {"id": "Basic_C1", "label": "Basic C1 (1 GB Memory)", "hourly_cost": 0.065},
         ],
         "distros": [
             {"id": "Redis 6.0", "label": "Redis 6.0"},
@@ -152,6 +154,11 @@ RESOURCE_CATALOG = {
         "default_ports": [6379, 6380],
     },
 }
+
+# Ensure every SKU in the catalog is dynamically computed by the rigid cost engine
+for _rtype, _cat_data in RESOURCE_CATALOG.items():
+    for _sku_entry in _cat_data.get("skus", []):
+        _sku_entry["hourly_cost"] = calculate_hourly_subtotal(_rtype, _sku_entry["id"])
 
 REGIONS = [
     {"id": "eastus", "label": "East US (Virginia)"},
@@ -163,14 +170,12 @@ REGIONS = [
 ]
 
 
-def get_hourly_cost(resource_type: str, sku: str) -> float:
-    catalog_item = RESOURCE_CATALOG.get(resource_type)
-    if not catalog_item:
-        return 0.04
-    for item in catalog_item.get("skus", []):
-        if item["id"] == sku:
-            return float(item["hourly_cost"])
-    return 0.04
+def get_hourly_cost(resource_type: str, sku: str, os_distro: Optional[str] = None) -> float:
+    """
+    Returns the rigid consolidated hourly subtotal (infrastructure + platform + AI embedded).
+    """
+    return calculate_hourly_subtotal(resource_type, sku, os_distro)
+
 
 
 def generate_temp_password(length: int = 16) -> str:

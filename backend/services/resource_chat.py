@@ -15,11 +15,13 @@ from typing import Any, Dict, Optional, Tuple
 try:
     from backend import models, schemas
     from backend.services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, get_hourly_cost
+    from backend.services.cost_engine import calculate_subtotal
     from backend.services.ai import generate_chat_response
 except ImportError:
     import models
     import schemas
     from services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, get_hourly_cost
+    from services.cost_engine import calculate_subtotal
     from services.ai import generate_chat_response
 
 logger = logging.getLogger("zeroops.resource_chat")
@@ -159,16 +161,24 @@ async def process_resource_chat(
     region = intent["region"]
     ttl_minutes = intent["ttl_minutes"]
     name = intent["name"]
-    hourly_cost = get_hourly_cost(res_type, sku)
-    total_cost_est = round(hourly_cost * (ttl_minutes / 60), 3)
 
     catalog_info = RESOURCE_CATALOG.get(res_type, {})
     title = catalog_info.get("title", "Cloud Resource")
+    os_distro = catalog_info.get("distros", [{}])[0].get("id", "Ubuntu 22.04 LTS")
+
+    quote = calculate_subtotal(
+        resource_type=res_type,
+        sku=sku,
+        os_distro=os_distro,
+        duration_minutes=ttl_minutes,
+    )
+    hourly_subtotal = quote.hourly_subtotal
+    total_subtotal = quote.total_subtotal
 
     hours_disp = f"{ttl_minutes // 60}h" if ttl_minutes % 60 == 0 else f"{ttl_minutes}m"
     summary = (
         f"I've configured an ephemeral **{title}** ({sku}) in **{region}** "
-        f"scheduled to auto-destroy in **{hours_disp}** (estimated cost: ~${total_cost_est:.3f})."
+        f"scheduled to auto-destroy in **{hours_disp}** (estimated subtotal: ~${total_subtotal:.3f})."
     )
 
     proposal = schemas.EphemeralResourceProposal(
@@ -177,8 +187,10 @@ async def process_resource_chat(
         region=region,
         sku=sku,
         ttl_minutes=ttl_minutes,
-        os_distro=catalog_info.get("distros", [{}])[0].get("id", "Ubuntu 22.04 LTS"),
-        cost_estimate_hourly=hourly_cost,
+        os_distro=os_distro,
+        cost_estimate_hourly=hourly_subtotal,
+        hourly_subtotal=hourly_subtotal,
+        total_subtotal=total_subtotal,
         summary=summary,
         startup_script=intent.get("startup_script"),
         open_ports=intent.get("open_ports", [22, 80, 443]),
@@ -189,7 +201,8 @@ async def process_resource_chat(
         f"- **Resource:** {title} ({sku})\n"
         f"- **Region:** Azure `{region}`\n"
         f"- **Auto-Destroy TTL:** {hours_disp} (Guaranteed auto-teardown to eliminate zombie cloud spend)\n"
-        f"- **Rate:** ${hourly_cost:.3f}/hr (~${total_cost_est:.3f} total)\n"
+        f"- **Hourly Subtotal:** ${hourly_subtotal:.3f}/hr\n"
+        f"- **Estimated Subtotal:** ~${total_subtotal:.3f} for {hours_disp}\n"
     )
     if intent.get("startup_script"):
         explanation += "- **Startup Script:** Preinstalling requested tools and runtimes.\n"

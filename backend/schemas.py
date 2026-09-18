@@ -870,6 +870,8 @@ class EphemeralResourceResponse(BaseModel):
     expires_at: datetime
     time_remaining_seconds: Optional[int] = None
     cost_estimate_hourly: float
+    hourly_subtotal: Optional[float] = None
+    total_subtotal: Optional[float] = None
     connection_info: Dict[str, Any] = {}
     configuration: Dict[str, Any] = {}
     azure_resource_id: Optional[str] = None
@@ -890,6 +892,8 @@ class EphemeralResourceProposal(BaseModel):
     ttl_minutes: int
     os_distro: Optional[str] = None
     cost_estimate_hourly: float
+    hourly_subtotal: Optional[float] = None
+    total_subtotal: Optional[float] = None
     summary: str
     startup_script: Optional[str] = None
     open_ports: List[int] = []

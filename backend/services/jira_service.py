@@ -48,6 +48,7 @@ def format_jira_provision_comment(resource: models.EphemeralResource) -> str:
         f"*Resource Type:* {resource.resource_type} ({resource.sku})",
         f"*Region:* Azure `{resource.region}`",
         f"*Public IP / Host:* `{conn.get('public_ip', 'Allocated')}`",
+        f"*Hourly Subtotal:* ${resource.cost_estimate_hourly:.3f}/hr (All-inclusive subtotal)",
     ]
 
     if conn.get("ssh_command"):

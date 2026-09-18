@@ -96,7 +96,7 @@ const SMART_PRESETS: QuickPreset[] = [
     region: "eastus",
     ttl: 120,
     startupScript: "#!/bin/bash\ncurl -fsSL https://get.docker.com | sh && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs",
-    costPerHour: 0.0416,
+    costPerHour: 0.068,
   },
   {
     id: "staging-postgres",
@@ -110,7 +110,7 @@ const SMART_PRESETS: QuickPreset[] = [
     distro: "PostgreSQL 16",
     region: "eastus",
     ttl: 120,
-    costPerHour: 0.035,
+    costPerHour: 0.063,
   },
   {
     id: "windows-qa",
@@ -124,7 +124,7 @@ const SMART_PRESETS: QuickPreset[] = [
     distro: "Windows Server 2022 Datacenter",
     region: "eastus",
     ttl: 120,
-    costPerHour: 0.065,
+    costPerHour: 0.119,
   },
   {
     id: "redis-fast",
@@ -138,7 +138,7 @@ const SMART_PRESETS: QuickPreset[] = [
     distro: "Redis 6.0",
     region: "eastus",
     ttl: 60,
-    costPerHour: 0.022,
+    costPerHour: 0.048,
   },
   {
     id: "staging-mysql",
@@ -152,7 +152,7 @@ const SMART_PRESETS: QuickPreset[] = [
     distro: "MySQL 8.0",
     region: "eastus",
     ttl: 120,
-    costPerHour: 0.035,
+    costPerHour: 0.063,
   },
   {
     id: "container-app",
@@ -167,7 +167,7 @@ const SMART_PRESETS: QuickPreset[] = [
     region: "eastus",
     ttl: 120,
     startupScript: "#!/bin/bash\napt-get update && apt-get install -y docker.io docker-compose python3-pip",
-    costPerHour: 0.0416,
+    costPerHour: 0.075,
   },
   {
     id: "stress-benchmark",
@@ -181,7 +181,7 @@ const SMART_PRESETS: QuickPreset[] = [
     distro: "Ubuntu 22.04 LTS",
     region: "eastus",
     ttl: 180,
-    costPerHour: 0.192,
+    costPerHour: 0.144,
   },
 ];
 
@@ -654,11 +654,11 @@ export default function CloudSandboxPage() {
 
         <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between text-foreground-muted">
-            <span className="text-xs font-medium uppercase tracking-wider">Hourly Burn Rate</span>
+            <span className="text-xs font-medium uppercase tracking-wider">Hourly Burn Subtotal</span>
             <Flame size={16} className="text-amber-500" />
           </div>
           <p className="mt-2 text-2xl font-bold text-foreground">${totalBurnRate.toFixed(3)}/hr</p>
-          <span className="text-xs text-foreground-muted">Guaranteed TTL bounds</span>
+          <span className="text-xs text-foreground-muted">All-inclusive subtotal</span>
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
@@ -852,8 +852,8 @@ export default function CloudSandboxPage() {
                       <span className="rounded-lg bg-amber-500/10 text-amber-500 font-semibold px-2 py-0.5">
                         {preset.ttl / 60}h TTL
                       </span>
-                      <span className="rounded-lg bg-emerald-500/10 text-emerald-500 font-bold px-2 py-0.5">
-                        ${preset.costPerHour}/hr
+                      <span className="rounded-lg bg-emerald-500/10 text-emerald-500 font-bold px-2 py-0.5" title="All-inclusive subtotal">
+                        ${preset.costPerHour}/hr Subtotal
                       </span>
                     </div>
                   </div>
@@ -935,8 +935,8 @@ export default function CloudSandboxPage() {
                           <span className="text-xs font-bold uppercase tracking-wider text-primary">
                             Proposed Infrastructure Plan
                           </span>
-                          <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                            ~${(msg.proposal.cost_estimate_hourly * (msg.proposal.ttl_minutes / 60)).toFixed(3)}
+                          <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary" title="All-inclusive subtotal">
+                            Subtotal: ~${((msg.proposal.total_subtotal ?? (msg.proposal.cost_estimate_hourly * (msg.proposal.ttl_minutes / 60)))).toFixed(3)}
                           </span>
                         </div>
 
@@ -956,6 +956,12 @@ export default function CloudSandboxPage() {
                           <div>
                             <span className="text-foreground-muted">TTL Duration:</span>{" "}
                             <span className="font-semibold text-amber-500">{msg.proposal.ttl_minutes} mins</span>
+                          </div>
+                          <div className="col-span-2 pt-1 border-t border-border flex justify-between">
+                            <span className="text-foreground-muted">Hourly Subtotal:</span>{" "}
+                            <span className="font-semibold text-emerald-500">
+                              ${(msg.proposal.hourly_subtotal ?? msg.proposal.cost_estimate_hourly).toFixed(3)}/hr
+                            </span>
                           </div>
                         </div>
 
@@ -1151,7 +1157,7 @@ export default function CloudSandboxPage() {
                 >
                   {currentTypeConfig?.skus.map((sku) => (
                     <option key={sku.id} value={sku.id}>
-                      {sku.label} (~${sku.hourly_cost}/hr)
+                      {sku.label} (~${sku.hourly_cost}/hr Subtotal)
                     </option>
                   ))}
                 </select>
@@ -1267,13 +1273,13 @@ export default function CloudSandboxPage() {
                   <span className="font-semibold text-amber-500">{ttlMinutes / 60} hours</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-border">
-                  <span className="text-foreground-muted">Hourly Rate:</span>
+                  <span className="text-foreground-muted">Hourly Subtotal:</span>
                   <span className="font-semibold text-foreground">
                     ${currentTypeConfig?.skus.find((s) => s.id === selectedSku)?.hourly_cost || 0.04}/hr
                   </span>
                 </div>
                 <div className="flex justify-between py-1 font-bold text-sm">
-                  <span className="text-foreground">Total Est. Cost:</span>
+                  <span className="text-foreground">Estimated Subtotal:</span>
                   <span className="text-emerald-500">
                     ${((currentTypeConfig?.skus.find((s) => s.id === selectedSku)?.hourly_cost || 0.04) * (ttlMinutes / 60)).toFixed(3)}
                   </span>
@@ -1281,7 +1287,7 @@ export default function CloudSandboxPage() {
               </div>
 
               <div className="rounded-xl bg-muted/60 p-3 text-[11px] text-foreground-muted leading-relaxed">
-                💡 <strong>Zero Cost Leftover Guarantee:</strong> ZeroOps terminates this resource at the exact expiration timestamp.
+                💡 <strong>All-Inclusive Subtotal:</strong> Includes resource compute/memory, automated platform operations, and AI intelligence in one consolidated subtotal. ZeroOps terminates this resource at the exact expiration timestamp.
               </div>
             </div>
           </div>
@@ -1570,10 +1576,18 @@ export default function CloudSandboxPage() {
                       </span>
                     </div>
 
-                    {/* Source tag & IP */}
-                    <div className="flex items-center justify-between text-xs bg-muted/40 rounded-xl p-2.5">
-                      <span className="text-foreground-muted">Public Endpoint:</span>
-                      <span className="font-mono font-semibold text-foreground">{conn.public_ip || "Allocated"}</span>
+                    {/* Source tag, IP & Subtotal */}
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-muted/40 rounded-xl p-2.5">
+                      <div>
+                        <span className="text-foreground-muted block text-[10px] uppercase font-bold">Public Endpoint</span>
+                        <span className="font-mono font-semibold text-foreground truncate block">{conn.public_ip || "Allocated"}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-foreground-muted block text-[10px] uppercase font-bold">Hourly Subtotal</span>
+                        <span className="font-mono font-semibold text-emerald-500 block">
+                          ${(res.hourly_subtotal ?? res.cost_estimate_hourly).toFixed(3)}/hr
+                        </span>
+                      </div>
                     </div>
 
                     {/* Countdown / Auto-destroy bar */}
@@ -1702,6 +1716,17 @@ export default function CloudSandboxPage() {
             {/* TAB 1: 1-CLICK DEV SNIPPETS */}
             {activeTerminalTab === "credentials" && (
               <div className="space-y-3.5 text-xs">
+                {/* All-Inclusive Subtotal Rate Banner */}
+                <div className="rounded-2xl border border-border bg-muted/30 p-3 flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-foreground block">Consolidated Burn Subtotal</span>
+                    <span className="text-[11px] text-foreground-muted">Includes compute, platform lifecycle, and AI automation</span>
+                  </div>
+                  <span className="font-mono text-sm font-bold text-emerald-500">
+                    ${(connectResource.hourly_subtotal ?? connectResource.cost_estimate_hourly).toFixed(3)}/hr
+                  </span>
+                </div>
+
                 {/* Windows 1-Click RDP launcher */}
                 {connectResource.resource_type.includes("windows") && (
                   <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-3.5 flex items-center justify-between">

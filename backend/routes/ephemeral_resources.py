@@ -54,6 +54,8 @@ def _serialize_resource(res: models.EphemeralResource) -> schemas.EphemeralResou
     now = datetime.now(timezone.utc)
     expires = res.expires_at.replace(tzinfo=timezone.utc) if res.expires_at.tzinfo is None else res.expires_at
     remaining_secs = max(0, int((expires - now).total_seconds())) if res.status == "active" else 0
+    hourly = res.cost_estimate_hourly
+    total = round(hourly * (res.ttl_minutes / 60.0), 3)
     return schemas.EphemeralResourceResponse(
         id=res.id,
         user_id=res.user_id,
@@ -67,7 +69,9 @@ def _serialize_resource(res: models.EphemeralResource) -> schemas.EphemeralResou
         ttl_minutes=res.ttl_minutes,
         expires_at=res.expires_at,
         time_remaining_seconds=remaining_secs,
-        cost_estimate_hourly=res.cost_estimate_hourly,
+        cost_estimate_hourly=hourly,
+        hourly_subtotal=hourly,
+        total_subtotal=total,
         connection_info=res.connection_info or {},
         configuration=res.configuration or {},
         azure_resource_id=res.azure_resource_id,
