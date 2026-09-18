@@ -91,3 +91,9 @@ scripts/test_*.sh
 scripts/track_*.py
 scripts/trigger_*.py
 scripts/update_*.py
+scripts/bootstrap_*.py
+scripts/redeploy_*.py
+scripts/start_worker_*.py
+stitch_design_dark/
+stitch_design_light/
+public/stitch_previews/

@@ -54,6 +54,7 @@ const searchableRoutes = [
   { label: "New project", description: "Connect a repository or inspect a ZIP", href: "/dashboard/repositories" },
   { label: "Analysis", description: "Recorded repository evidence and provenance", href: "/dashboard/ai-analysis" },
   { label: "Architecture", description: "Review the proposed Azure target and plan", href: "/dashboard/architect" },
+  { label: "Sandboxes", description: "Ephemeral Azure VMs, databases, and third-party integrations", href: "/dashboard/sandbox" },
   { label: "Deployments", description: "Progress, logs, and deployment history", href: "/dashboard/deployments" },
   { label: "Monitoring", description: "Health and runtime telemetry", href: "/dashboard/monitoring" },
   { label: "Logs", description: "Recorded deployment and runtime logs", href: "/dashboard/logs" },

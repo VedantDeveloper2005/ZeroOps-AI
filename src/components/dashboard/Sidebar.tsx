@@ -12,6 +12,7 @@ import {
   ListChecks,
   Plus,
   ReceiptText,
+  Server,
   Settings,
   X,
 } from "lucide-react";
@@ -49,6 +50,7 @@ const navigation = [
   {
     label: "Operations",
     items: [
+      { label: "Sandboxes", href: "/dashboard/sandbox", icon: Server, matches: (path: string) => path.startsWith("/dashboard/sandbox") },
       { label: "Deployments", href: "/dashboard/deployments", icon: Boxes, matches: (path: string) => path.startsWith("/dashboard/deployments") },
       { label: "Monitoring", href: "/dashboard/monitoring", icon: Activity, matches: (path: string) => path.startsWith("/dashboard/monitoring") },
       { label: "Activity", href: "/dashboard/activity", icon: ListChecks, matches: (path: string) => path.startsWith("/dashboard/activity") },
@@ -148,7 +150,7 @@ export function Sidebar({
                       className={cn(
                         "group relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
                         active
-                          ? "bg-primary-subtle text-primary"
+                          ? "bg-primary/10 text-primary border border-primary/20 shadow-[0_0_12px_rgba(59,130,246,0.12)] font-semibold"
                           : "text-foreground-muted hover:bg-surface-raised hover:text-foreground",
                         collapsed && "lg:justify-center lg:px-0",
                       )}
@@ -167,23 +169,37 @@ export function Sidebar({
         ))}
       </nav>
 
-      <div className="border-t border-border p-3">
+      <div className="border-t border-border p-3 space-y-2.5">
         <div
           className={cn(
-            "rounded-lg border border-border bg-surface-subtle px-3 py-3",
+            "rounded-xl border border-border bg-surface-subtle p-3 flex items-start gap-2.5 shadow-xs",
             collapsed && "lg:hidden",
           )}
         >
-          <p className="text-xs font-semibold text-foreground">Review before release</p>
-          <p className="mt-1 text-xs leading-5 text-foreground-muted">
-            Required approvals stay pinned to the exact commit and target.
-          </p>
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-400">
+            <Activity size={14} className="animate-pulse motion-reduce:animate-none" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-foreground">ZeroOps Autopilot</p>
+            <p className="text-[11px] text-foreground-subtle">
+              Autonomous release plane
+            </p>
+          </div>
+        </div>
+        <div
+          className={cn(
+            "flex items-center gap-2 px-1 text-xs font-medium text-foreground-subtle",
+            collapsed && "lg:hidden",
+          )}
+        >
+          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse motion-reduce:animate-none" />
+          <span className="text-foreground-muted">All systems operational</span>
         </div>
         <button
           type="button"
           onClick={onToggle}
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-          className="mt-2 hidden min-h-11 w-full items-center justify-center gap-2 rounded-lg text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground lg:flex"
+          className="hidden min-h-11 w-full items-center justify-center gap-2 rounded-lg text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-raised hover:text-foreground lg:flex"
         >
           {collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
           {!collapsed && <span>Collapse</span>}

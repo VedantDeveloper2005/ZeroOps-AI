@@ -105,10 +105,16 @@ function TrendCard({
   const path = trendPath(values);
   if (!path) return null;
   const stroke =
-    tone === "warning" ? "var(--warning)" : tone === "info" ? "var(--info)" : "var(--primary)";
+    tone === "warning" ? "#f59e0b" : tone === "info" ? "#60a5fa" : "#3b82f6";
+  const glow =
+    tone === "warning"
+      ? "drop-shadow-[0_0_6px_rgba(245,158,11,0.5)]"
+      : tone === "info"
+        ? "drop-shadow-[0_0_6px_rgba(96,165,250,0.5)]"
+        : "drop-shadow-[0_0_6px_rgba(59,130,246,0.5)]";
 
   return (
-    <article className="rounded-xl border border-border bg-card p-4 shadow-sm">
+    <article className="rounded-xl border border-border bg-card p-4.5 shadow-sm transition hover:border-slate-700">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold text-foreground">{label}</h3>
@@ -123,7 +129,7 @@ function TrendCard({
         preserveAspectRatio="none"
         role="img"
         aria-label={`${label} across ${values.length} recorded samples; latest value ${latestValue}`}
-        className="mt-4 h-20 w-full overflow-visible"
+        className={cn("mt-4 h-20 w-full overflow-visible", glow)}
       >
         <path d="M0,40 L100,40" fill="none" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
         <path
@@ -132,7 +138,7 @@ function TrendCard({
           stroke={stroke}
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeWidth="2"
+          strokeWidth="2.5"
           vectorEffect="non-scaling-stroke"
         />
       </svg>

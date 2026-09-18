@@ -44,14 +44,14 @@ except ImportError:
 
 try:
     from backend import config, database
-    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history
+    from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history, ephemeral_resources
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
     import config, database
-    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history
+    from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history, ephemeral_resources
     from services import deployment_targets
     from services import github_oauth, google_oauth
     from database import get_db, init_db, database_available, AsyncSessionLocal
@@ -95,14 +95,17 @@ try:
     from backend.routes.history import router as history_router
     from backend.routes.devsecops import router as devsecops_router
     from backend.routes.architecture_advisor import router as advisor_router
+    from backend.routes.ephemeral_resources import router as ephemeral_resources_router
 except ImportError:
     from routes.history import router as history_router
     from routes.devsecops import router as devsecops_router
     from routes.architecture_advisor import router as advisor_router
+    from routes.ephemeral_resources import router as ephemeral_resources_router
 
 app.include_router(history_router)
 app.include_router(devsecops_router)
 app.include_router(advisor_router)
+app.include_router(ephemeral_resources_router)
 
 
 @app.get("/health")
@@ -355,6 +358,17 @@ async def maintenance_daemon():
         except Exception as error:
             logger.error(
                 "Stale investigation reconciliation failed: %s",
+                type(error).__name__,
+            )
+        try:
+            if AsyncSessionLocal is not None:
+                async with AsyncSessionLocal() as session:
+                    reaped = await ephemeral_resources.reap_expired_ephemeral_resources(session)
+                    if reaped > 0:
+                        logger.info("Reaped %d expired ephemeral cloud sandbox(es).", reaped)
+        except Exception as error:
+            logger.error(
+                "Ephemeral resource reaping failed: %s",
                 type(error).__name__,
             )
 

@@ -49,6 +49,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
   - Added `WEBSITES_PORT=3000` custom container port routing
   - Verified live deployment `bf4b17d0-1442-4daf-8761-4a5c451c7f5d` showing `succeeded` status across all 12 stages
   - Verified live origin endpoint `https://zo-demo-1ed1b668.azurewebsites.net/` returning HTTP 200
+- Implemented On-Demand Ephemeral Cloud Sandboxes & Autonomous Zero-Touch Integrations:
+  - Backend models (`EphemeralResource`, `IntegrationConfig`), schemas, routes, and services (`ephemeral_resources.py`, `resource_chat.py`, `jira_service.py`, `inbound_email_service.py`).
+  - Automated background TTL reaper integrated into `maintenance_daemon` in `backend/main.py`.
+  - Zero-touch frontend UX (`src/app/dashboard/sandbox/page.tsx`): 1-click persona filters, proactive AI recommendations, zero-typing chat prompt pills, 1-click .RDP download, 1-click .env DATABASE_URL copy, interactive live web terminal runner, and 1-click Jira/Email automation simulators.
+  - Test suite verified: 7/7 backend ephemeral tests passing, 30/30 frontend contract tests passing, 0 TypeScript errors.
 
 ### In Progress
 - (none)

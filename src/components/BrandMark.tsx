@@ -13,20 +13,31 @@ export function BrandMark({ href = "/", compact = false, className }: BrandMarkP
       href={href}
       aria-label="ZeroOps AI home"
       className={cn(
-        "inline-flex min-h-11 items-center gap-2.5 rounded-lg text-foreground transition-opacity hover:opacity-80",
+        "inline-flex min-h-11 items-center gap-2.5 rounded-lg text-foreground transition-opacity hover:opacity-90 group",
         className,
       )}
     >
       <span
         aria-hidden="true"
-        className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-primary/25 bg-primary text-primary-foreground shadow-sm"
+        className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/25 border border-blue-400/30 transition-transform group-hover:scale-105"
       >
-        <span className="h-3.5 w-3.5 rotate-45 rounded-[3px] border-[1.5px] border-current" />
-        <span className="absolute h-1.5 w-1.5 rounded-[2px] bg-current" />
+        <svg
+          className="w-4.5 h-4.5 text-white"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="2.5"
+          viewBox="0 0 24 24"
+        >
+          <path d="M12 2L2 7l10 5 10-5-10-5z" />
+          <path d="M2 17l10 5 10-5" />
+          <path d="M2 12l10 5 10-5" />
+        </svg>
       </span>
       {!compact && (
-        <span className="whitespace-nowrap text-[15px] font-semibold tracking-[-0.02em]">
-          ZeroOps <span className="text-foreground-muted">AI</span>
+        <span className="whitespace-nowrap text-[16px] font-bold tracking-tight" style={{ color: "var(--foreground)" }}>
+          ZeroOps <span className="font-semibold text-blue-500">AI</span>
         </span>
       )}
     </Link>

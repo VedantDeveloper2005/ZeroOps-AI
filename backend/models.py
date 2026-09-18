@@ -2334,3 +2334,78 @@ class RemediationExecution(Base):
         ),
     )
 
+
+# ----------------------------------------------------------------
+# EPHEMERAL CLOUD SANDBOXES & RESOURCES DOMAIN
+# ----------------------------------------------------------------
+
+class EphemeralResource(Base):
+    """An on-demand, self-service Azure resource with strict TTL and auto-teardown."""
+
+    __tablename__ = "ephemeral_resources"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
+    name = Column(Text, nullable=False)
+    resource_type = Column(Text, nullable=False)  # vm_linux, vm_windows, database_postgres, database_mysql, container_app, storage_account, redis_cache
+    region = Column(Text, nullable=False, default="eastus")
+    sku = Column(Text, nullable=False, default="Standard_B2s")
+    status = Column(Text, nullable=False, default="provisioning")  # pending, provisioning, active, expiring_soon, destroying, destroyed, failed
+    source = Column(Text, nullable=False, default="catalog_ui")  # chat, catalog_ui, jira, email, api
+    source_reference = Column(Text, nullable=True)  # e.g. Jira Issue Key "QA-104" or email message ID
+    ttl_minutes = Column(Integer, nullable=False, default=120)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    cost_estimate_hourly = Column(Float, nullable=False, default=0.04)
+    connection_info = Column(JSON, nullable=False, default=dict)
+    configuration = Column(JSON, nullable=False, default=dict)
+    azure_resource_id = Column(Text, nullable=True)
+    azure_resource_group = Column(Text, nullable=True)
+    logs = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    destroyed_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User")
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        Index("ix_ephemeral_resources_user_status", "user_id", "status"),
+        Index("ix_ephemeral_resources_expires_at", "expires_at", "status"),
+    )
+
+
+class IntegrationConfig(Base):
+    """Third-party integration configurations (Jira, Inbound Email) per user/tenant."""
+
+    __tablename__ = "integration_configs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
+    
+    # Jira settings
+    jira_enabled = Column(Boolean, nullable=False, default=False)
+    jira_host = Column(Text, nullable=True)
+    jira_email = Column(Text, nullable=True)
+    jira_api_token = Column(Text, nullable=True)
+    jira_project_keys = Column(JSON, nullable=False, default=lambda: ["QA", "DEV", "INFRA"])
+    jira_auto_provision = Column(Boolean, nullable=False, default=True)
+
+    # Inbound Email settings
+    email_enabled = Column(Boolean, nullable=False, default=False)
+    inbound_email_address = Column(Text, nullable=True, default="sandbox@zeroops.ai")
+    allowed_domains = Column(JSON, nullable=False, default=list)
+    default_ttl_minutes = Column(Integer, nullable=False, default=120)
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    user = relationship("User")
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        Index("ix_integration_configs_user_id", "user_id"),
+    )
+
+

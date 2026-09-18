@@ -208,18 +208,35 @@ export default function DashboardHome() {
   }
 
   return (
-    <div className="pb-8">
-      <PageHeader
-        eyebrow="Workspace overview"
-        title={`Good to see you, ${firstName}.`}
-        description="Start with decisions that need your attention, then check active releases and production context."
-        actions={
+    <div className="pb-8 space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border/80 pb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="ops-kicker">Workspace overview</span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+            Good to see you, {firstName}
+          </h1>
+          <p className="mt-1 text-sm text-foreground-muted">
+            {activeDeployments.length > 0
+              ? `${activeDeployments.length} deployment${activeDeployments.length > 1 ? "s" : ""} in flight across your infrastructure.`
+              : "Autonomous infrastructure control plane active and monitoring."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="hidden sm:block text-xs font-medium text-foreground-subtle">
+            {new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+          </div>
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary shadow-[0_0_12px_rgba(59,130,246,0.15)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
+            Control plane active
+          </div>
           <Link href="/dashboard/repositories" className="ops-primary">
             <Plus size={16} />
             New project
           </Link>
-        }
-      />
+        </div>
+      </div>
 
       {error && (
         <StatePanel
@@ -369,6 +386,7 @@ export default function DashboardHome() {
                 supportingText="GitHub repositories and uploaded archives"
                 icon={FolderKanban}
                 tone="info"
+                trend={`↑ ${projects.length}`}
               />
               <MetricCard
                 label="Active deployments"
@@ -376,6 +394,7 @@ export default function DashboardHome() {
                 supportingText="Queued, building, or deploying"
                 icon={Rocket}
                 tone={activeDeployments.length > 0 ? "info" : "neutral"}
+                trend={activeDeployments.length > 0 ? "live" : "idle"}
               />
               <MetricCard
                 label="Failed deployments"
@@ -383,6 +402,7 @@ export default function DashboardHome() {
                 supportingText="Recorded release failures"
                 icon={AlertCircle}
                 tone={(dashboardStats?.failed_deployments ?? failedDeployments.length) > 0 ? "danger" : "neutral"}
+                trend={(dashboardStats?.failed_deployments ?? failedDeployments.length) > 0 ? "alert" : "0"}
               />
               <MetricCard
                 label="Incident notifications"
@@ -390,6 +410,7 @@ export default function DashboardHome() {
                 supportingText="Notification records; read state is not resolution"
                 icon={ShieldAlert}
                 tone={incidentNotifications.length > 0 ? "warning" : "neutral"}
+                trend={incidentNotifications.length > 0 ? "open" : "clear"}
               />
             </div>
           </section>

@@ -1,7 +1,7 @@
 import re
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
-from typing import Optional, List, Any, Literal, Union
+from typing import Optional, List, Any, Literal, Union, Dict
 from datetime import datetime
 import uuid
 
@@ -822,3 +822,129 @@ class DeploymentJobResponse(BaseModel):
     updated_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ──────────────────────────────────────────────
+# EPHEMERAL CLOUD SANDBOXES & INTEGRATIONS SCHEMAS
+# ──────────────────────────────────────────────
+
+class EphemeralResourceCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=60)
+    resource_type: str = Field("vm_linux", description="vm_linux, vm_windows, database_postgres, database_mysql, container_app, storage_account, redis_cache")
+    region: str = Field("eastus", description="Azure region")
+    sku: str = Field("Standard_B2s", description="Azure compute/instance SKU")
+    ttl_minutes: int = Field(120, ge=15, le=2880, description="Time-to-live in minutes (15m to 48h)")
+    os_distro: Optional[str] = Field("Ubuntu 22.04 LTS", description="OS image or database engine version")
+    startup_script: Optional[str] = Field(None, description="Cloud-init or setup script")
+    open_ports: Optional[List[int]] = Field(default_factory=lambda: [22, 80, 443])
+    tags: Optional[Dict[str, str]] = Field(default_factory=dict)
+    source: Optional[str] = Field("catalog_ui")
+
+
+class EphemeralResourceExtendRequest(BaseModel):
+    extend_minutes: int = Field(60, ge=15, le=1440, description="Minutes to add to expiration")
+
+
+class EphemeralConnectionInfo(BaseModel):
+    host: Optional[str] = None
+    public_ip: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    ssh_command: Optional[str] = None
+    connection_string: Optional[str] = None
+    portal_url: Optional[str] = None
+
+
+class EphemeralResourceResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    resource_type: str
+    region: str
+    sku: str
+    status: str
+    source: str
+    source_reference: Optional[str] = None
+    ttl_minutes: int
+    expires_at: datetime
+    time_remaining_seconds: Optional[int] = None
+    cost_estimate_hourly: float
+    connection_info: Dict[str, Any] = {}
+    configuration: Dict[str, Any] = {}
+    azure_resource_id: Optional[str] = None
+    azure_resource_group: Optional[str] = None
+    logs: List[Dict[str, Any]] = []
+    created_at: datetime
+    updated_at: datetime
+    destroyed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EphemeralResourceProposal(BaseModel):
+    name: str
+    resource_type: str
+    region: str
+    sku: str
+    ttl_minutes: int
+    os_distro: Optional[str] = None
+    cost_estimate_hourly: float
+    summary: str
+    startup_script: Optional[str] = None
+    open_ports: List[int] = []
+
+
+class EphemeralChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    context_resource_id: Optional[str] = None
+    auto_deploy: Optional[bool] = False
+
+
+class EphemeralChatResponse(BaseModel):
+    reply: str
+    action_detected: Optional[str] = None  # "propose_resource", "extend_ttl", "destroy_resource", "query_status", "general"
+    proposed_resource: Optional[EphemeralResourceProposal] = None
+    created_resource: Optional[EphemeralResourceResponse] = None
+
+
+class JiraIntegrationSettings(BaseModel):
+    jira_enabled: bool = False
+    jira_host: Optional[str] = None
+    jira_email: Optional[str] = None
+    jira_api_token: Optional[str] = None
+    jira_project_keys: List[str] = ["QA", "DEV", "INFRA"]
+    jira_auto_provision: bool = True
+
+
+class EmailIntegrationSettings(BaseModel):
+    email_enabled: bool = False
+    inbound_email_address: str = "sandbox@zeroops.ai"
+    allowed_domains: List[str] = []
+    default_ttl_minutes: int = 120
+
+
+class IntegrationSettingsResponse(BaseModel):
+    jira: JiraIntegrationSettings
+    email: EmailIntegrationSettings
+    webhook_url: str
+    inbound_email_url: str
+
+
+class JiraWebhookPayload(BaseModel):
+    webhookEvent: Optional[str] = None
+    issue_event_type_name: Optional[str] = None
+    issue: Optional[Dict[str, Any]] = None
+    user: Optional[Dict[str, Any]] = None
+    comment: Optional[Dict[str, Any]] = None
+
+
+class InboundEmailPayload(BaseModel):
+    from_email: str
+    from_name: Optional[str] = None
+    to_email: Optional[str] = None
+    subject: str
+    body_text: str
+    body_html: Optional[str] = None
+    message_id: Optional[str] = None
+

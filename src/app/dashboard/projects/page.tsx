@@ -38,22 +38,22 @@ function statusPresentation(status?: string | null) {
   if (status === "running") {
     return {
       label: "Running",
-      className: "border-success/25 bg-success-subtle text-success",
-      railClassName: "bg-success",
+      className: "border-emerald-500/25 bg-emerald-500/10 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.15)]",
+      railClassName: "bg-emerald-400",
     };
   }
   if (activeStatuses.has(status || "")) {
     return {
       label: status || "In progress",
-      className: "border-info/25 bg-info-subtle text-info",
-      railClassName: "bg-info",
+      className: "border-blue-500/25 bg-blue-500/10 text-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.15)]",
+      railClassName: "bg-blue-400",
     };
   }
   if (status === "failed") {
     return {
       label: "Failed",
-      className: "border-danger/25 bg-danger-subtle text-danger",
-      railClassName: "bg-danger",
+      className: "border-red-500/25 bg-red-500/10 text-red-400 shadow-[0_0_8px_rgba(239,68,68,0.15)]",
+      railClassName: "bg-red-400",
     };
   }
   return {
@@ -167,6 +167,7 @@ export default function ProjectsPage() {
               supportingText="All source records in this workspace"
               icon={FolderKanban}
               tone="info"
+              trend={`↑ ${projects.length}`}
             />
             <MetricCard
               label="Active or running"
@@ -174,6 +175,7 @@ export default function ProjectsPage() {
               supportingText="Latest recorded deployment state"
               icon={Rocket}
               tone={activeProjectCount > 0 ? "info" : "neutral"}
+              trend={activeProjectCount > 0 ? "live" : "idle"}
             />
             <MetricCard
               label="Failed latest release"
@@ -181,12 +183,14 @@ export default function ProjectsPage() {
               supportingText="Projects whose latest record failed"
               icon={AlertCircle}
               tone={failedProjectCount > 0 ? "danger" : "neutral"}
+              trend={failedProjectCount > 0 ? "alert" : "0"}
             />
             <MetricCard
               label="Never deployed"
               value={String(notDeployedCount)}
               supportingText="Projects with zero deployment records"
               icon={CircleOff}
+              trend={String(notDeployedCount)}
             />
           </div>
         </section>

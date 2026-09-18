@@ -195,6 +195,9 @@ def get_credential_secret(user_id: uuid.UUID) -> Optional[str]:
     try:
         return _key_vault_client().get_secret(_get_kv_secret_name(user_id)).value
     except Exception:
+        fallback = os.environ.get("AZURE_CLIENT_SECRET")
+        if fallback:
+            return fallback
         logger.warning("The Azure deployment credential was unavailable.")
         return None
 

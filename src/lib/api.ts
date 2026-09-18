@@ -281,6 +281,100 @@ export interface FailureAnalysis {
   created_at: string | null;
 }
 
+export interface EphemeralResource {
+  id: string;
+  user_id: string;
+  name: string;
+  resource_type: string;
+  region: string;
+  sku: string;
+  status: "pending" | "provisioning" | "active" | "expiring_soon" | "destroying" | "destroyed" | "failed";
+  source: string;
+  source_reference?: string | null;
+  ttl_minutes: number;
+  expires_at: string;
+  time_remaining_seconds?: number;
+  cost_estimate_hourly: number;
+  connection_info: {
+    host?: string;
+    public_ip?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+    ssh_command?: string;
+    connection_string?: string;
+    endpoint_url?: string;
+    rdp_host?: string;
+  };
+  configuration: {
+    os_distro?: string;
+    startup_script?: string;
+    open_ports?: number[];
+    tags?: Record<string, string>;
+  };
+  azure_resource_id?: string | null;
+  azure_resource_group?: string | null;
+  logs?: Array<{ timestamp: string; message: string }>;
+  created_at: string;
+  updated_at: string;
+  destroyed_at?: string | null;
+}
+
+export interface EphemeralResourceProposal {
+  name: string;
+  resource_type: string;
+  region: string;
+  sku: string;
+  ttl_minutes: number;
+  os_distro?: string;
+  cost_estimate_hourly: number;
+  summary: string;
+  startup_script?: string | null;
+  open_ports: number[];
+}
+
+export interface EphemeralChatResponse {
+  reply: string;
+  action_detected?: string;
+  proposed_resource?: EphemeralResourceProposal | null;
+  created_resource?: EphemeralResource | null;
+}
+
+export interface CatalogItem {
+  title: string;
+  description: string;
+  icon: string;
+  category: string;
+  default_sku: string;
+  skus: Array<{ id: string; label: string; hourly_cost: number }>;
+  distros: Array<{ id: string; label: string }>;
+  default_ports: number[];
+}
+
+export interface ResourceCatalog {
+  catalog: Record<string, CatalogItem>;
+  regions: Array<{ id: string; label: string }>;
+}
+
+export interface IntegrationSettings {
+  jira: {
+    jira_enabled: boolean;
+    jira_host?: string | null;
+    jira_email?: string | null;
+    jira_api_token?: string | null;
+    jira_project_keys: string[];
+    jira_auto_provision: boolean;
+  };
+  email: {
+    email_enabled: boolean;
+    inbound_email_address: string;
+    allowed_domains: string[];
+    default_ttl_minutes: number;
+  };
+  webhook_url: string;
+  inbound_email_url: string;
+}
+
 export interface DashboardStats {
   total_projects: number;
   total_deployments: number;
@@ -1568,5 +1662,83 @@ export const api = {
       method: "POST",
       body: JSON.stringify(approval),
     }),
+
+  // ── Ephemeral Cloud Sandboxes & Integrations ──
+  getEphemeralResources: (status?: string) => {
+    const params = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<EphemeralResource[]>(`/api/resources${params}`);
+  },
+
+  createEphemeralResource: (data: {
+    name: string;
+    resource_type: string;
+    region: string;
+    sku: string;
+    ttl_minutes: number;
+    os_distro?: string;
+    startup_script?: string;
+    open_ports?: number[];
+    tags?: Record<string, string>;
+    source?: string;
+  }) =>
+    request<EphemeralResource>("/api/resources", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getEphemeralResource: (id: string) =>
+    request<EphemeralResource>(`/api/resources/${id}`),
+
+  extendEphemeralResource: (id: string, extend_minutes = 60) =>
+    request<EphemeralResource>(`/api/resources/${id}/extend`, {
+      method: "POST",
+      body: JSON.stringify({ extend_minutes }),
+    }),
+
+  deleteEphemeralResource: (id: string) =>
+    request<EphemeralResource>(`/api/resources/${id}`, {
+      method: "DELETE",
+    }),
+
+  chatEphemeralResource: (message: string, context_resource_id?: string, auto_deploy = false) =>
+    request<EphemeralChatResponse>("/api/resources/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, context_resource_id, auto_deploy }),
+    }),
+
+  getResourceCatalog: () =>
+    request<ResourceCatalog>("/api/resources/catalog"),
+
+  getIntegrationSettings: () =>
+    request<IntegrationSettings>("/api/integrations/settings"),
+
+  updateIntegrationSettings: (settings: IntegrationSettings) =>
+    request<IntegrationSettings>("/api/integrations/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+
+  testJiraSync: (data: Record<string, unknown>) =>
+    request<{ status: string; issue_key: string; generated_jira_comment?: string; resource_id?: string }>(
+      "/api/integrations/jira/test-sync",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+
+  testInboundEmail: (data: Record<string, unknown>) =>
+    request<{
+      status: string;
+      resource_id: string;
+      resource_name: string;
+      recipient: string;
+      email_delivered: boolean;
+      reply_subject: string;
+    }>("/api/integrations/email/test-parse", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
+
 
