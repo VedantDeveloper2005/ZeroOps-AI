@@ -404,6 +404,8 @@ async def test_run_migrations_unlocked_survives_duplicate_schema_migrations(monk
             "010_terraform_control_plane",
             "011_auth_ai_hardening",
             "012_deployment_terraform_binding",
+            "013_ephemeral_webhook_secrets",
+            "014_company_workspaces",
         ]
         for version in versions:
             await conn.execute(

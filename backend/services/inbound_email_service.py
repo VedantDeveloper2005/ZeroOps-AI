@@ -10,6 +10,7 @@ credentials, public IP endpoints, and auto-destruction countdowns.
 from __future__ import annotations
 
 import logging
+from html import escape
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -21,13 +22,13 @@ try:
     from backend import models, schemas
     from backend.services import email_service
     from backend.services.ephemeral_resources import provision_ephemeral_resource
-    from backend.services.resource_chat import parse_intent_rule_based
+    from backend.services.resource_chat import process_resource_chat
 except ImportError:
     import models
     import schemas
     from services import email_service
     from services.ephemeral_resources import provision_ephemeral_resource
-    from services.resource_chat import parse_intent_rule_based
+    from services.resource_chat import process_resource_chat
 
 logger = logging.getLogger("zeroops.inbound_email")
 
@@ -37,106 +38,55 @@ def generate_developer_reply_email(
     developer_name: Optional[str] = None,
     original_subject: str = "",
 ) -> tuple[str, str, str]:
-    """
-    Generates (subject, html_body, text_body) to reply back to the requesting developer.
-    """
+    """Generate a truthful deployment receipt without inventing network details."""
     conn = resource.connection_info or {}
-    dev_name = developer_name or "Engineer"
+    dev_name = (developer_name or "Engineer").replace("\r", " ").replace("\n", " ")[:120]
     expires_str = resource.expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-    subject = f"Re: {original_subject} - [Ready: {resource.name}]"
+    safe_original_subject = original_subject.replace("\r", " ").replace("\n", " ")[:160]
+    subject = f"Re: {safe_original_subject} - [Ready: {resource.name}]"
     if not original_subject:
-        subject = f"[ZeroOps AI] Your Cloud Sandbox {resource.name} is Ready"
-
-    text_body = f"""Hi {dev_name},
-
-Your on-demand Azure cloud sandbox has been successfully provisioned by ZeroOps AI!
-
----------------------------------------------------------
-RESOURCE DETAILS
----------------------------------------------------------
-• Name:        {resource.name}
-• Type:        {resource.resource_type} ({resource.sku})
-• Region:      Azure {resource.region}
-• Hourly Subtotal: ${resource.cost_estimate_hourly:.3f}/hr (All-inclusive subtotal)
-• Public IP:   {conn.get('public_ip', 'Allocated')}
-• Hostname:    {conn.get('host', 'N/A')}
-• Username:    {conn.get('username', 'azureuser')}
-• Password:    {conn.get('password', 'Generated')}
-"""
-
-    if conn.get("ssh_command"):
-        text_body += f"• SSH Command: {conn['ssh_command']}\n"
-    if conn.get("connection_string"):
-        text_body += f"• Connection:  {conn['connection_string']}\n"
-    if conn.get("endpoint_url"):
-        text_body += f"• Endpoint:    {conn['endpoint_url']}\n"
-
-    text_body += f"""
----------------------------------------------------------
-AUTO-TEARDOWN NOTICE
----------------------------------------------------------
-This environment is ephemeral and scheduled to auto-destroy at:
->> {expires_str} ({resource.ttl_minutes} minutes from creation)
-
-To prevent runaway cloud costs, ZeroOps will automatically terminate and delete
-this resource when the timer expires. You can extend the lifetime or tear down
-immediately anytime via the ZeroOps Sandbox Portal:
-https://zeroops.ai/dashboard/sandbox
-
-Happy testing!
-ZeroOps AI Cloud Automation
-"""
-
-    # HTML formatted email
-    html_content = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #e2e8f0; background-color: #0f172a; padding: 24px; border-radius: 12px; max-width: 600px; margin: 0 auto;">
-        <div style="border-bottom: 1px solid #334155; padding-bottom: 16px; margin-bottom: 20px;">
-            <span style="background-color: #6366f1; color: #ffffff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase;">ZeroOps AI</span>
-            <h2 style="color: #ffffff; margin: 12px 0 4px 0; font-size: 20px;">Your Cloud Sandbox is Ready</h2>
-            <p style="color: #94a3b8; margin: 0; font-size: 14px;">Provisioned on demand for <strong>{dev_name}</strong></p>
-        </div>
-
-        <div style="background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 18px; margin-bottom: 20px;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Resource Name:</td><td style="color: #ffffff; font-weight: 600;">{resource.name}</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Resource Type:</td><td style="color: #ffffff;">{resource.resource_type} ({resource.sku})</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Azure Region:</td><td style="color: #ffffff;">{resource.region}</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Hourly Subtotal:</td><td style="color: #ffffff;">${resource.cost_estimate_hourly:.3f}/hr (All-inclusive)</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Public IP:</td><td style="color: #38bdf8; font-family: monospace; font-weight: 600;">{conn.get('public_ip', 'Allocated')}</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Username:</td><td style="color: #ffffff;">{conn.get('username', 'azureuser')}</td></tr>
-                <tr><td style="color: #94a3b8; padding: 6px 0;">Password:</td><td style="color: #f59e0b; font-family: monospace;">{conn.get('password', 'Generated')}</td></tr>
-            </table>
-        </div>
-"""
-
-    if conn.get("ssh_command"):
-        html_content += f"""
-        <div style="background-color: #0b1120; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
-            <p style="margin: 0 0 6px 0; font-size: 12px; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Quick SSH Command</p>
-            <code style="font-family: monospace; font-size: 13px; color: #38bdf8; word-break: break-all;">{conn['ssh_command']}</code>
-        </div>
-"""
-
-    html_content += f"""
-        <div style="background-color: #312e81; border: 1px solid #4338ca; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
-            <p style="margin: 0; font-size: 14px; color: #e0e7ff;">
-                ⏰ <strong>Auto-Teardown Scheduled:</strong> {expires_str}<br>
-                <span style="font-size: 12px; color: #c7d2fe;">This sandbox will automatically delete in <strong>{resource.ttl_minutes} minutes</strong> to avoid unnecessary cloud bills.</span>
-            </p>
-        </div>
-
-        <div style="text-align: center; margin-bottom: 12px;">
-            <a href="https://zeroops.ai/dashboard/sandbox" style="display: inline-block; background-color: #6366f1; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">Open ZeroOps Sandbox Portal</a>
-        </div>
-    </div>
-"""
-
+        subject = f"[ZeroOps AI] Azure resources for {resource.name} are ready"
+    resource_count = int((resource.configuration or {}).get("resource_count", 1))
+    portal_url = str(conn.get("portal_url") or "")
+    text_body = (
+        f"Hi {dev_name},\n\n"
+        f"Azure confirmed {resource_count} resource(s) from your request.\n\n"
+        f"Name: {resource.name}\nType: {resource.resource_type} ({resource.sku})\n"
+        f"Region: {resource.region}\nResource group: {resource.azure_resource_group or 'See Azure portal'}\n"
+        f"All-inclusive subtotal: ${resource.cost_estimate_hourly:.3f}/hr\n"
+        f"Estimated subtotal for {resource.ttl_minutes} minutes: ${round(resource.cost_estimate_hourly * resource.ttl_minutes / 60.0, 3):.3f}\n"
+        f"Auto-teardown: {expires_str} ({resource.ttl_minutes} minutes)\n"
+        f"Azure portal: {portal_url or 'Open ZeroOps to view the deployment'}\n\n"
+        "ZeroOps only reports connection details Azure returned; this message does not include credentials.\n"
+    )
+    safe_name = escape(resource.name)
+    safe_type = escape(resource.resource_type)
+    safe_sku = escape(resource.sku)
+    safe_region = escape(resource.region)
+    safe_group = escape(resource.azure_resource_group or "See Azure portal")
+    safe_developer = escape(dev_name)
+    safe_expiry = escape(expires_str)
+    safe_portal = escape(portal_url, quote=True)
+    portal_link = f'<a href="{safe_portal}">Open Azure resource group</a>' if portal_url.startswith("https://portal.azure.com/") else "Open ZeroOps to view the deployment"
+    html_content = (
+        '<div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.6;color:#172033">'
+        f"<p>Hi {safe_developer},</p><p>Azure confirmed {resource_count} resource(s) from your request.</p>"
+        "<table><tbody>"
+        f"<tr><td>Name</td><td>{safe_name}</td></tr><tr><td>Type</td><td>{safe_type} ({safe_sku})</td></tr>"
+        f"<tr><td>Region</td><td>{safe_region}</td></tr><tr><td>Resource group</td><td>{safe_group}</td></tr>"
+        f"<tr><td>All-inclusive subtotal</td><td>${resource.cost_estimate_hourly:.3f}/hr</td></tr>"
+        f"<tr><td>Estimated subtotal for {resource.ttl_minutes} minutes</td><td>${round(resource.cost_estimate_hourly * resource.ttl_minutes / 60.0, 3):.3f}</td></tr>"
+        f"<tr><td>Auto-teardown</td><td>{safe_expiry} ({resource.ttl_minutes} minutes)</td></tr>"
+        f"</tbody></table><p>{portal_link}</p>"
+        "<p>Connection details are available only when Azure returns them and are not included as generated credentials.</p></div>"
+    )
     return subject, html_content, text_body
 
 
 async def process_inbound_developer_email(
     db: AsyncSession,
     payload: schemas.InboundEmailPayload,
+    owner_user_id: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     """
     Parses incoming developer email, authorizes the sender, extracts requirements,
@@ -148,51 +98,77 @@ async def process_inbound_developer_email(
     body_text = payload.body_text.strip()
     combined_content = f"{subject}\n{body_text}"
 
-    # 1. Authorize sender: check registered user or domain whitelist
-    user_query = await db.execute(
-        select(models.User).filter(models.User.email == from_email)
-    )
-    user = user_query.scalars().first()
+    if "@" not in from_email:
+        return {"status": "rejected", "reason": "Sender address is invalid."}
+    sender_domain = from_email.rsplit("@", 1)[1]
 
-    # If sender is not directly registered by exact email, check domain whitelist or fallback to primary admin user
-    sender_domain = from_email.split("@")[-1] if "@" in from_email else ""
-    if not user:
-        config_query = await db.execute(select(models.IntegrationConfig).limit(1))
-        integration_cfg = config_query.scalars().first()
-        allowed = (integration_cfg.allowed_domains or []) if integration_cfg else []
-        
-        # In corporate environments, any internal company domain or registered user is authorized
-        fallback_query = await db.execute(select(models.User).limit(1))
-        user = fallback_query.scalars().first()
+    if owner_user_id:
+        config_result = await db.execute(
+            select(models.IntegrationConfig).filter(
+                models.IntegrationConfig.user_id == owner_user_id,
+                models.IntegrationConfig.email_enabled.is_(True),
+            )
+        )
+        integration_cfg = config_result.scalars().first()
+        owner_result = await db.execute(select(models.User).filter(models.User.id == owner_user_id))
+        user = owner_result.scalars().first()
+        if not integration_cfg or not user:
+            return {"status": "rejected", "reason": "The email integration owner is not configured."}
+        allowed_domains = {str(value).strip().casefold() for value in (integration_cfg.allowed_domains or [])}
+        if sender_domain.casefold() not in allowed_domains and from_email != user.email.casefold():
+            return {"status": "rejected", "reason": "Sender domain is not allowed for this integration."}
+    else:
+        # Legacy direct service calls may resolve an exact registered sender only.
+        # Never route an unowned email to the first account in the database.
+        owner_result = await db.execute(select(models.User).filter(models.User.email == from_email))
+        user = owner_result.scalars().first()
         if not user:
-            return {
-                "status": "rejected",
-                "reason": "No registered system tenant to provision under.",
-            }
+            return {"status": "rejected", "reason": "No integration owner is authorized for this sender."}
 
-    # 2. Extract resource intent
-    intent = parse_intent_rule_based(combined_content)
-    clean_name = f"email-{from_name.replace(' ', '-').lower()[:15]}"
+    if payload.message_id:
+        duplicate_result = await db.execute(
+            select(models.EphemeralResource).filter(
+                models.EphemeralResource.user_id == user.id,
+                models.EphemeralResource.source == "email",
+                models.EphemeralResource.source_reference == payload.message_id,
+            )
+        )
+        duplicate = duplicate_result.scalars().first()
+        if duplicate:
+            return {"status": "already_processed", "resource_id": str(duplicate.id)}
 
+    # The AI prepares a reviewed template, but the organization's explicit email
+    # automation policy authorizes apply. Missing price/model details get a reply,
+    # never a guessed resource or a fabricated success email.
+    plan = await process_resource_chat(combined_content, user)
+    if not plan.proposed_resource:
+        email_service._send_email(
+            to_email=from_email,
+            subject=f"Re: {subject.replace(chr(13), ' ').replace(chr(10), ' ')[:160]} - more details needed",
+            html_body=f"<p>{escape(plan.reply)}</p>",
+            text_body=plan.reply,
+        )
+        return {"status": "needs_details", "recipient": from_email}
+
+    proposal = plan.proposed_resource
     create_req = schemas.EphemeralResourceCreateRequest(
-        name=clean_name,
-        resource_type=intent["resource_type"],
-        region=intent["region"],
-        sku=intent["sku"],
-        ttl_minutes=intent["ttl_minutes"],
-        startup_script=intent.get("startup_script"),
-        open_ports=intent.get("open_ports", [22, 80, 443]),
-        tags={"requester_email": from_email, "source": "email_agent"},
+        name=proposal.name,
+        resource_type=proposal.resource_type,
+        region=proposal.region,
+        sku=proposal.sku,
+        ttl_minutes=min(proposal.ttl_minutes, integration_cfg.default_ttl_minutes if owner_user_id else proposal.ttl_minutes),
+        arm_template=proposal.arm_template,
+        arm_parameters=proposal.arm_parameters,
+        estimated_resource_hourly_usd=proposal.estimated_resource_hourly_usd,
+        tags={"requester_domain": sender_domain, "source": "email"},
         source="email",
     )
-
-    # 3. Provision the ephemeral resource
     resource = await provision_ephemeral_resource(
         db=db,
         user=user,
         request=create_req,
         source="email",
-        source_reference=from_email,
+        source_reference=payload.message_id or f"{from_email}:{subject[:80]}",
     )
 
     # 4. Compose and dispatch reply email

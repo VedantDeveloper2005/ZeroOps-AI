@@ -6,6 +6,7 @@ Uses Python's built-in smtplib — no extra dependencies required.
 """
 
 import logging
+import html
 import secrets
 import smtplib
 import time
@@ -25,13 +26,17 @@ _send_timestamps: dict[str, float] = {}
 _RATE_LIMIT_SECONDS = 60  # minimum seconds between emails to the same address
 
 
-def _is_rate_limited(email: str) -> bool:
-    last_sent = _send_timestamps.get(email, 0)
+def _rate_limit_key(email: str, bucket: str) -> str:
+    return f"{email.strip().lower()}:{bucket}"
+
+
+def _is_rate_limited(email: str, bucket: str = "transactional") -> bool:
+    last_sent = _send_timestamps.get(_rate_limit_key(email, bucket), 0)
     return (time.time() - last_sent) < _RATE_LIMIT_SECONDS
 
 
-def _record_send(email: str) -> None:
-    _send_timestamps[email] = time.time()
+def _record_send(email: str, bucket: str = "transactional") -> None:
+    _send_timestamps[_rate_limit_key(email, bucket)] = time.time()
     # Prevent memory leak: trim oldest entries when store grows large
     if len(_send_timestamps) > 5000:
         cutoff = time.time() - _RATE_LIMIT_SECONDS * 2
@@ -56,7 +61,14 @@ def _smtp_configured() -> bool:
     return is_configured()
 
 
-def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+def _send_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    text_body: str,
+    *,
+    rate_limit_bucket: str = "transactional",
+) -> bool:
     """Send an email via SMTP. Returns True on success, False on failure."""
     if not is_configured():
         # Authentication secrets must never be copied to process output. A
@@ -65,7 +77,12 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
         logger.warning("Transactional email delivery is not configured.")
         return False
 
-    if _is_rate_limited(to_email):
+    rate_limited = (
+        _is_rate_limited(to_email)
+        if rate_limit_bucket == "transactional"
+        else _is_rate_limited(to_email, rate_limit_bucket)
+    )
+    if rate_limited:
         logger.info("Rate-limited email to %s — skipping.", to_email)
         return False
 
@@ -90,7 +107,10 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: str) -> 
         server.sendmail(msg["From"], [to_email], msg.as_string())
         server.quit()
 
-        _record_send(to_email)
+        if rate_limit_bucket == "transactional":
+            _record_send(to_email)
+        else:
+            _record_send(to_email, rate_limit_bucket)
         # Subjects and bodies may contain authentication material. Keep
         # delivery logs deliberately content-free.
         logger.info("Transactional email sent.")
@@ -171,7 +191,6 @@ def send_verification_email(to_email: str, verification_url: str) -> bool:
         f"Verify your email by visiting: {verification_url}\n\n"
         f"This link expires in {config.EMAIL_VERIFICATION_EXPIRE_HOURS} hours."
     )
-
     return _send_email(
         to_email,
         "Verify your email — ZeroOps AI",
@@ -179,6 +198,46 @@ def send_verification_email(to_email: str, verification_url: str) -> bool:
         text_body,
     )
 
+
+def send_workspace_invitation_email(
+    to_email: str,
+    *,
+    workspace_name: str,
+    inviter_name: str,
+    role: str,
+    invitation_url: str,
+    expires_in_hours: int = 72,
+) -> bool:
+    """Deliver a tenant-scoped team invitation; the URL contains a one-time token."""
+    safe_workspace = html.escape(workspace_name)
+    safe_inviter = html.escape(inviter_name)
+    safe_role = html.escape(role)
+    safe_url = html.escape(invitation_url, quote=True)
+    html_content = f"""
+    <p style="color:{_TEXT_COLOR};font-size:14px;line-height:1.6;margin:0 0 20px;">
+      {safe_inviter} invited you to join <strong>{safe_workspace}</strong> as a {safe_role}.
+      Accept the invitation to work with your team on shared projects and deployments.
+    </p>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="{safe_url}" style="display:inline-block;background:{_BRAND_COLOR};color:white;padding:12px 32px;
+         border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;">Review invitation</a>
+    </div>
+    <p style="color:{_MUTED_COLOR};font-size:12px;line-height:1.5;margin:16px 0 0;">
+      This invitation expires in {expires_in_hours} hours. If you did not expect it, you can ignore this email.
+    </p>
+    """
+    text_body = (
+        f"{inviter_name} invited you to join {workspace_name} as a {role}.\n\n"
+        f"Review the invitation: {invitation_url}\n\n"
+        f"This invitation expires in {expires_in_hours} hours."
+    )
+    return _send_email(
+        to_email,
+        f"Invitation to join {workspace_name} - ZeroOps AI",
+        _email_wrapper(f"Join {safe_workspace}", html_content),
+        text_body,
+        rate_limit_bucket="workspace_invitation",
+    )
 
 def send_verification_otp_email(to_email: str, otp_code: str) -> bool:
     """Send a one-time email verification code for signup/onboarding."""

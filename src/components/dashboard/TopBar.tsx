@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNotifications } from "@/lib/NotificationContext";
 import { useAuth } from "@/lib/AuthContext";
+import { api, type WorkspaceSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type TopBarProps = {
@@ -29,6 +30,7 @@ type TopBarProps = {
 
 const routeLabels: Record<string, string> = {
   dashboard: "Overview",
+  team: "Team and access",
   projects: "Projects",
   repositories: "New project",
   deployments: "Deployments",
@@ -51,6 +53,7 @@ const routeLabels: Record<string, string> = {
 const searchableRoutes = [
   { label: "Overview", description: "Projects and actions requiring attention", href: "/dashboard" },
   { label: "Projects", description: "All connected repositories and uploads", href: "/dashboard/projects" },
+  { label: "Team and access", description: "Company workspaces, engineers, roles, and MFA", href: "/dashboard/team" },
   { label: "New project", description: "Connect a repository or inspect a ZIP", href: "/dashboard/repositories" },
   { label: "Analysis", description: "Recorded repository evidence and provenance", href: "/dashboard/ai-analysis" },
   { label: "Architecture", description: "Review the proposed Azure target and plan", href: "/dashboard/architect" },
@@ -142,12 +145,41 @@ export function TopBar({ navigationOpen, onOpenNavigation }: TopBarProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const notificationsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const desktopSearchInputRef = useRef<HTMLInputElement>(null);
   const mobileSearchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const storedWorkspace = window.localStorage.getItem("zeroops:active-workspace");
+    setActiveWorkspaceId(storedWorkspace || user?.id || "");
+    void Promise.all([
+      api.listWorkspaces(),
+      api.getMfaStatus().then((status) => status.enabled).catch(() => Boolean(user?.mfa_enabled)),
+    ]).then(([items, mfaEnabled]) => {
+      if (!cancelled) {
+        setWorkspaces(items);
+        const saved = window.localStorage.getItem("zeroops:active-workspace");
+        const selected = items.find((workspace) => workspace.id === saved && (!workspace.require_mfa || mfaEnabled))
+          || items.find((workspace) => workspace.id === user?.id)
+          || items[0];
+        if (selected) {
+          setActiveWorkspaceId(selected.id);
+          if (saved !== selected.id) window.localStorage.setItem("zeroops:active-workspace", selected.id);
+          if (user?.id) window.localStorage.setItem("zeroops:active-workspace-owner", user.id);
+          if (saved && saved !== selected.id) window.location.reload();
+        }
+      }
+    }).catch(() => {
+      if (!cancelled) setWorkspaces([]);
+    });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   const segments = pathname.split("/").filter(Boolean);
   const lastSegment = segments.at(-1) || "dashboard";
@@ -246,6 +278,30 @@ export function TopBar({ navigationOpen, onOpenNavigation }: TopBarProps) {
           <p className="hidden text-xs font-medium text-foreground-subtle sm:block">ZeroOps workspace</p>
           <p className="truncate text-sm font-semibold capitalize text-foreground">{pageLabel}</p>
         </div>
+
+        {workspaces.length > 1 && (
+          <div className="hidden min-w-0 sm:block sm:w-48 lg:w-60">
+            <label htmlFor="active-workspace" className="sr-only">Active company workspace</label>
+            <select
+              id="active-workspace"
+              value={activeWorkspaceId}
+              onChange={(event) => {
+                const nextId = event.target.value;
+                window.localStorage.setItem("zeroops:active-workspace", nextId);
+                if (user?.id) window.localStorage.setItem("zeroops:active-workspace-owner", user.id);
+                setActiveWorkspaceId(nextId);
+                window.location.reload();
+              }}
+              className="min-h-11 w-full truncate rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.name}{workspace.kind === "organization" ? ` · ${workspace.role}` : " · Personal"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div ref={searchRef} className="relative xl:w-full xl:max-w-sm">
           <button

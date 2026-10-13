@@ -42,6 +42,10 @@ Current migrations:
 - `012_deployment_terraform_binding` adds the nullable, indexed operation-run
   foreign key that prevents queued releases from bypassing an exact completed
   Terraform apply.
+- `013_ephemeral_webhook_secrets` stores Jira HMAC and inbound-email bearer
+  credentials as encrypted integration settings.
+- `014_company_workspaces` adds tenant ownership to projects, invitation and
+  role records, and an MFA requirement for newly created company workspaces.
 
 ## Legacy sensitive-column retirement
 

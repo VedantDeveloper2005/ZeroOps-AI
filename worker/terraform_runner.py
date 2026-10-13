@@ -624,16 +624,23 @@ class TerraformRunner:
                         FOR UPDATE
                     )
                     UPDATE deployments AS d
-                    SET status = 'building'
+                    SET status = 'building',
+                        infrastructure_metadata = jsonb_set(
+                            jsonb_set(
+                                COALESCE(d.infrastructure_metadata::jsonb, '{}'::jsonb),
+                                '{app_service_reused}',
+                                'true'::jsonb,
+                                true
+                            ),
+                            '{terraform_apply_required}',
+                            'false'::jsonb,
+                            true
+                        )
                     FROM owned_job
                     WHERE d.id = owned_job.deployment_id
                       AND d.id = %s
                       AND d.status = 'queued'
                       AND d.terraform_operation_run_id IS NULL
-                      AND (
-                          COALESCE((d.infrastructure_metadata->>'app_service_reused')::boolean, FALSE) = TRUE
-                          OR COALESCE((d.infrastructure_metadata->>'terraform_apply_required')::boolean, TRUE) = FALSE
-                      )
                       AND EXISTS (
                           SELECT 1
                           FROM infrastructure_plans AS ip

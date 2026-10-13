@@ -21,12 +21,12 @@ from sqlalchemy import desc
 try:
     from backend import auth, models, schemas
     from backend.database import get_db
-    from backend.services import foundry_advisor, planner
+    from backend.services import foundry_advisor, planner, tenancy
     from backend.contracts.architecture_advisor import ArchitectureRecommendation
 except ImportError:  # pragma: no cover
     import auth, models, schemas
     from database import get_db
-    from services import foundry_advisor, planner
+    from services import foundry_advisor, planner, tenancy
     from contracts.architecture_advisor import ArchitectureRecommendation
 
 logger = logging.getLogger("zeroops.routes.architecture_advisor")
@@ -41,7 +41,7 @@ async def _owned_project_or_404(
     result = await db.execute(
         select(models.Project).filter(
             models.Project.id == project_id,
-            models.Project.user_id == current_user.id,
+            tenancy.project_tenant_filter(current_user),
         )
     )
     project = result.scalars().first()
@@ -137,7 +137,7 @@ async def consult_architecture_advisor(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan_record = plan_result.scalars().first()
@@ -178,7 +178,7 @@ async def get_architecture_advisor_recommendation(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan_record = plan_result.scalars().first()
@@ -207,7 +207,7 @@ async def chat_with_architecture_advisor(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = plan_result.scalars().first()

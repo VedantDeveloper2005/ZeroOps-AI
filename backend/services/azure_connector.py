@@ -286,13 +286,19 @@ def validate_credential(
         }
 
 
-async def get_azure_clients_async(user_id: uuid.UUID, db) -> Optional[dict[str, Any]]:
-    result = await db.execute(
-        select(models.UserAzureConnection).filter(
-            models.UserAzureConnection.user_id == user_id,
-            models.UserAzureConnection.connection_status == "connected",
-        )
+async def get_azure_clients_async(
+    user_id: uuid.UUID,
+    db,
+    connection_id: Optional[uuid.UUID] = None,
+) -> Optional[dict[str, Any]]:
+    query = select(models.UserAzureConnection).filter(
+        models.UserAzureConnection.user_id == user_id,
+        models.UserAzureConnection.connection_status == "connected",
+        models.UserAzureConnection.is_active.is_(True),
     )
+    if connection_id is not None:
+        query = query.filter(models.UserAzureConnection.id == connection_id)
+    result = await db.execute(query)
     connection = result.scalars().first()
     if not connection:
         return None
@@ -310,6 +316,10 @@ async def get_azure_clients_async(user_id: uuid.UUID, db) -> Optional[dict[str, 
             "network": NetworkManagementClient(credential, connection.subscription_id),
             "storage": StorageManagementClient(credential, connection.subscription_id),
             "resource_group": connection.resource_group,
+            "subscription_id": connection.subscription_id,
+            "tenant_id": connection.tenant_id,
+            "client_id": connection.client_id,
+            "connection_id": str(connection.id),
         }
     except Exception:
         logger.exception("Azure SDK client initialization failed")

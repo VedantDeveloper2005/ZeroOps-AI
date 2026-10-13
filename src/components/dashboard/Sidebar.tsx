@@ -14,6 +14,7 @@ import {
   ReceiptText,
   Server,
   Settings,
+  Users,
   X,
 } from "lucide-react";
 import { BrandMark } from "@/components/BrandMark";
@@ -45,6 +46,7 @@ const navigation = [
           path.startsWith("/dashboard/security") ||
           path.startsWith("/dashboard/incidents"),
       },
+      { label: "Team and access", href: "/dashboard/team", icon: Users, matches: (path: string) => path.startsWith("/dashboard/team") },
     ],
   },
   {

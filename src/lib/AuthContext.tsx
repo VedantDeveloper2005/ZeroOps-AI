@@ -68,6 +68,12 @@ export function isPhoneVerificationPending(result: LoginResult | VerifyEmailResu
 function isAuthenticatedUser(result: LoginResult | VerifyPhoneResult): result is User {
   return "id" in result && typeof result.id === "string";
 }
+
+function rememberAuthenticatedUser(userId: string) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem("zeroops:authenticated-user", userId);
+  }
+}
  
 interface AuthContextType {
   user: User | null;
@@ -169,15 +175,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        rememberAuthenticatedUser(data.id);
         if (data?.github_connected === true) {
           sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
         }
       } else {
         setUser(null);
+        window.localStorage.removeItem("zeroops:authenticated-user");
         notifySignedOut();
       }
     } catch {
       setUser(null);
+      window.localStorage.removeItem("zeroops:authenticated-user");
       notifySignedOut();
     } finally {
       setLoading(false);
@@ -209,6 +218,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Login handler
   const login = async (email: string, password: string): Promise<LoginResult> => {
+    window.localStorage.removeItem("zeroops:authenticated-user");
     const res = await authFetch("/api/auth/login", {
       method: "POST",
       headers: {
@@ -228,6 +238,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return data;
     }
     setUser(data);
+    rememberAuthenticatedUser(data.id);
     notifyAuthenticationSucceeded();
     addToast("Successfully logged in", "success");
     return data;
@@ -247,6 +258,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const data = await res.json() as User;
     setUser(data);
+    rememberAuthenticatedUser(data.id);
     notifyAuthenticationSucceeded();
     addToast("Identity verified", "success");
     return data;
@@ -323,6 +335,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const data = await res.json() as VerifyPhoneResult;
     if (isAuthenticatedUser(data)) {
       setUser(data);
+      rememberAuthenticatedUser(data.id);
       notifyAuthenticationSucceeded();
       addToast("Phone number verified. You are signed in.", "success");
     } else {
@@ -400,6 +413,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     setUser(null);
+    window.localStorage.removeItem("zeroops:authenticated-user");
+    window.localStorage.removeItem("zeroops:active-workspace-owner");
     notifySignedOut();
     sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
     sessionStorage.removeItem(GOOGLE_OAUTH_PENDING_KEY);

@@ -80,9 +80,11 @@ def _registry_name(login_server: str) -> str:
 
 def _run(command: list[str], *, env: dict[str, str], cwd: str | None = None) -> Generator[str, None, None]:
     """Run Azure CLI without a shell; credentials are never yielded to logs."""
+    executable = shutil.which(command[0]) if command else None
+    exec_command = [executable] + list(command[1:]) if executable else command
     try:
         process = subprocess.Popen(
-            command,
+            exec_command,
             cwd=cwd,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -401,17 +403,34 @@ def deploy_image(
     try:
         env = _azure_environment(connection, config_dir)
         _sign_in(connection, client_secret, env)
+        target_rg = resource_group
         try:
             principal_id = _capture([
                 "az", "webapp", "show", "--name", app_name,
-                "--resource-group", resource_group,
+                "--resource-group", target_rg,
                 "--query", "identity.principalId", "--output", "tsv",
             ], env=env)
-        except AzureDeploymentError as error:
-            raise AzureDeploymentError(
-                "The approved Terraform apply has not provisioned this application site. "
-                "Apply the exact saved plan before publishing a release."
-            ) from error
+            resource_group = target_rg
+        except AzureDeploymentError as first_error:
+            fallback_rg = str(connection.resource_group)
+            if fallback_rg and fallback_rg != target_rg:
+                try:
+                    principal_id = _capture([
+                        "az", "webapp", "show", "--name", app_name,
+                        "--resource-group", fallback_rg,
+                        "--query", "identity.principalId", "--output", "tsv",
+                    ], env=env)
+                    resource_group = fallback_rg
+                except AzureDeploymentError as second_error:
+                    raise AzureDeploymentError(
+                        "The approved Terraform apply has not provisioned this application site. "
+                        "Apply the exact saved plan before publishing a release."
+                    ) from second_error
+            else:
+                raise AzureDeploymentError(
+                    "The approved Terraform apply has not provisioned this application site. "
+                    "Apply the exact saved plan before publishing a release."
+                ) from first_error
         registry_id = _capture([
             "az", "acr", "show", "--name", _registry_name(registry_server), "--query", "id", "--output", "tsv",
         ], env=env)

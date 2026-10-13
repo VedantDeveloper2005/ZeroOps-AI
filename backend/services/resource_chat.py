@@ -7,21 +7,23 @@ ephemeral resource proposals, lifecycle commands, and explanations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import uuid
 from typing import Any, Dict, Optional, Tuple
 
 try:
     from backend import models, schemas
-    from backend.services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, get_hourly_cost
-    from backend.services.cost_engine import calculate_subtotal
+    from backend.services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, validate_custom_arm_template
+    from backend.services.cost_engine import calculate_custom_subtotal
     from backend.services.ai import generate_chat_response
 except ImportError:
     import models
     import schemas
-    from services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, get_hourly_cost
-    from services.cost_engine import calculate_subtotal
+    from services.ephemeral_resources import RESOURCE_CATALOG, REGIONS, validate_custom_arm_template
+    from services.cost_engine import calculate_custom_subtotal
     from services.ai import generate_chat_response
 
 logger = logging.getLogger("zeroops.resource_chat")
@@ -129,6 +131,7 @@ async def process_resource_chat(
     message: str,
     user: models.User,
     active_resources_count: int = 0,
+    selected_region: Optional[str] = None,
 ) -> schemas.EphemeralChatResponse:
     """
     Interprets user prompt, extracts intent, and generates a structured
@@ -155,62 +158,92 @@ async def process_resource_chat(
             action_detected="query_status",
         )
 
-    # Propose resource
-    res_type = intent["resource_type"]
-    sku = intent["sku"]
-    region = intent["region"]
-    ttl_minutes = intent["ttl_minutes"]
-    name = intent["name"]
-
-    catalog_info = RESOURCE_CATALOG.get(res_type, {})
-    title = catalog_info.get("title", "Cloud Resource")
-    os_distro = catalog_info.get("distros", [{}])[0].get("id", "Ubuntu 22.04 LTS")
-
-    quote = calculate_subtotal(
-        resource_type=res_type,
-        sku=sku,
-        os_distro=os_distro,
-        duration_minutes=ttl_minutes,
+    # Azure's retail price varies by region, SKU, usage dimensions, and customer
+    # agreement. Require a user-supplied estimate instead of allowing the model
+    # to invent a price, then show only the all-in subtotal.
+    cost_match = re.search(
+        r"\$\s*(\d+(?:\.\d{1,4})?)\s*(?:/\s*h(?:r)?|per\s+hour|hourly)",
+        message,
+        re.IGNORECASE,
     )
-    hourly_subtotal = quote.hourly_subtotal
-    total_subtotal = quote.total_subtotal
+    if not cost_match:
+        return schemas.EphemeralChatResponse(
+            reply=(
+                "I can turn this into a reviewed Azure deployment plan. Add the Azure pricing "
+                "calculator's hourly estimate to your request (for example, `Azure estimate $0.12/hr`). "
+                "I won't guess a cloud price or deploy until you confirm the plan."
+            ),
+            action_detected="needs_details",
+        )
 
+    region = (selected_region or intent.get("region", "eastus")).strip().casefold()
+    if not re.fullmatch(r"[a-z0-9-]{2,50}", region):
+        return schemas.EphemeralChatResponse(
+            reply="Enter a valid Azure region ID (for example, `eastus2` or `centralindia`) before I prepare the template.",
+            action_detected="needs_details",
+        )
+    ttl_minutes = intent.get("ttl_minutes", 120)
+    resource_hourly = float(cost_match.group(1))
+    try:
+        model_text = await asyncio.to_thread(
+            generate_chat_response,
+            (
+                "Return one JSON object only, with keys name, sku, arm_template. "
+                "Create an Azure Resource Manager deployment template for the user's request. "
+                "Use a root resources array and literal resource names. Do not include a deployment "
+                "resource, deploymentScripts, role assignments, policy assignments, user-assigned "
+                "identities, cross-resource-group scopes, secrets, credentials, or secret outputs. "
+                "Parameterize sensitive values as secureString parameters. Set resource locations "
+                f"to {region}. User request: {message}"
+            ),
+            {"intent": intent, "allowed_regions": REGIONS},
+        )
+        match = re.search(r"\{[\s\S]*\}", model_text)
+        if not match:
+            raise ValueError("The AI planner did not return a JSON resource plan.")
+        generated = json.loads(match.group(0))
+        arm_template = generated.get("arm_template")
+        normalized, manifest = validate_custom_arm_template(
+            arm_template, region, "review-required"
+        )
+    except Exception as error:
+        logger.info("Custom Azure resource plan was not produced (%s).", type(error).__name__)
+        return schemas.EphemeralChatResponse(
+            reply=(
+                "I couldn't produce a validated ARM template from that request. Add the Azure resource "
+                "type, region, SKU, and required configuration, then try again. No Azure change was made."
+            ),
+            action_detected="needs_details",
+        )
+
+    quote = calculate_custom_subtotal(resource_hourly, ttl_minutes)
     hours_disp = f"{ttl_minutes // 60}h" if ttl_minutes % 60 == 0 else f"{ttl_minutes}m"
+    name = str(generated.get("name") or intent.get("name") or "custom-azure-resource")[:60]
+    sku = str(generated.get("sku") or "Custom")[:100]
     summary = (
-        f"I've configured an ephemeral **{title}** ({sku}) in **{region}** "
-        f"scheduled to auto-destroy in **{hours_disp}** (estimated subtotal: ~${total_subtotal:.3f})."
+        f"{len(manifest)} Azure resource(s) in {region}, scheduled for teardown after {hours_disp}. "
+        f"All-inclusive subtotal: ${quote.total_subtotal:.3f} for the requested lifetime."
     )
-
     proposal = schemas.EphemeralResourceProposal(
         name=name,
-        resource_type=res_type,
+        resource_type="custom_arm",
         region=region,
         sku=sku,
         ttl_minutes=ttl_minutes,
-        os_distro=os_distro,
-        cost_estimate_hourly=hourly_subtotal,
-        hourly_subtotal=hourly_subtotal,
-        total_subtotal=total_subtotal,
+        cost_estimate_hourly=quote.hourly_subtotal,
+        hourly_subtotal=quote.hourly_subtotal,
+        total_subtotal=quote.total_subtotal,
         summary=summary,
-        startup_script=intent.get("startup_script"),
-        open_ports=intent.get("open_ports", [22, 80, 443]),
+        open_ports=[],
+        arm_template=normalized,
+        estimated_resource_hourly_usd=resource_hourly,
     )
-
-    explanation = (
-        f"I've prepared a sandbox plan for your request:\n\n"
-        f"- **Resource:** {title} ({sku})\n"
-        f"- **Region:** Azure `{region}`\n"
-        f"- **Auto-Destroy TTL:** {hours_disp} (Guaranteed auto-teardown to eliminate zombie cloud spend)\n"
-        f"- **Hourly Subtotal:** ${hourly_subtotal:.3f}/hr\n"
-        f"- **Estimated Subtotal:** ~${total_subtotal:.3f} for {hours_disp}\n"
-    )
-    if intent.get("startup_script"):
-        explanation += "- **Startup Script:** Preinstalling requested tools and runtimes.\n"
-
-    explanation += "\nClick **'Deploy Resource'** on the proposal card below to provision immediately, or ask me to change any parameter."
-
     return schemas.EphemeralChatResponse(
-        reply=explanation,
+        reply=(
+            "I've prepared a reviewed ARM template for your request. Check the resource list and "
+            f"all-inclusive subtotal (${quote.hourly_subtotal:.3f}/hr; ${quote.total_subtotal:.3f} for {hours_disp}). "
+            "Use Deploy only after confirming the template and your Azure resource group."
+        ),
         action_detected="propose_resource",
         proposed_resource=proposal,
     )

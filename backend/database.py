@@ -269,6 +269,11 @@ async def _run_migrations_unlocked():
             STATEMENTS as MIGRATION_012_STATEMENTS,
             VERSION as MIGRATION_012_VERSION,
         )
+        from backend.migrations.v013_ephemeral_webhook_secrets import (
+            STATEMENTS as MIGRATION_013_STATEMENTS,
+            VERSION as MIGRATION_013_VERSION,
+        )
+        from backend.migrations import v014_company_workspaces as MIGRATION_014
     except ImportError:
         from migrations.v001_tenant_history import (
             STATEMENTS as MIGRATION_001_STATEMENTS,
@@ -318,6 +323,11 @@ async def _run_migrations_unlocked():
             STATEMENTS as MIGRATION_012_STATEMENTS,
             VERSION as MIGRATION_012_VERSION,
         )
+        from migrations.v013_ephemeral_webhook_secrets import (
+            STATEMENTS as MIGRATION_013_STATEMENTS,
+            VERSION as MIGRATION_013_VERSION,
+        )
+        from migrations import v014_company_workspaces as MIGRATION_014
 
     async with async_engine.begin() as conn:
         await conn.execute(
@@ -399,6 +409,8 @@ async def _run_migrations_unlocked():
             (MIGRATION_010_VERSION, MIGRATION_010_STATEMENTS),
             (MIGRATION_011_VERSION, MIGRATION_011_STATEMENTS),
             (MIGRATION_012_VERSION, MIGRATION_012_STATEMENTS),
+            (MIGRATION_013_VERSION, MIGRATION_013_STATEMENTS),
+            (MIGRATION_014.VERSION, MIGRATION_014.STATEMENTS),
         )
         for migration_version, migration_statements_for_version in versioned_migrations:
             applied_result = await conn.execute(
@@ -406,8 +418,11 @@ async def _run_migrations_unlocked():
                 {"version": migration_version},
             )
             if applied_result.first() is None:
-                for statement in migration_statements_for_version:
-                    await conn.execute(text(statement))
+                if migration_version == MIGRATION_014.VERSION and conn.dialect.name == "sqlite":
+                    await MIGRATION_014.apply_sqlite(conn)
+                else:
+                    for statement in migration_statements_for_version:
+                        await conn.execute(text(statement))
                 if conn.dialect.name == "postgresql":
                     await conn.execute(
                         text(

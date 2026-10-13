@@ -377,7 +377,7 @@ async def get_current_user(
                 result = await db.execute(select(User).filter(User.id == user_id))
                 user = result.scalars().first()
                 if user:
-                    return user
+                    return await _attach_active_workspace(request, db, user)
         except (JWTError, ValueError):
             # An expired or invalid access token may still be renewed by a valid
             # HttpOnly refresh cookie. Bearer tokens never trigger this path.
@@ -419,8 +419,51 @@ async def get_current_user(
         user.refresh_token = hash_refresh_token(new_refresh_token)
         await db.commit()
         set_session_cookies(response, new_access_token, new_refresh_token)
-        return user
+        return await _attach_active_workspace(request, db, user)
     except HTTPException:
         raise
     except (JWTError, ValueError) as error:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials.") from error
+
+
+async def _attach_active_workspace(request: Request, db: AsyncSession, user: User) -> User:
+    """Validate the optional workspace context and enforce read-only roles centrally."""
+    try:
+        from backend.services import tenancy
+    except ImportError:
+        from services import tenancy
+
+    is_logout_request = request.method.upper() == "POST" and request.url.path == "/api/auth/logout"
+    # Workspace control-plane routes authorize against the workspace ID in
+    # their path and perform role checks in the route handler. Keep them in
+    # personal-account context so stale company selection cannot lock a user
+    # out of the workspace switcher after membership removal or MFA changes.
+    is_workspace_control_plane_request = request.url.path.startswith("/api/workspaces")
+    requested_tenant_id = None
+    raw_tenant_id = request.headers.get("X-ZeroOps-Tenant", "").strip()
+    if raw_tenant_id and not is_logout_request and not is_workspace_control_plane_request:
+        try:
+            import uuid
+
+            requested_tenant_id = uuid.UUID(raw_tenant_id)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The selected workspace is invalid.") from error
+
+    tenant = await tenancy.resolve_tenant(db, user=user, requested_tenant_id=requested_tenant_id)
+    membership = await tenancy.require_tenant_membership(db, user_id=user.id, tenant_id=tenant.id)
+    if tenant.require_mfa and not user.mfa_enabled and not is_logout_request and not is_workspace_control_plane_request:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This company workspace requires MFA. Switch to your personal workspace, enable MFA in Profile and security, then return.",
+        )
+    user.active_tenant_id = tenant.id
+    user.active_tenant_role = membership.role
+
+    if (
+        request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and membership.role == "viewer"
+        and not is_logout_request
+        and not is_workspace_control_plane_request
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This workspace is read-only for your role.")
+    return user

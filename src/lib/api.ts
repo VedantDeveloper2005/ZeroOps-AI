@@ -51,7 +51,7 @@ async function ensureCsrfToken() {
   await csrfBootstrap;
 }
 
-function requestHeaders(options: RequestInit | undefined, includeJsonContentType: boolean) {
+function requestHeaders(options: RequestInit | undefined, includeJsonContentType: boolean, path?: string) {
   const headers = new Headers(options?.headers);
   if (includeJsonContentType && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -59,6 +59,15 @@ function requestHeaders(options: RequestInit | undefined, includeJsonContentType
   const method = (options?.method || "GET").toUpperCase();
   if (UNSAFE_METHODS.has(method) && csrfToken && !headers.has(CSRF_HEADER)) {
     headers.set(CSRF_HEADER, csrfToken);
+  }
+  const accountSecurityRequest = path?.startsWith("/api/auth/mfa/") === true;
+  if (typeof window !== "undefined" && !path?.startsWith("/api/workspaces") && !accountSecurityRequest) {
+    const workspaceId = window.localStorage.getItem("zeroops:active-workspace");
+    const workspaceOwnerId = window.localStorage.getItem("zeroops:active-workspace-owner");
+    const authenticatedUserId = window.localStorage.getItem("zeroops:authenticated-user");
+    if (workspaceId && authenticatedUserId && workspaceOwnerId === authenticatedUserId) {
+      headers.set("X-ZeroOps-Tenant", workspaceId);
+    }
   }
   return headers;
 }
@@ -71,7 +80,7 @@ async function request<T>(path: string, options?: RequestInit, timeoutMs = 30_00
     {
       ...options,
       credentials: "include",
-      headers: requestHeaders(options, true),
+      headers: requestHeaders(options, true, path),
     },
     timeoutMs,
   );
@@ -102,7 +111,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
     {
       method: "POST",
       credentials: "include",
-      headers: requestHeaders({ method: "POST" }, false),
+      headers: requestHeaders({ method: "POST" }, false, path),
       body: formData,
     },
     120_000,
@@ -288,7 +297,7 @@ export interface EphemeralResource {
   resource_type: string;
   region: string;
   sku: string;
-  status: "pending" | "provisioning" | "active" | "expiring_soon" | "destroying" | "destroyed" | "failed";
+  status: "pending" | "provisioning" | "active" | "expiring_soon" | "destroying" | "destroyed" | "failed" | "unverified";
   source: string;
   source_reference?: string | null;
   ttl_minutes: number;
@@ -307,12 +316,17 @@ export interface EphemeralResource {
     connection_string?: string;
     endpoint_url?: string;
     rdp_host?: string;
+    portal_url?: string;
   };
   configuration: {
     os_distro?: string;
     startup_script?: string;
     open_ports?: number[];
     tags?: Record<string, string>;
+    managed_resources?: Array<{ id: string; api_version: string }>;
+    resource_count?: number;
+    estimated_resource_hourly_usd?: number;
+    arm_template_sha256?: string;
   };
   azure_resource_id?: string | null;
   azure_resource_group?: string | null;
@@ -335,6 +349,9 @@ export interface EphemeralResourceProposal {
   summary: string;
   startup_script?: string | null;
   open_ports: number[];
+  arm_template?: Record<string, unknown> | null;
+  arm_parameters?: Record<string, unknown> | null;
+  estimated_resource_hourly_usd?: number | null;
 }
 
 export interface EphemeralChatResponse {
@@ -366,6 +383,7 @@ export interface IntegrationSettings {
     jira_host?: string | null;
     jira_email?: string | null;
     jira_api_token?: string | null;
+    jira_webhook_secret?: string | null;
     jira_project_keys: string[];
     jira_auto_provision: boolean;
   };
@@ -374,6 +392,7 @@ export interface IntegrationSettings {
     inbound_email_address: string;
     allowed_domains: string[];
     default_ttl_minutes: number;
+    email_webhook_secret?: string | null;
   };
   webhook_url: string;
   inbound_email_url: string;
@@ -427,6 +446,32 @@ export interface MFASetup {
   otpauth_uri: string;
   qr_code_data_uri: string;
   expires_at: string;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  kind: "personal" | "organization";
+  role: "owner" | "admin" | "engineer" | "viewer" | string;
+  require_mfa: boolean;
+}
+
+export interface WorkspaceMember {
+  user_id: string;
+  email: string;
+  name: string;
+  role: string;
+  created_at: string | null;
+  mfa_enabled: boolean;
+}
+
+export interface WorkspaceInvitation {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  expires_at: string;
+  created_at: string | null;
 }
 
 export interface GitHubRepoItem {
@@ -1398,6 +1443,40 @@ export const api = {
   // ── User Profile ──
   getProfile: () => request<UserProfile>("/api/user/profile"),
 
+  listWorkspaces: () => request<WorkspaceSummary[]>("/api/workspaces"),
+  createWorkspace: (name: string) => request<WorkspaceSummary>("/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  }),
+  listWorkspaceMembers: (workspaceId: string) =>
+    request<WorkspaceMember[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/members`),
+  listWorkspaceInvitations: (workspaceId: string) =>
+    request<WorkspaceInvitation[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`),
+  inviteWorkspaceMember: (workspaceId: string, email: string, role: string) =>
+    request<WorkspaceInvitation>(`/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    }),
+  revokeWorkspaceInvitation: (workspaceId: string, invitationId: string) =>
+    request<void>(`/api/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}`, {
+      method: "DELETE",
+    }),
+  acceptWorkspaceInvitation: (token: string) =>
+    request<{ status: string; workspace_id: string; workspace_name: string; role: string; mfa_required: boolean }>(
+      "/api/workspaces/invitations/accept",
+      { method: "POST", body: JSON.stringify({ token }) },
+    ),
+  updateWorkspaceMemberRole: (workspaceId: string, memberId: string, role: string) =>
+    request<{ user_id: string; role: string }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}/role`,
+      { method: "PUT", body: JSON.stringify({ role }) },
+    ),
+  removeWorkspaceMember: (workspaceId: string, memberId: string) =>
+    request<void>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`,
+      { method: "DELETE" },
+    ),
+
   updateProfile: (data: { first_name?: string; last_name?: string; avatar_url?: string }) =>
     request<UserProfile>("/api/user/profile", { method: "PUT", body: JSON.stringify(data) }),
 
@@ -1683,6 +1762,9 @@ export const api = {
     startup_script?: string;
     open_ports?: number[];
     tags?: Record<string, string>;
+    arm_template?: Record<string, unknown>;
+    arm_parameters?: Record<string, unknown>;
+    estimated_resource_hourly_usd?: number;
     source?: string;
   }) =>
     request<EphemeralResource>("/api/resources", {
@@ -1704,14 +1786,26 @@ export const api = {
       method: "DELETE",
     }),
 
-  chatEphemeralResource: (message: string, context_resource_id?: string, auto_deploy = false) =>
+  chatEphemeralResource: (message: string, context_resource_id?: string, auto_deploy = false, region?: string) =>
     request<EphemeralChatResponse>("/api/resources/chat", {
       method: "POST",
-      body: JSON.stringify({ message, context_resource_id, auto_deploy }),
+      body: JSON.stringify({ message, context_resource_id, auto_deploy, region }),
     }),
 
   getResourceCatalog: () =>
     request<ResourceCatalog>("/api/resources/catalog"),
+
+  quoteCustomResource: (estimated_resource_hourly_usd: number, ttl_minutes: number) =>
+    request<{
+      hourly_subtotal: number;
+      total_subtotal: number;
+      currency: string;
+      label: string;
+      description: string;
+    }>("/api/resources/quote", {
+      method: "POST",
+      body: JSON.stringify({ estimated_resource_hourly_usd, ttl_minutes }),
+    }),
 
   getIntegrationSettings: () =>
     request<IntegrationSettings>("/api/integrations/settings"),

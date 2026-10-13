@@ -257,7 +257,8 @@ test("logout only clears client state after server-side revocation succeeds", ()
     handler[1].indexOf("return;") < handler[1].indexOf("setUser(null)"),
     "A failed server logout must return before clearing authenticated client state.",
   );
-  assert.match(handler[1], /setUser\(null\);\s*notifySignedOut\(\);/);
+  assert.match(handler[1], /setUser\(null\);[\s\S]*?notifySignedOut\(\);/);
+  assert.match(handler[1], /removeItem\("zeroops:active-workspace-owner"\)/);
 });
 
 test("protected pages do not mount while authentication is pending or missing", () => {

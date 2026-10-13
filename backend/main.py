@@ -47,6 +47,7 @@ try:
     from backend.services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history, ephemeral_resources
     from backend.services import deployment_targets
     from backend.services import github_oauth, google_oauth
+    from backend.routes import workspaces as workspaces_router
     from backend.database import get_db, init_db, database_available, AsyncSessionLocal
     from backend import models, schemas, auth
 except ImportError:
@@ -54,6 +55,7 @@ except ImportError:
     from services import git, ai, pipeline, pipeline_records, vault, email_service, sms_service, planner, decision_intelligence, tenancy, analysis as zeroops_analysis, artifacts, terraform_workflow, history, ephemeral_resources
     from services import deployment_targets
     from services import github_oauth, google_oauth
+    from routes import workspaces as workspaces_router
     from database import get_db, init_db, database_available, AsyncSessionLocal
     import models, schemas, auth
 
@@ -106,6 +108,7 @@ app.include_router(history_router)
 app.include_router(devsecops_router)
 app.include_router(advisor_router)
 app.include_router(ephemeral_resources_router)
+app.include_router(workspaces_router.router)
 
 
 @app.get("/health")
@@ -1231,6 +1234,23 @@ async def disable_mfa(
     if not current_user.mfa_enabled or (current_user.mfa_method == "totp" and not current_user.mfa_secret_encrypted):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multi-factor authentication is not enabled.")
 
+    required_workspace = await db.execute(
+        select(models.Tenant.id)
+        .join(models.TenantMembership, models.TenantMembership.tenant_id == models.Tenant.id)
+        .where(
+            models.TenantMembership.user_id == current_user.id,
+            models.TenantMembership.status == "active",
+            models.Tenant.kind == "organization",
+            models.Tenant.require_mfa.is_(True),
+        )
+        .limit(1)
+    )
+    if required_workspace.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MFA is required by a company workspace you belong to. Leave that workspace before disabling MFA.",
+        )
+
     verified = False
 
     if current_user.mfa_method == "email":
@@ -1535,7 +1555,7 @@ async def list_projects(
 ):
     result = await db.execute(
         select(models.Project)
-        .filter(models.Project.user_id == current_user.id)
+        .filter(tenancy.project_tenant_filter(current_user))
         .order_by(desc(models.Project.created_at))
     )
     projects = result.scalars().all()
@@ -1576,6 +1596,7 @@ async def create_project(
 ):
     project = models.Project(
         user_id=current_user.id,
+        tenant_id=tenancy.active_tenant_id(current_user),
         name=req.name,
         full_name=req.full_name,
         repo_url=req.repo_url,
@@ -1775,6 +1796,7 @@ async def upload_code_project(
 
         project = models.Project(
             user_id=current_user.id,
+            tenant_id=tenancy.active_tenant_id(current_user),
             name=project_id_raw,
             full_name=f"upload/{project_id_raw}",
             repo_url=None,
@@ -1881,7 +1903,7 @@ async def get_project(
 ):
     result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = result.scalars().first()
     if not project:
@@ -1897,11 +1919,12 @@ async def delete_project(
 ):
     result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
+    tenancy.require_workspace_role(current_user, {"owner", "admin"})
 
     # ── Gather project deployments for cloud resource teardown ───────────────
     dep_result = await db.execute(
@@ -2441,13 +2464,13 @@ async def create_billing_operation(
 
     if req.project_id:
         project_result = await db.execute(
-            select(models.Project).filter(models.Project.id == req.project_id, models.Project.user_id == current_user.id)
+            select(models.Project).filter(models.Project.id == req.project_id, tenancy.project_tenant_filter(current_user))
         )
         if not project_result.scalars().first():
             raise HTTPException(status_code=404, detail="Project not found.")
     if req.deployment_id:
         deployment_result = await db.execute(
-            select(models.Deployment).filter(models.Deployment.id == req.deployment_id, models.Deployment.user_id == current_user.id)
+            select(models.Deployment).filter(models.Deployment.id == req.deployment_id, models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
         )
         if not deployment_result.scalars().first():
             raise HTTPException(status_code=404, detail="Deployment not found.")
@@ -2600,7 +2623,7 @@ async def self_heal_project(
     result = await db.execute(
         select(models.Project.id).filter(
             models.Project.id == project_id,
-            models.Project.user_id == current_user.id,
+            tenancy.project_tenant_filter(current_user),
         )
     )
     if result.scalar_one_or_none() is None:
@@ -2629,7 +2652,7 @@ async def get_project_variables(
     # 1. Verify project exists and belongs to user
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -2677,7 +2700,7 @@ async def create_project_variable(
     # 1. Verify project exists and belongs to user
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -2743,7 +2766,7 @@ async def delete_project_variable(
     # 1. Verify project exists and belongs to user
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -2786,7 +2809,7 @@ async def get_project_metrics(
     # Verify project ownership
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -2873,7 +2896,7 @@ async def list_deployments(
     result = await db.execute(
         select(models.Deployment, models.Project.name)
         .join(models.Project, models.Deployment.project_id == models.Project.id)
-        .filter(models.Deployment.user_id == current_user.id)
+        .filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
         .order_by(desc(models.Deployment.started_at))
         .limit(limit)
     )
@@ -2901,10 +2924,11 @@ async def start_deploy(
     current_user: models.User = Depends(auth.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    tenancy.require_workspace_role(current_user, {"owner", "admin", "engineer"})
     # Verify project belongs to user
     result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == req.project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == req.project_id, tenancy.project_tenant_filter(current_user))
     )
     project = result.scalars().first()
     if not project:
@@ -2943,7 +2967,7 @@ async def start_deploy(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project.id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     approved_plan = plan_result.scalars().first()
@@ -2998,7 +3022,7 @@ async def start_deploy(
         infrastructure_change=False,
         has_iac=False,
     )
-    tenant = await tenancy.resolve_tenant(db, user=current_user)
+    tenant = await tenancy.resolve_tenant(db, user=current_user, requested_tenant_id=tenancy.active_tenant_id(current_user))
     pipeline_config_result = await db.execute(
         select(models.ProjectPipelineConfiguration)
         .filter(
@@ -3186,7 +3210,7 @@ async def get_deployment(
 ):
     result = await db.execute(
         select(models.Deployment)
-        .filter(models.Deployment.id == deploy_id, models.Deployment.user_id == current_user.id)
+        .filter(models.Deployment.id == deploy_id, models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
     )
     dep = result.scalars().first()
     if not dep:
@@ -3232,7 +3256,7 @@ async def fix_deployment_automatically(
     result = await db.execute(
         select(models.Deployment).filter(
             models.Deployment.id == deploy_id,
-            models.Deployment.user_id == current_user.id,
+            models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     deployment = result.scalars().first()
@@ -3269,7 +3293,7 @@ async def delete_deployment(
     result = await db.execute(
         select(models.Deployment).filter(
             models.Deployment.id == deploy_id,
-            models.Deployment.user_id == current_user.id,
+            models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     deployment = result.scalars().first()
@@ -3504,7 +3528,7 @@ async def get_ai_analysis(
     # Verify project ownership
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found.")
@@ -3608,7 +3632,7 @@ async def analyze_repo(
     # Find project for this repo if it exists
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.user_id == current_user.id, models.Project.full_name == req.repo)
+        .filter(tenancy.project_tenant_filter(current_user), models.Project.full_name == req.repo)
     )
     project = proj_result.scalars().first()
     project_id = project.id if project else None
@@ -3830,7 +3854,7 @@ async def _owned_project_or_404(
     result = await db.execute(
         select(models.Project).filter(
             models.Project.id == project_id,
-            models.Project.user_id == current_user.id,
+            tenancy.project_tenant_filter(current_user),
         )
     )
     project = result.scalars().first()
@@ -3975,7 +3999,7 @@ async def generate_infrastructure_plan(
     existing_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project.id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     record = existing_result.scalars().first()
@@ -4040,7 +4064,7 @@ async def get_infrastructure_plan(
     result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = result.scalars().first()
@@ -4065,7 +4089,7 @@ async def update_infrastructure_plan(
     result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = result.scalars().first()
@@ -4127,7 +4151,7 @@ async def approve_infrastructure_plan(
     result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = result.scalars().first()
@@ -4178,7 +4202,7 @@ async def approve_infrastructure_plan(
                     if comp.get("tier") in {"Existing Linux App Service plan required", None} and azure_conn.app_service_plan:
                         comp["tier"] = azure_conn.app_service_plan
             plan.plan_data = plan_data
-            tenant = await tenancy.resolve_tenant(db, user=current_user)
+            tenant = await tenancy.resolve_tenant(db, user=current_user, requested_tenant_id=tenancy.active_tenant_id(current_user))
             store = artifacts.get_artifact_store()
             queued = await terraform_workflow.enqueue_approved_plan(
                 db,
@@ -4208,7 +4232,7 @@ async def approve_infrastructure_plan(
         ))
         try:
             plan_digest = terraform_workflow.approved_plan_digest(plan)
-            tenant = await tenancy.resolve_tenant(db, user=current_user)
+            tenant = await tenancy.resolve_tenant(db, user=current_user, requested_tenant_id=tenancy.active_tenant_id(current_user))
             run_result = await db.execute(
                 select(models.OperationRun).where(
                     models.OperationRun.tenant_id == tenant.id,
@@ -4264,7 +4288,7 @@ async def get_knowledge_graph(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project.id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = plan_result.scalars().first()
@@ -4315,7 +4339,7 @@ async def simulate_project_digital_twin(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project.id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = plan_result.scalars().first()
@@ -4347,7 +4371,7 @@ async def get_latest_digital_twin(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project.id,
-            models.InfrastructurePlan.user_id == current_user.id,
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
         )
     )
     plan = plan_result.scalars().first()
@@ -4400,7 +4424,7 @@ async def ai_chat(
     project_metadata = {}
     if req.project_id:
         proj_result = await db.execute(
-            select(models.Project).filter(models.Project.id == req.project_id, models.Project.user_id == current_user.id)
+            select(models.Project).filter(models.Project.id == req.project_id, tenancy.project_tenant_filter(current_user))
         )
         project = proj_result.scalars().first()
         if project:
@@ -4552,7 +4576,7 @@ async def ai_chat(
         plan_result = await db.execute(
             select(models.InfrastructurePlan).filter(
                 models.InfrastructurePlan.project_id == req.project_id,
-                models.InfrastructurePlan.user_id == current_user.id,
+                models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
             )
         )
         architecture_plan = plan_result.scalars().first()
@@ -4599,7 +4623,7 @@ async def get_project_recommendations(
     """Retrieve the latest AI deployment recommendation for a project."""
     # Verify project ownership
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found.")
@@ -4626,7 +4650,7 @@ async def get_deployment_failure_analysis(
     # Verify deployment ownership (capture reference before consuming the result set)
     dep_result = await db.execute(
         select(models.Deployment)
-        .filter(models.Deployment.id == deployment_id, models.Deployment.user_id == current_user.id)
+        .filter(models.Deployment.id == deployment_id, models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
     )
     deployment = dep_result.scalars().first()
     if not deployment:
@@ -4709,7 +4733,7 @@ async def get_project_analyses_history(
     # Verify project ownership
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found.")
@@ -4763,26 +4787,26 @@ async def get_dashboard_stats(
     # Projects count
     proj_count_result = await db.execute(
         select(func.count(models.Project.id))
-        .filter(models.Project.user_id == current_user.id)
+        .filter(tenancy.project_tenant_filter(current_user))
     )
     total_projects = proj_count_result.scalar() or 0
 
     # Deployments
     dep_count_result = await db.execute(
         select(func.count(models.Deployment.id))
-        .filter(models.Deployment.user_id == current_user.id)
+        .filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
     )
     total_deployments = dep_count_result.scalar() or 0
 
     active_dep_result = await db.execute(
         select(func.count(models.Deployment.id))
-        .filter(models.Deployment.user_id == current_user.id, models.Deployment.status == "running")
+        .filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))), models.Deployment.status == "running")
     )
     active_deployments = active_dep_result.scalar() or 0
 
     failed_dep_result = await db.execute(
         select(func.count(models.Deployment.id))
-        .filter(models.Deployment.user_id == current_user.id, models.Deployment.status == "failed")
+        .filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))), models.Deployment.status == "failed")
     )
     failed_deployments = failed_dep_result.scalar() or 0
 
@@ -4827,16 +4851,16 @@ async def get_profile(
     db: AsyncSession = Depends(get_db)
 ):
     proj_count = (await db.execute(
-        select(func.count(models.Project.id)).filter(models.Project.user_id == current_user.id)
+        select(func.count(models.Project.id)).filter(tenancy.project_tenant_filter(current_user))
     )).scalar() or 0
 
     dep_count = (await db.execute(
-        select(func.count(models.Deployment.id)).filter(models.Deployment.user_id == current_user.id)
+        select(func.count(models.Deployment.id)).filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))))
     )).scalar() or 0
 
     active_dep = (await db.execute(
         select(func.count(models.Deployment.id))
-        .filter(models.Deployment.user_id == current_user.id, models.Deployment.status == "running")
+        .filter(models.Deployment.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))), models.Deployment.status == "running")
     )).scalar() or 0
 
     return schemas.UserProfileResponse(
@@ -4922,8 +4946,13 @@ async def reset_user_onboarding(
 ):
     from sqlalchemy import delete
 
-    # Delete user's projects, deployments, AI actions, and notifications
-    await db.execute(delete(models.Project).filter(models.Project.user_id == current_user.id))
+    # Onboarding reset is account-scoped; company projects belong to the team.
+    await db.execute(
+        delete(models.Project).filter(
+            models.Project.user_id == current_user.id,
+            models.Project.tenant_id == current_user.id,
+        )
+    )
     await db.execute(delete(models.AIAction).filter(models.AIAction.user_id == current_user.id))
     await db.execute(delete(models.Notification).filter(models.Notification.user_id == current_user.id))
 
@@ -5439,7 +5468,7 @@ async def get_metrics(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="Invalid project ID") from error
     project_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_uuid, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_uuid, tenancy.project_tenant_filter(current_user))
     )
     if not project_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5476,7 +5505,7 @@ async def add_secret(
     current_user: models.User = Depends(auth.get_current_user)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == req.projectId, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == req.projectId, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5492,7 +5521,7 @@ async def add_secret(
 @app.get("/api/secrets/{project_id}")
 async def list_secrets(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5508,7 +5537,7 @@ async def list_secrets(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 @app.delete("/api/secrets/{project_id}/{key}")
 async def delete_secret(project_id: uuid.UUID, key: str, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5524,7 +5553,7 @@ async def delete_secret(project_id: uuid.UUID, key: str, db: AsyncSession = Depe
 @app.post("/api/autoscaling/configure")
 async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == req.projectId, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == req.projectId, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5537,7 +5566,7 @@ async def configure_autoscaling(req: schemas.HPAConfigureRequest, db: AsyncSessi
 @app.get("/api/autoscaling/{project_id}")
 async def get_autoscaling_status(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found")
@@ -5550,7 +5579,7 @@ async def get_autoscaling_status(project_id: uuid.UUID, db: AsyncSession = Depen
 @app.get("/api/security/status/{project_id}")
 async def get_security_status(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5623,7 +5652,7 @@ async def get_project_health_score(
 ):
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5645,7 +5674,7 @@ async def get_project_cost_optimization(
 ):
     proj_result = await db.execute(
         select(models.Project)
-        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5663,7 +5692,7 @@ async def get_project_domains(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5684,7 +5713,7 @@ async def create_project_domain(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5705,7 +5734,7 @@ async def verify_project_domain(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5726,7 +5755,7 @@ async def renew_domain_ssl(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5747,7 +5776,7 @@ async def delete_project_domain(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
@@ -5767,17 +5796,14 @@ async def get_project_members(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
     raise HTTPException(
         status_code=501,
-        detail=(
-            "Project membership and role assignment are not implemented. Access remains "
-            "limited to the project owner."
-        ),
+        detail="Project-level membership is not supported. Manage team access from the company workspace settings.",
     )
 
 @app.post("/api/projects/{project_id}/members")
@@ -5788,17 +5814,14 @@ async def add_project_member(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
     raise HTTPException(
         status_code=501,
-        detail=(
-            "Project invitations are not implemented. No invitation was sent and no "
-            "access was granted."
-        ),
+        detail="Project-level invitations are not supported. Invite engineers from company workspace settings.",
     )
 
 @app.delete("/api/projects/{project_id}/members/{email}")
@@ -5809,16 +5832,14 @@ async def delete_project_member(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     project = proj_result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
     raise HTTPException(
         status_code=501,
-        detail=(
-            "Project membership changes are not implemented. No access state was changed."
-        ),
+        detail="Project-level member removal is not supported. Manage team access from company workspace settings.",
     )
 
 @app.get("/api/projects/{project_id}/activity")
@@ -5828,7 +5849,7 @@ async def get_project_activity(
     db: AsyncSession = Depends(get_db)
 ):
     proj_result = await db.execute(
-        select(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        select(models.Project).filter(models.Project.id == project_id, tenancy.project_tenant_filter(current_user))
     )
     if not proj_result.scalars().first():
         raise HTTPException(status_code=404, detail="Project not found.")
@@ -5859,7 +5880,16 @@ async def get_global_activity(
     result = await db.execute(
         select(models.ActivityEvent, models.Project.name)
         .outerjoin(models.Project, models.ActivityEvent.project_id == models.Project.id)
-        .filter(models.ActivityEvent.user_id == current_user.id)
+        .filter(
+            or_(
+                models.ActivityEvent.tenant_id == tenancy.active_tenant_id(current_user),
+                models.Project.tenant_id == tenancy.active_tenant_id(current_user),
+                and_(
+                    tenancy.active_tenant_id(current_user) == current_user.id,
+                    models.ActivityEvent.user_id == current_user.id,
+                ),
+            )
+        )
         .order_by(desc(models.ActivityEvent.created_at))
         .limit(50)
     )
@@ -6243,7 +6273,7 @@ async def explain_component_decision(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == project_id,
-            models.InfrastructurePlan.user_id == current_user.id
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user)))
         )
     )
     plan = plan_result.scalars().first()
@@ -6272,7 +6302,10 @@ async def get_deployment_job_status(
 ):
     result = await db.execute(
         select(models.DeploymentJob)
-        .filter(models.DeploymentJob.id == job_id, models.DeploymentJob.user_id == current_user.id)
+        .filter(
+            models.DeploymentJob.id == job_id,
+            models.DeploymentJob.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user))),
+        )
     )
     job = result.scalars().first()
     if not job:
@@ -6303,7 +6336,7 @@ async def post_architect_chat(
     plan_result = await db.execute(
         select(models.InfrastructurePlan).filter(
             models.InfrastructurePlan.project_id == req.project_id,
-            models.InfrastructurePlan.user_id == current_user.id
+            models.InfrastructurePlan.project_id.in_(select(models.Project.id).where(tenancy.project_tenant_filter(current_user)))
         )
     )
     plan = plan_result.scalars().first()
@@ -6347,4 +6380,3 @@ async def post_architect_chat(
         plan=_serialize_infrastructure_plan(plan),
         citations=citations,
     )
-

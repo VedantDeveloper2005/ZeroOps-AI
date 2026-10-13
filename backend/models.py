@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     BigInteger, Column, String, Date, DateTime, Text, Integer, Float, Boolean,
-    CheckConstraint, ForeignKey, JSON, Enum as SAEnum, Index, UniqueConstraint
+    CheckConstraint, ForeignKey, JSON, Enum as SAEnum, Index, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -286,6 +286,7 @@ class Tenant(Base):
     display_name = Column(Text, nullable=False)
     kind = Column(Text, nullable=False, default="personal")
     status = Column(Text, nullable=False, default="active")
+    require_mfa = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -313,6 +314,43 @@ class TenantMembership(Base):
         UniqueConstraint("tenant_id", "user_id", name="uq_tenant_memberships_tenant_user"),
         Index("ix_tenant_memberships_user_status", "user_id", "status"),
         Index("ix_tenant_memberships_tenant_status", "tenant_id", "status"),
+    )
+
+
+class WorkspaceInvitation(Base):
+    """Single-use, email-bound invitation into a company workspace."""
+
+    __tablename__ = "workspace_invitations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    email = Column(Text, nullable=False, index=True)
+    role = Column(Text, nullable=False, default="engineer")
+    token_hash = Column(String(64), nullable=False, unique=True)
+    status = Column(Text, nullable=False, default="pending")
+    invited_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    accepted_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    tenant = relationship("Tenant")
+    invited_by = relationship("User", foreign_keys=[invited_by_user_id])
+    accepted_by = relationship("User", foreign_keys=[accepted_by_user_id])
+
+    __table_args__ = (
+        Index("ix_workspace_invitations_tenant_status", "tenant_id", "status"),
+        Index("ix_workspace_invitations_email_status", "email", "status"),
+        Index(
+            "uq_workspace_invitations_one_pending_email",
+            "tenant_id",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        CheckConstraint("role IN ('admin', 'engineer', 'viewer')", name="ck_workspace_invitation_role"),
+        CheckConstraint("status IN ('pending', 'accepted', 'revoked', 'expired')", name="ck_workspace_invitation_status"),
     )
 
 
@@ -587,6 +625,7 @@ class Project(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(Text, nullable=False)                  # e.g. "web-app"
     full_name = Column(Text, nullable=False)              # e.g. "owner/repository"
     repo_url = Column(Text, nullable=True)                # https://github.com/owner/repository
@@ -2389,12 +2428,14 @@ class IntegrationConfig(Base):
     jira_host = Column(Text, nullable=True)
     jira_email = Column(Text, nullable=True)
     jira_api_token = Column(Text, nullable=True)
+    jira_webhook_secret_encrypted = Column(Text, nullable=True)
     jira_project_keys = Column(JSON, nullable=False, default=lambda: ["QA", "DEV", "INFRA"])
     jira_auto_provision = Column(Boolean, nullable=False, default=True)
 
     # Inbound Email settings
     email_enabled = Column(Boolean, nullable=False, default=False)
     inbound_email_address = Column(Text, nullable=True, default="sandbox@zeroops.ai")
+    email_webhook_secret_encrypted = Column(Text, nullable=True)
     allowed_domains = Column(JSON, nullable=False, default=list)
     default_ttl_minutes = Column(Integer, nullable=False, default=120)
 

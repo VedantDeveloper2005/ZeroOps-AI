@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import uuid
 from typing import Optional
+from sqlalchemy.sql.elements import ColumnElement
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -19,6 +20,30 @@ except ImportError:
 def _personal_workspace_name(user: models.User) -> str:
     full_name = " ".join(part.strip() for part in [user.first_name or "", user.last_name or ""] if part.strip())
     return f"{full_name}'s workspace" if full_name else "Personal workspace"
+
+
+def active_tenant_id(user: models.User) -> uuid.UUID:
+    """Return the tenant already validated from this request's workspace header."""
+    return getattr(user, "active_tenant_id", user.id)
+
+
+def project_tenant_filter(user: models.User) -> ColumnElement[bool]:
+    """Scope project queries to the selected, membership-checked workspace."""
+    tenant_id = active_tenant_id(user)
+    return or_(
+        models.Project.tenant_id == tenant_id,
+        and_(
+            tenant_id == user.id,
+            models.Project.tenant_id.is_(None),
+            models.Project.user_id == user.id,
+        ),
+    )
+
+
+def require_workspace_role(user: models.User, allowed_roles: set[str]) -> None:
+    role = getattr(user, "active_tenant_role", "owner")
+    if role not in allowed_roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your workspace role does not allow this action.")
 
 
 async def ensure_personal_tenant(db: AsyncSession, user: models.User) -> models.Tenant:

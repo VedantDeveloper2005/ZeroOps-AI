@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import desc, func
+from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -32,7 +32,7 @@ try:
     )
     from backend.services.pipeline_records import context_from_configuration, create_pipeline_run
     from backend.services.redaction import redact_sensitive_text, redact_sensitive_values
-    from backend.services.tenancy import resolve_tenant
+    from backend.services.tenancy import active_tenant_id, project_tenant_filter, resolve_tenant
 except ImportError:  # pragma: no cover - package execution fallback
     import auth, config, models
     from database import get_db
@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - package execution fallback
     )
     from services.pipeline_records import context_from_configuration, create_pipeline_run
     from services.redaction import redact_sensitive_text, redact_sensitive_values
-    from services.tenancy import resolve_tenant
+    from services.tenancy import active_tenant_id, project_tenant_filter, resolve_tenant
 
 
 router = APIRouter(tags=["devsecops"])
@@ -79,11 +79,25 @@ async def _project_for_user(
     db: AsyncSession,
     project_id: uuid.UUID,
     user_id: uuid.UUID,
+    tenant_id: uuid.UUID | None = None,
 ) -> models.Project:
+    tenant_filter = (
+        or_(
+            models.Project.tenant_id == tenant_id,
+            and_(models.Project.tenant_id.is_(None), models.Project.user_id == user_id),
+        )
+        if tenant_id is not None
+        else models.Project.tenant_id.in_(
+            select(models.TenantMembership.tenant_id).where(
+                models.TenantMembership.user_id == user_id,
+                models.TenantMembership.status == "active",
+            )
+        )
+    )
     result = await db.execute(
         select(models.Project).where(
             models.Project.id == project_id,
-            models.Project.user_id == user_id,
+            tenant_filter,
         )
     )
     project = result.scalars().first()
@@ -217,8 +231,8 @@ async def get_pipeline_configuration(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    project = await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    project = await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     record = await _latest_config(db, tenant_id=tenant.id, project_id=project.id)
     return _pipeline_config_response(
         record,
@@ -234,8 +248,8 @@ async def update_pipeline_configuration(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    project = await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    project = await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     webhook_configured = _webhook_secret_configured(project.id)
     if request.automatic_deployment and not webhook_configured:
         raise HTTPException(
@@ -302,8 +316,8 @@ async def regenerate_github_webhook_secret(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    project = await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    project = await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     public_url = config.ZEROOPS_BACKEND_URL.rstrip("/")
     if not public_url:
         raise HTTPException(
@@ -575,7 +589,7 @@ async def get_deployment_pipeline(
     deployment_result = await db.execute(
         select(models.Deployment.id).where(
             models.Deployment.id == deployment_id,
-            models.Deployment.user_id == current_user.id,
+            models.Deployment.project_id.in_(select(models.Project.id).where(project_tenant_filter(current_user))),
         )
     )
     if deployment_result.scalar_one_or_none() is None:
@@ -602,8 +616,8 @@ async def list_project_change_analysis(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     result = await db.execute(
         select(models.ChangeAnalysis, models.PipelineRun.repository_ai_used)
         .outerjoin(models.PipelineRun, models.PipelineRun.id == models.ChangeAnalysis.pipeline_run_id)
@@ -624,8 +638,8 @@ async def list_project_security_scans(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     result = await db.execute(
         select(models.SecurityScan)
         .options(selectinload(models.SecurityScan.findings))
@@ -794,7 +808,7 @@ async def ingest_deployment_metric(
     user = await db.get(models.User, deployment.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deployment owner is unavailable.")
-    tenant = await resolve_tenant(db, user=user)
+    tenant = await resolve_tenant(db, user=user, requested_tenant_id=active_tenant_id(user))
     recorded_at = request.recorded_at or datetime.now(timezone.utc)
     metric = models.DeploymentMetric(
         deployment_id=deployment.id,
@@ -907,13 +921,13 @@ async def get_project_monitoring(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    project = await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    project = await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     deployment_result = await db.execute(
         select(models.Deployment)
         .where(
             models.Deployment.project_id == project.id,
-            models.Deployment.user_id == current_user.id,
+            models.Deployment.project_id.in_(select(models.Project.id).where(project_tenant_filter(current_user))),
         )
         .order_by(desc(models.Deployment.started_at))
         .limit(1)
@@ -996,8 +1010,8 @@ async def list_project_incidents(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     result = await db.execute(
         select(models.Incident)
         .where(models.Incident.tenant_id == tenant.id, models.Incident.project_id == project_id)
@@ -1012,14 +1026,17 @@ async def _incident_for_user(
     incident_id: uuid.UUID,
     user: models.User,
 ) -> tuple[models.Incident, models.Tenant]:
-    tenant = await resolve_tenant(db, user=user)
+    tenant = await resolve_tenant(db, user=user, requested_tenant_id=active_tenant_id(user))
     result = await db.execute(
         select(models.Incident)
         .join(models.Project, models.Project.id == models.Incident.project_id)
         .where(
             models.Incident.id == incident_id,
             models.Incident.tenant_id == tenant.id,
-            models.Project.user_id == user.id,
+            or_(
+                models.Project.tenant_id == tenant.id,
+                and_(models.Project.tenant_id.is_(None), models.Project.user_id == user.id),
+            ),
         )
     )
     incident = result.scalars().first()
@@ -1142,14 +1159,17 @@ async def _proposal_for_user(
     proposal_id: uuid.UUID,
     user: models.User,
 ) -> tuple[models.RemediationProposal, models.Tenant]:
-    tenant = await resolve_tenant(db, user=user)
+    tenant = await resolve_tenant(db, user=user, requested_tenant_id=active_tenant_id(user))
     result = await db.execute(
         select(models.RemediationProposal)
         .join(models.Project, models.Project.id == models.RemediationProposal.project_id)
         .where(
             models.RemediationProposal.id == proposal_id,
             models.RemediationProposal.tenant_id == tenant.id,
-            models.Project.user_id == user.id,
+            or_(
+                models.Project.tenant_id == tenant.id,
+                and_(models.Project.tenant_id.is_(None), models.Project.user_id == user.id),
+            ),
         )
     )
     proposal = result.scalars().first()
@@ -1418,11 +1438,11 @@ async def _owned_approval_run(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline run not found.")
     pipeline_run, deployment = row
-    project = await _project_for_user(db, pipeline_run.project_id, user_id)
+    project = await _project_for_user(db, pipeline_run.project_id, user_id, tenant_id=pipeline_run.tenant_id)
     owner = await db.get(models.User, user_id)
     if owner is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline run not found.")
-    tenant = await resolve_tenant(db, user=owner)
+    tenant = await resolve_tenant(db, user=owner, requested_tenant_id=active_tenant_id(owner))
     if pipeline_run.tenant_id != tenant.id or deployment.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline run not found.")
     return pipeline_run, deployment, project, tenant
@@ -1627,7 +1647,7 @@ async def approve_pipeline_run(
             .where(
                 models.PipelineRun.id == approved_run_id,
                 models.PipelineRun.deployment_id == approved_deployment_id,
-                models.Deployment.user_id == current_user.id,
+                models.Deployment.project_id.in_(select(models.Project.id).where(project_tenant_filter(current_user))),
             )
         )
         if approved_result.first() is None:
@@ -1926,7 +1946,7 @@ async def refresh_terraform_cost_evidence(
 ):
     """Issue immutable, digest-bound cost evidence for a supported saved plan."""
 
-    tenant = await resolve_tenant(db, user=current_user)
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     plan_result_query = await db.execute(
         select(models.TerraformPlanResult).where(
             models.TerraformPlanResult.operation_run_id == operation_run_id,
@@ -1936,7 +1956,7 @@ async def refresh_terraform_cost_evidence(
     plan_result = plan_result_query.scalars().first()
     if plan_result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
-    project = await _project_for_user(db, plan_result.project_id, current_user.id)
+    project = await _project_for_user(db, plan_result.project_id, current_user.id, tenant_id=active_tenant_id(current_user))
     try:
         store = artifacts.get_artifact_store()
     except artifacts.ArtifactStoreUnavailable as error:
@@ -1974,7 +1994,7 @@ async def get_terraform_apply_approval(
 ):
     """Return review-safe digests and verified cost; never a saved-plan locator."""
 
-    tenant = await resolve_tenant(db, user=current_user)
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     result = await db.execute(
         select(models.TerraformPlanResult, models.OperationRun)
         .join(models.OperationRun, models.OperationRun.id == models.TerraformPlanResult.operation_run_id)
@@ -1988,7 +2008,7 @@ async def get_terraform_apply_approval(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
     plan_result, operation_run = row
-    await _project_for_user(db, plan_result.project_id, current_user.id)
+    await _project_for_user(db, plan_result.project_id, current_user.id, tenant_id=active_tenant_id(current_user))
     bundle = plan_result.bundle if isinstance(plan_result.bundle, dict) else {}
     variables = plan_result.input_variables if isinstance(plan_result.input_variables, dict) else {}
     guardrails = plan_result.guardrails if isinstance(plan_result.guardrails, dict) else {}
@@ -2053,8 +2073,8 @@ async def get_project_terraform_review(
 ):
     """Return the current architecture revision's safe plan/apply review state."""
 
-    project = await _project_for_user(db, project_id, current_user.id)
-    tenant = await resolve_tenant(db, user=current_user)
+    project = await _project_for_user(db, project_id, current_user.id, tenant_id=active_tenant_id(current_user))
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     plan = await _approved_plan(db, project.id, current_user.id)
     if plan is None:
         return {"status": "not_approved", "project_id": str(project.id)}
@@ -2151,7 +2171,7 @@ async def approve_terraform_apply(
 ):
     """Consume one owner decision into one digest-bound Service Bus command."""
 
-    tenant = await resolve_tenant(db, user=current_user)
+    tenant = await resolve_tenant(db, user=current_user, requested_tenant_id=active_tenant_id(current_user))
     plan_result_query = await db.execute(
         select(models.TerraformPlanResult).where(
             models.TerraformPlanResult.operation_run_id == operation_run_id,
@@ -2161,7 +2181,7 @@ async def approve_terraform_apply(
     plan_result = plan_result_query.scalars().first()
     if plan_result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terraform plan result not found.")
-    project = await _project_for_user(db, plan_result.project_id, current_user.id)
+    project = await _project_for_user(db, plan_result.project_id, current_user.id, tenant_id=active_tenant_id(current_user))
     azure_connection = await _active_azure_connection(db, current_user.id)
     if azure_connection is None:
         raise HTTPException(
@@ -2411,7 +2431,7 @@ async def github_push_webhook(
     owner = await db.get(models.User, project.user_id)
     if owner is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project owner is unavailable.")
-    tenant = await resolve_tenant(db, user=owner)
+    tenant = await resolve_tenant(db, user=owner, requested_tenant_id=active_tenant_id(owner))
     duplicate_result = await db.execute(
         select(models.WebhookDelivery).where(
             models.WebhookDelivery.tenant_id == tenant.id,

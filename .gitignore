@@ -94,6 +94,17 @@ scripts/update_*.py
 scripts/bootstrap_*.py
 scripts/redeploy_*.py
 scripts/start_worker_*.py
+scripts/apply_prod_migrations.py
+scripts/debug_begin_pipeline.py
+scripts/inspect_backend_settings.py
+scripts/inspect_demo_project.py
+scripts/inspect_failure.py
+scripts/inspect_project.py
+scripts/inspect_projects_cols.py
+scripts/list_kv_secrets.py
+scripts/patch_app_service_rg.py
+scripts/run_e2e_demo_test.py
+scripts/start_worker.py
 stitch_design_dark/
 stitch_design_light/
 public/stitch_previews/

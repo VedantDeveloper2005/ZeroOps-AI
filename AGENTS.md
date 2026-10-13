@@ -54,6 +54,19 @@ This version has breaking changes — APIs, conventions, and file structure may 
   - Automated background TTL reaper integrated into `maintenance_daemon` in `backend/main.py`.
   - Zero-touch frontend UX (`src/app/dashboard/sandbox/page.tsx`): 1-click persona filters, proactive AI recommendations, zero-typing chat prompt pills, 1-click .RDP download, 1-click .env DATABASE_URL copy, interactive live web terminal runner, and 1-click Jira/Email automation simulators.
   - Test suite verified: 7/7 backend ephemeral tests passing, 30/30 frontend contract tests passing, 0 TypeScript errors.
+- Fully Configured Vedant's Azure Account & Infrastructure (`9277603e-b858-4253-b1ed-e6747e316519`):
+  - Preserved terra 5.6 architecture advisor agent v3 without deploying `gpt-4o-mini`.
+  - Provisioned and scaled VMSS `vmss-zops-tfexec` (Standard_B2as_v2, Ubuntu 22.04 LTS Gen2, active instance `vmss-zops-tfexec_3eb7ee52`) in `zeroops-rg` (`centralindia`).
+  - Applied schema migrations 013 and 014 to production PostgreSQL (`zeroops-db-prod`), resolving `projects.tenant_id` and multi-tenant schema divergence.
+  - Resolved Windows subprocess path resolution for Azure CLI (`az.cmd`) in `backend/services/app_service.py`.
+  - Enhanced App Service deployment to seamlessly resolve web apps in isolated and shared resource groups.
+  - Provisioned Azure App Service `zo-vedant-demo-1ed1b668` on Linux Plan `ASP-zeroopsrg-8559` with Managed Identity and `AcrPull` role on `zeroopsacrvedant.azurecr.io`.
+  - Executed 100% end-to-end live deployment (`b6f62242-1e58-4060-b839-0fea8e9bd784`, pipeline run `efac37c2-9610-4dee-9cbe-c68034515464`):
+    - Cloned `VedantDeveloper2005/demo` commit `206bed590ed004d423f5bb50f4068905dbac5b49`.
+    - Executed security scanning and quality checks.
+    - Cloud build and push to `zeroopsacrvedant.azurecr.io/zo-vedant-demo-1ed1b668` (ACR run `cu2` Succeeded in 20s).
+    - Published container with `WEBSITES_PORT=3000` to `zo-vedant-demo-1ed1b668`.
+    - Verified live origin endpoint: `https://zo-vedant-demo-1ed1b668.azurewebsites.net/` returning HTTP 200 (`🚀 Hello from Azure App Service via ZeroOps AI!`).
 
 ### In Progress
 - (none)

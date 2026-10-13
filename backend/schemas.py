@@ -196,6 +196,31 @@ class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
 
+class WorkspaceCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_workspace_name(cls, name: str) -> str:
+        value = " ".join(name.split())
+        if not value:
+            raise ValueError("Workspace name is required.")
+        return value
+
+
+class WorkspaceInvitationCreateRequest(BaseModel):
+    email: EmailStr
+    role: Literal["admin", "engineer", "viewer"] = "engineer"
+
+
+class WorkspaceInvitationAcceptRequest(BaseModel):
+    token: str = Field(..., min_length=32, max_length=256)
+
+
+class WorkspaceMemberRoleRequest(BaseModel):
+    role: Literal["owner", "admin", "engineer", "viewer"]
+
+
 class MFAMethodRequest(BaseModel):
     method: str = Field(..., pattern=r"^(totp|email)$")
 
@@ -830,7 +855,7 @@ class DeploymentJobResponse(BaseModel):
 
 class EphemeralResourceCreateRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=60)
-    resource_type: str = Field("vm_linux", description="vm_linux, vm_windows, database_postgres, database_mysql, container_app, storage_account, redis_cache")
+    resource_type: str = Field("vm_linux", description="A catalog resource type or custom_arm")
     region: str = Field("eastus", description="Azure region")
     sku: str = Field("Standard_B2s", description="Azure compute/instance SKU")
     ttl_minutes: int = Field(120, ge=15, le=2880, description="Time-to-live in minutes (15m to 48h)")
@@ -838,11 +863,27 @@ class EphemeralResourceCreateRequest(BaseModel):
     startup_script: Optional[str] = Field(None, description="Cloud-init or setup script")
     open_ports: Optional[List[int]] = Field(default_factory=lambda: [22, 80, 443])
     tags: Optional[Dict[str, str]] = Field(default_factory=dict)
+    arm_template: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Reviewed Azure Resource Manager template for a custom Azure deployment.",
+    )
+    arm_parameters: Optional[Dict[str, Any]] = Field(
+        None,
+        description="ARM parameter values. These are used for deployment and are not retained in resource history.",
+    )
+    estimated_resource_hourly_usd: Optional[float] = Field(
+        None, ge=0, le=100000, description="Customer-provided Azure hourly estimate for custom deployments."
+    )
     source: Optional[str] = Field("catalog_ui")
 
 
 class EphemeralResourceExtendRequest(BaseModel):
     extend_minutes: int = Field(60, ge=15, le=1440, description="Minutes to add to expiration")
+
+
+class CustomResourceQuoteRequest(BaseModel):
+    estimated_resource_hourly_usd: float = Field(..., ge=0, le=100000)
+    ttl_minutes: int = Field(120, ge=15, le=2880)
 
 
 class EphemeralConnectionInfo(BaseModel):
@@ -897,12 +938,16 @@ class EphemeralResourceProposal(BaseModel):
     summary: str
     startup_script: Optional[str] = None
     open_ports: List[int] = []
+    arm_template: Optional[Dict[str, Any]] = None
+    arm_parameters: Optional[Dict[str, Any]] = None
+    estimated_resource_hourly_usd: Optional[float] = None
 
 
 class EphemeralChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     context_resource_id: Optional[str] = None
     auto_deploy: Optional[bool] = False
+    region: Optional[str] = Field(None, min_length=2, max_length=50, pattern=r"^[a-z0-9-]+$")
 
 
 class EphemeralChatResponse(BaseModel):
@@ -917,6 +962,7 @@ class JiraIntegrationSettings(BaseModel):
     jira_host: Optional[str] = None
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
+    jira_webhook_secret: Optional[str] = None
     jira_project_keys: List[str] = ["QA", "DEV", "INFRA"]
     jira_auto_provision: bool = True
 
@@ -926,6 +972,7 @@ class EmailIntegrationSettings(BaseModel):
     inbound_email_address: str = "sandbox@zeroops.ai"
     allowed_domains: List[str] = []
     default_ttl_minutes: int = 120
+    email_webhook_secret: Optional[str] = None
 
 
 class IntegrationSettingsResponse(BaseModel):
